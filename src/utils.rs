@@ -6,7 +6,9 @@ use dcap_rs::utils::cert::parse_pem;
 
 use dcap_rs::types::quotes::version_4::QuoteV4;
 
-pub fn extract_sgx_extensions_from_quote(quote: &QuoteV4) -> SgxExtensions {
+pub fn extract_sgx_extensions_from_quote(
+    quote: &QuoteV4,
+) -> Result<SgxExtensions, Box<dyn std::error::Error>> {
     let qe_cert_data_v4 = &quote.signature.qe_cert_data;
 
     let qe_report_cert_data = if let CertDataType::QeReportCertData(qe_report_cert_data) =
@@ -14,15 +16,18 @@ pub fn extract_sgx_extensions_from_quote(quote: &QuoteV4) -> SgxExtensions {
     {
         qe_report_cert_data
     } else {
-        panic!("Unsupported CertDataType in QuoteSignatureDataV4");
+        return Err("Unsupported CertDataType in QuoteSignatureDataV4"
+            .to_string()
+            .into());
     };
 
     let qe_cert_data = &qe_report_cert_data.qe_cert_data;
     let certchain_pems = parse_pem(&qe_cert_data.cert_data).unwrap();
     let certchain = parse_certchain(&certchain_pems);
     let pck_cert = &certchain[0];
+    let extensions = extract_sgx_extension(&pck_cert);
 
-    extract_sgx_extension(&pck_cert)
+    Ok(extensions)
 }
 
 pub fn parse_sgx_key_values(extensions: &SgxExtensions) -> SgxKeyValues {

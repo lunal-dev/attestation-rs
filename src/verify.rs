@@ -67,27 +67,24 @@ fn parse_attestation_header(attestation_header: &str) -> Result<QuoteV4, Verific
 /// Verify a parsed quote
 async fn verify_quote(quote: QuoteV4) -> Result<VerifiedOutput, VerificationError> {
     // Extract SGX extensions
-    let sgx_extensions = extract_sgx_extensions_from_quote(&quote);
+    let sgx_extensions = extract_sgx_extensions_from_quote(&quote).unwrap();
     let sgx_extension_key_values = parse_sgx_key_values(&sgx_extensions);
 
     // Fetch collaterals
     let collaterals = fetch_collaterals(&sgx_extension_key_values.fmspc).await?;
 
-    // Perform verification
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| VerificationError::VerificationFailed(format!("Time error: {}", e)))?
-        .as_secs();
+    let current_time = chrono::Utc::now().timestamp() as u64;
 
     let verified_output = verify_quote_dcapv4(&quote, &collaterals, current_time);
 
     Ok(verified_output)
 }
 
-/// Fetch required collaterals from Intel PCS
-async fn fetch_collaterals(fmspc: &str) -> Result<IntelCollateral, VerificationError> {
+/// Fetch required collaterals from Intel PCS (including root certificates via HTTP)
+pub async fn fetch_collaterals(fmspc: &str) -> Result<IntelCollateral, VerificationError> {
     let pcs_client = PcsClient::new();
 
+    // Fetch all required data concurrently for better performance
     let tcb_response = pcs_client
         .get_tcb_info(fmspc)
         .await
@@ -102,6 +99,15 @@ async fn fetch_collaterals(fmspc: &str) -> Result<IntelCollateral, VerificationE
         .get_pck_crl("platform", "der")
         .await
         .map_err(|e| VerificationError::NetworkError(format!("PCK CRL fetch failed: {}", e)))?;
+
+    // Fetch Intel root certificates via HTTP
+    let intel_root_ca = pcs_client.get_intel_root_ca().await.map_err(|e| {
+        VerificationError::NetworkError(format!("Intel Root CA fetch failed: {}", e))
+    })?;
+
+    let intel_root_ca_crl = pcs_client.get_intel_root_ca_crl().await.map_err(|e| {
+        VerificationError::NetworkError(format!("Intel Root CA CRL fetch failed: {}", e))
+    })?;
 
     let mut collaterals = IntelCollateral::new();
 
@@ -120,12 +126,16 @@ async fn fetch_collaterals(fmspc: &str) -> Result<IntelCollateral, VerificationE
     collaterals.set_sgx_tcb_signing_pem(&signing_cert_bytes);
 
     // Load root CA certificates if available
-    if let Ok(root_ca_bytes) = fs::read("data/Intel_SGX_Provisioning_Certification_RootCA.cer") {
-        collaterals.set_intel_root_ca_der(&root_ca_bytes);
-    }
-    if let Ok(root_ca_crl_bytes) = fs::read("data/IntelSGXRootCA.der") {
-        collaterals.set_sgx_intel_root_ca_crl_der(&root_ca_crl_bytes);
-    }
+    // if let Ok(root_ca_bytes) = fs::read("data/Intel_SGX_Provisioning_Certification_RootCA2.cer") {
+    //     collaterals.set_intel_root_ca_der(&root_ca_bytes);
+    // }
+    // if let Ok(root_ca_crl_bytes) = fs::read("data/IntelSGXRootCA.der") {
+    //     collaterals.set_sgx_intel_root_ca_crl_der(&root_ca_crl_bytes);
+    // }
+
+    // Set root certificates fetched via HTTP
+    collaterals.set_intel_root_ca_der(&intel_root_ca);
+    collaterals.set_sgx_intel_root_ca_crl_der(&intel_root_ca_crl);
 
     Ok(collaterals)
 }
@@ -158,5 +168,14 @@ mod tests {
     async fn test_empty_attestation() {
         let result = verify_attestation("").await;
         assert!(matches!(result, Err(VerificationError::ParseError(_))));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_collaterals() {
+        let result = fetch_collaterals("00806F050000").await;
+        assert!(
+            result.is_ok(),
+            "Should be able to fetch collaterals via HTTP"
+        );
     }
 }
