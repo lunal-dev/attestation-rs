@@ -95,6 +95,40 @@ impl PcsClient {
         }
     }
 
+    /// Fetch Intel SGX Root CA certificate
+    pub async fn get_intel_root_ca(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        // This is the URL from the certificate itself (visible in the .cer file)
+        let url = "https://certificates.trustedservices.intel.com/Intel_SGX_Provisioning_Certification_RootCA.cer";
+
+        let response = self.client.get(url).send().await?;
+
+        if response.status().is_success() {
+            let bytes = response.bytes().await?;
+            Ok(bytes.to_vec())
+        } else {
+            Err(format!("HTTP error fetching Intel Root CA: {}", response.status()).into())
+        }
+    }
+
+    /// Fetch Intel SGX Root CA CRL
+    pub async fn get_intel_root_ca_crl(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        // Intel's root CA CRL endpoint
+        let url = "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der";
+
+        let response = self.client.get(url).send().await?;
+
+        if response.status().is_success() {
+            let bytes = response.bytes().await?;
+            Ok(bytes.to_vec())
+        } else {
+            Err(format!(
+                "HTTP error fetching Intel Root CA CRL: {}",
+                response.status()
+            )
+            .into())
+        }
+    }
+
     fn parse_issuer_chain(chain_header: &str) -> Result<Vec<String>, Box<dyn Error>> {
         // URL decode the header value
         let decoded = decode(chain_header)?;
@@ -174,5 +208,29 @@ mod tests {
         // Assert the CRL data is not empty and has reasonable size
         assert!(!crl_data.is_empty());
         assert!(crl_data.len() > 100); // CRLs should be reasonably sized
+    }
+
+    #[tokio::test]
+    async fn test_intel_root_ca() {
+        let client = PcsClient::new();
+        let root_ca = client
+            .get_intel_root_ca()
+            .await
+            .expect("Failed to fetch Intel Root CA");
+
+        assert!(!root_ca.is_empty());
+        assert!(root_ca.len() > 100); // Certificate should be reasonably sized
+    }
+
+    #[tokio::test]
+    async fn test_intel_root_ca_crl() {
+        let client = PcsClient::new();
+        let root_ca_crl = client
+            .get_intel_root_ca_crl()
+            .await
+            .expect("Failed to fetch Intel Root CA CRL");
+
+        assert!(!root_ca_crl.is_empty());
+        assert!(root_ca_crl.len() > 100); // CRL should be reasonably sized
     }
 }
