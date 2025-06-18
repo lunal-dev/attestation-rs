@@ -2,24 +2,42 @@
 name = "lunal-attestation"
 version = "0.1.0"
 edition = "2024"
-
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
 attestation = ["tdx"]
+wasm = ["getrandom/js"]
+
 
 [dependencies]
 clap = "4.0"
 dcap-rs = { git = "https://github.com/automata-network/dcap-rs.git" }
 hex = "0.4"
 tdx = { git = "https://github.com/automata-network/tdx-attestation-sdk", package = "tdx", branch = "main", optional = true }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1.0"
-tokio = { version = "1.0", features = ["full"] }
 urlencoding = "2.1"
 flate2 = "1.0"
 base64 = "0.13"
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features=['console'] }
+console_error_panic_hook = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { version = "1.0", features = ["macros", "rt", "time", "sync"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.0", features = ["full"] }
+
+[dependencies.getrandom]
+version = "0.2"
+features = ["js"]
 
 [[bin]]
 name = "attest"
