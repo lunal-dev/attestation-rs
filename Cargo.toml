@@ -37,7 +37,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dcap-rs = {  git = "https://github.com/automata-network/dcap-rs.git", optional = true }
 
 # SEV-SNP-specific dependencies
-sev-snp = { path = "../sev-snp/amd-sev-snp-attestation-sdk/sev-snp", optional = true }
+sev-snp = { path = "https://github.com/automata-network/amd-sev-snp-attestation-sdk", package = "sev-snp" , optional = true }
 bincode = { version = "1.3", optional = true }
 
 # Wasm Dependencies
