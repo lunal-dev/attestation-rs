@@ -1,5 +1,5 @@
-use crate::pcs_client::PcsClient;
-use crate::utils::{extract_sgx_extensions_from_quote, parse_sgx_key_values};
+use crate::tdx::pcs_client::PcsClient;
+use crate::tdx::utils::{extract_sgx_extensions_from_quote, parse_sgx_key_values};
 use dcap_rs::types::VerifiedOutput;
 use dcap_rs::types::collaterals::IntelCollateral;
 use dcap_rs::types::quotes::version_4::QuoteV4;
