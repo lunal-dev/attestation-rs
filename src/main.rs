@@ -1,9 +1,6 @@
 use std::fs;
 
-mod pcs_client;
-mod utils;
-
-use lunal_attestation::verify::verify_attestation;
+use lunal_attestation::tdx::verify::verify_attestation;
 
 async fn run_verification() -> Result<(), Box<dyn std::error::Error>> {
     let attestation_content = fs::read_to_string("example/attestation.txt")?;
