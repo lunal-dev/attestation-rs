@@ -17,7 +17,7 @@ async fn run_sev_snp_verification() -> Result<(), Box<dyn std::error::Error>> {
     let attestation_content = fs::read_to_string("example/sev_snp_attestation.txt")?;
     match verify_snp_attestation(&attestation_content).await {
         Ok(result) => println!("Attestation verification successful: {:?}", result),
-        Err(e) => eprintln!("Error verifying attestation: {}", e),
+        Err(e) => eprintln!("Error verifying attestation: {:#?}", e),
     }
 
     Ok(())
