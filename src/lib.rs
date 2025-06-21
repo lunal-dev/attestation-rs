@@ -1,6 +1,3 @@
-#[cfg(feature = "attestation")]
-pub mod attestation;
-
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 

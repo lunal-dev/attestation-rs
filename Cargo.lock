@@ -3761,7 +3761,8 @@ dependencies = [
 
 [[package]]
 name = "sev-snp"
-version = "0.2.0"
+version = "0.3.0"
+source = "git+https://github.com/AmeanAsad/amd-sev-snp-attestation-sdk#12b53de084384e486d38c94d9209ab56ee241b96"
 dependencies = [
  "asn1-rs 0.6.2",
  "bincode",
