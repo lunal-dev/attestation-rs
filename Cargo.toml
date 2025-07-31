@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["tdx", "sev-snp"]
-attestation = ["dep:tdx", "dep:sev-snp"]
+attestation = ["dep:tdx", "sev-snp/default"]
 tdx = ["dep:dcap-rs"]
 sev-snp = ["dep:sev-snp", "dep:bincode"]
 
@@ -37,7 +37,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dcap-rs = {  git = "https://github.com/automata-network/dcap-rs.git", optional = true }
 
 # SEV-SNP-specific dependencies
-sev-snp = { git = "https://github.com/AmeanAsad/amd-sev-snp-attestation-sdk", package = "sev-snp" , optional = true }
+sev-snp = { path = "../sev-snp/amd-attestation-amean/amd-sev-snp-attestation-sdk/sev-snp", default-features = false, features = ['coco-provider'], optional = true }
 bincode = { version = "1.3", optional = true }
 
 # Wasm Dependencies
