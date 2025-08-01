@@ -1,6 +1,6 @@
 use sev_snp::{SevSnp, device::ReportOptions};
 
-pub fn get_attestation_with_data(custom_data: &str) -> Result<&[u8], Box<dyn std::error::Error>> {
+pub fn get_attestation_with_data(custom_data: &str) -> Result<Box<dyn std::error::Error>> {
     // Initialize the SEV-SNP library
     let sev_snp = SevSnp::new()?;
 
@@ -28,5 +28,5 @@ pub fn get_attestation_with_data(custom_data: &str) -> Result<&[u8], Box<dyn std
         println!("Variable data length: {} bytes", data.len());
     }
 
-    Ok((report.as_le_bytes().unwrap()))
+    Ok(())
 }
