@@ -1,0 +1,37 @@
+[package]
+name = "coco-provider"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name = "coco_provider"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = ["configfs", "legacy", "tpm"]
+tpm = ["dep:tss-esapi", "dep:bincode"]
+configfs = []
+legacy = []
+clib = ["configfs", "legacy", "tpm", "dep:once_cell"]
+
+[build-dependencies]
+cbindgen = "0.29.0"
+
+[profile.release]
+lto = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tss-esapi = { version = "7.6", optional = true }
+
+[dependencies]
+rand = "0.8.5"
+log = "0.4.25"
+serde = { version = "1.0.217", features = ["derive"] }
+serde-big-array = "0.5.1"
+bincode = { version = "1.3.3", optional = true }
+sysinfo = "0.35.1"
+uuid = { version = "1.17.0", features = ["serde"] }
+iocuddle = "0.1.1"
+bitfield = "0.19.1"
+libc = "0.2.174"
+once_cell = { version = "1.20.2", optional=true }

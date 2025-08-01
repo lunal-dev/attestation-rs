@@ -1,0 +1,11 @@
+{
+  "name": "attestation-test",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Test script for attestation verification",
+  "main": "test.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {}
+}
