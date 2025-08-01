@@ -1,6 +1,6 @@
 use sev_snp::{SevSnp, device::ReportOptions};
 
-pub fn get_attestation_with_data(custom_data: &str) -> Result<()> {
+pub fn get_attestation_with_data(custom_data: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the SEV-SNP library
     let sev_snp = SevSnp::new()?;
 
