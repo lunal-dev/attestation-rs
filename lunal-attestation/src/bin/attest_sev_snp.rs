@@ -4,27 +4,31 @@ fn main() {
         use clap::{Arg, Command};
         use lunal_attestation::sev_snp::attest::*;
 
-        let matches = Command::new("attest_sev_snp")
+        let matches = Command::new("attest")
             .version(env!("CARGO_PKG_VERSION"))
-            .about("SEV-SNP attestation report tool")
+            .about("Attestation report tool")
             .arg(
                 Arg::new("format")
                     .short('f')
                     .long("format")
                     .value_parser(["raw", "compressed"])
-                    .default_value("raw")
+                    .default_value("json")
                     .help("Output format"),
+            )
+            .arg(
+                Arg::new("pretty")
+                    .long("pretty")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Pretty print JSON"),
             )
             .get_matches();
 
         let result = match matches.get_one::<String>("format").unwrap().as_str() {
             "raw" => {
-                let raw =
-                    get_raw_attestation_report().expect("Failed to get raw SEV-SNP attestation");
-                base64::encode(&raw)
+                let data: &str = "hello";
+                get_attestation_with_data(data).expect("Failed to get raw attestation");
+                Ok("test");
             }
-            "compressed" => get_compressed_encoded_attestation()
-                .expect("Failed to get compressed SEV-SNP attestation"),
             _ => unreachable!(),
         };
 
