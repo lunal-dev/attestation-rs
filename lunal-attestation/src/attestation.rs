@@ -7,7 +7,7 @@ use tdx::Tdx;
 
 pub fn get_raw_attestation_report() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let tdx = Tdx::new();
-    let raw_report = tdx.get_attestation_report_raw().unwrap();
+    let (raw_report, _) = tdx.get_attestation_report_raw().unwrap();
     Ok(raw_report)
 }
 
