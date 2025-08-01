@@ -25,11 +25,9 @@ fn main() {
 
         let result = match matches.get_one::<String>("format").unwrap().as_str() {
             "raw" => {
-                let raw = get_raw_attestation_report().expect("Failed to get raw attestation");
+                let data: &str = "hello";
+                let raw = get_attestation_with_data(data).expect("Failed to get raw attestation");
                 base64::encode(&raw)
-            }
-            "compressed" => {
-                get_compressed_encoded_attestation().expect("Failed to get compressed attestation")
             }
             _ => unreachable!(),
         };

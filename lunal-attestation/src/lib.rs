@@ -7,3 +7,5 @@ pub mod wasm;
 pub mod pcs_client;
 pub mod utils;
 pub mod verify;
+
+pub mod sev_snp;
