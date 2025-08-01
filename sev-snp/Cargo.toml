@@ -26,7 +26,7 @@ cbindgen = "0.29.0"
 lto = true
 
 [dependencies]
-coco-provider = { git = "https://github.com/automata-network/coco-provider-sdk", optional = true, default-features = false }
+coco-provider = { path = "../coco-provider-sdk" , optional = true, default-features = false, features = ["configfs"]}
 openssl = { version = "^0.10", features = ["vendored"]}
 serde = { version = "1.0.217", features = ["derive"] }
 uuid = "1.6"

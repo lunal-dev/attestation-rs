@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "lunal-attestation",
-    "sev-snp"
+    "sev-snp",
+    "coco-provider-sdk"
 ]
 
 resolver = "2"

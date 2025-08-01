@@ -1364,6 +1364,25 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 [[package]]
 name = "coco-provider"
 version = "0.3.0"
+dependencies = [
+ "bincode",
+ "bitfield 0.19.1",
+ "cbindgen",
+ "iocuddle",
+ "libc",
+ "log",
+ "once_cell",
+ "rand 0.8.5",
+ "serde",
+ "serde-big-array",
+ "sysinfo 0.35.2",
+ "tss-esapi",
+ "uuid",
+]
+
+[[package]]
+name = "coco-provider"
+version = "0.3.0"
 source = "git+https://github.com/automata-network/coco-provider-sdk#3a832b8cf5e88ef71649ab56e4efd67067b26b7c"
 dependencies = [
  "bincode",
@@ -3911,7 +3930,7 @@ dependencies = [
  "bincode",
  "bitfield 0.19.1",
  "cbindgen",
- "coco-provider",
+ "coco-provider 0.3.0",
  "hex",
  "once_cell",
  "openssl",
@@ -4210,7 +4229,7 @@ dependencies = [
  "cbindgen",
  "chrono",
  "clap",
- "coco-provider",
+ "coco-provider 0.3.0 (git+https://github.com/automata-network/coco-provider-sdk)",
  "dcap-rs 0.1.0 (git+https://github.com/automata-network/dcap-rs.git?rev=d847b8f75a493640c4881bdf67775250b6baefab)",
  "hex",
  "rand 0.8.5",
