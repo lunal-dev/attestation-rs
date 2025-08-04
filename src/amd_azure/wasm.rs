@@ -1,5 +1,4 @@
-use crate::amd_azure::AttestationEvidence;
-use crate::amd_azure::verify::{VerificationResult as VerifyResult, verify_evidence};
+use crate::amd_azure::verify::{VerificationResult as VerifyResult, verify_compressed};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -60,48 +59,16 @@ impl VerificationResult {
 }
 
 #[wasm_bindgen]
-pub fn verify_attestation_evidence(custom_data: &str, evidence_hex: &str) -> Promise {
+pub fn verify_attestation_evidence(custom_data: &str, compressed_evidence: &str) -> Promise {
     let custom_data = custom_data.to_string();
-    let evidence_hex = evidence_hex.to_string();
+    let compressed_evidence = compressed_evidence.to_string();
 
     future_to_promise(async move {
         // Convert string to bytes
         let custom_data_bytes = custom_data.as_bytes();
 
-        // Decode hex evidence
-        let evidence_bytes = match hex::decode(evidence_hex.trim()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                let result = VerificationResult {
-                    success: false,
-                    message: format!("Failed to decode hex evidence: {}", e),
-                    quote: None,
-                    report: None,
-                    certs: None,
-                    report_data: None,
-                };
-                return Ok(JsValue::from(result));
-            }
-        };
-
-        // Deserialize evidence
-        let evidence = match AttestationEvidence::from_bytes(&evidence_bytes) {
-            Ok(evidence) => evidence,
-            Err(e) => {
-                let result = VerificationResult {
-                    success: false,
-                    message: format!("Failed to deserialize evidence: {}", e),
-                    quote: None,
-                    report: None,
-                    certs: None,
-                    report_data: None,
-                };
-                return Ok(JsValue::from(result));
-            }
-        };
-
-        // Verify the evidence
-        match verify_evidence(custom_data_bytes, &evidence).await {
+        // Verify the compressed evidence
+        match verify_compressed(custom_data_bytes, &compressed_evidence).await {
             Ok(verify_result) => {
                 let result = VerificationResult {
                     success: true,
