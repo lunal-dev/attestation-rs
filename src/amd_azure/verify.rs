@@ -6,14 +6,13 @@ use az_snp_vtpm::certs::Vcek;
 use az_snp_vtpm::hcl::HclReport;
 use az_snp_vtpm::report::{AttestationReport, Validateable};
 use flate2::read::GzDecoder;
-use openssl::pkey::PKey;
 use std::error::Error;
 use std::io::Read;
 
 use crate::amd_azure::AttestationEvidence;
 
 /// Verify attestation evidence with custom data (nonce)
-pub fn verify_evidence(
+pub async fn verify_evidence(
     custom_data: &[u8],
     evidence: &AttestationEvidence,
 ) -> Result<(), Box<dyn Error>> {
@@ -31,7 +30,7 @@ pub fn verify_evidence(
     let snp_report: AttestationReport = hcl_report.try_into()?;
 
     // Get and validate certificate chain
-    let cert_chain = amd_kds::get_cert_chain()?;
+    let cert_chain = amd_kds::get_cert_chain().await?;
     let vcek = Vcek::from_pem(&certs.vcek)?;
 
     // Validate certificates and report
@@ -53,13 +52,13 @@ pub fn verify_evidence(
 }
 
 /// Verify attestation evidence from raw bytes
-pub fn verify_bytes(custom_data: &[u8], evidence_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+pub async fn verify_bytes(custom_data: &[u8], evidence_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     let evidence = AttestationEvidence::from_bytes(evidence_bytes)?;
-    verify_evidence(custom_data, &evidence)
+    verify_evidence(custom_data, &evidence).await
 }
 
 /// Verify compressed and base64-encoded attestation evidence
-pub fn verify_compressed(
+pub async fn verify_compressed(
     custom_data: &[u8],
     compressed_evidence: &str,
 ) -> Result<(), Box<dyn Error>> {
@@ -72,5 +71,5 @@ pub fn verify_compressed(
     decoder.read_to_end(&mut decompressed)?;
 
     // Verify the decompressed evidence
-    verify_bytes(custom_data, &decompressed)
+    verify_bytes(custom_data, &decompressed).await
 }

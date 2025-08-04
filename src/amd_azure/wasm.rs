@@ -1,0 +1,89 @@
+use crate::amd_azure::AttestationEvidence;
+use crate::amd_azure::verify::verify_evidence;
+use js_sys::Promise;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::future_to_promise;
+
+// Import the `console.log` function from the `console` module
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
+// Define a macro for easier console logging
+macro_rules! console_log {
+    ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+#[wasm_bindgen]
+pub struct VerificationResult {
+    success: bool,
+    message: String,
+}
+
+#[wasm_bindgen]
+impl VerificationResult {
+    #[wasm_bindgen(getter)]
+    pub fn success(&self) -> bool {
+        self.success
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn message(&self) -> String {
+        self.message.clone()
+    }
+}
+
+#[wasm_bindgen]
+pub fn verify_attestation_evidence(custom_data: &str, evidence_hex: &str) -> Promise {
+    let custom_data = custom_data.to_string();
+    let evidence_hex = evidence_hex.to_string();
+
+    future_to_promise(async move {
+        // Convert string to bytes
+        let custom_data_bytes = custom_data.as_bytes();
+
+        // Decode hex evidence
+        let evidence_bytes = match hex::decode(evidence_hex.trim()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let result = VerificationResult {
+                    success: false,
+                    message: format!("Failed to decode hex evidence: {}", e),
+                };
+                return Ok(JsValue::from(result));
+            }
+        };
+
+        // Deserialize evidence
+        let evidence = match AttestationEvidence::from_bytes(&evidence_bytes) {
+            Ok(evidence) => evidence,
+            Err(e) => {
+                let result = VerificationResult {
+                    success: false,
+                    message: format!("Failed to deserialize evidence: {}", e),
+                };
+                return Ok(JsValue::from(result));
+            }
+        };
+
+        // Verify the evidence
+        match verify_evidence(custom_data_bytes, &evidence).await {
+            Ok(()) => {
+                let result = VerificationResult {
+                    success: true,
+                    message: "Attestation evidence verified successfully!".to_string(),
+                };
+                Ok(JsValue::from(result))
+            }
+            Err(e) => {
+                let result = VerificationResult {
+                    success: false,
+                    message: format!("Verification failed: {}", e),
+                };
+                Ok(JsValue::from(result))
+            }
+        }
+    })
+}

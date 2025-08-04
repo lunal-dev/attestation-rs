@@ -6,7 +6,8 @@ use lunal_attestation::amd_azure::AttestationEvidence;
 use lunal_attestation::amd_azure::attest;
 use lunal_attestation::amd_azure::verify::verify_evidence;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -58,12 +59,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Deserialize evidence
             let evidence = AttestationEvidence::from_bytes(&evidence_bytes)?;
-
+            println!("Report Data {:#?}", evidence.report_data);
             // The same custom data used during attestation
             let custom_data = b"my-application-nonce-12345";
 
             // Verify the evidence
-            match verify_evidence(custom_data, &evidence) {
+            match verify_evidence(custom_data, &evidence).await {
                 Ok(()) => println!("✅ Attestation evidence verified successfully!"),
                 Err(e) => println!("❌ Verification failed: {}", e),
             }

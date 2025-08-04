@@ -33,8 +33,7 @@ urlencoding = "2.1"
 flate2 = "1.0"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-openssl = "0.10"
-az-snp-vtpm = { git = "https://github.com/AmeanAsad/azure-cvm-tooling.git", package = "az-snp-vtpm" }
+az-snp-vtpm = { path = "../azure-cvm-tooling/az-cvm-vtpm/az-snp-vtpm" }
 
 wasm-bindgen = { version = "0.2", optional = true }
 getrandom = { version = "0.2", optional = true }
