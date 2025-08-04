@@ -1041,6 +1041,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "az-cvm-vtpm"
 version = "0.7.3"
+source = "git+https://github.com/AmeanAsad/azure-cvm-tooling.git?branch=feat%2Freplace-openssl#6de647fdd69b2c208819c944073bb9498ee34502"
 dependencies = [
  "bincode",
  "jsonwebkey",
@@ -1058,6 +1059,7 @@ dependencies = [
 [[package]]
 name = "az-snp-vtpm"
 version = "0.7.3"
+source = "git+https://github.com/AmeanAsad/azure-cvm-tooling.git?branch=feat%2Freplace-openssl#6de647fdd69b2c208819c944073bb9498ee34502"
 dependencies = [
  "az-cvm-vtpm",
  "bincode",
