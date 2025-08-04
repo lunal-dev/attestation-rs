@@ -32,27 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args[1].as_str() {
         #[cfg(feature = "attestation")]
         "attest" => {
-            println!("Generating attestation evidence...");
-
-            if !custom_data.is_empty() {
-                println!(
-                    "Using custom data: {}",
-                    String::from_utf8_lossy(custom_data)
-                );
-            } else {
-                println!("Using empty custom data");
-            }
-
             // Generate attestation evidence (compressed and base64 encoded)
             let evidence_string = attest::attest_compressed(custom_data).await?;
 
-            // Print the base64 string that can be copied
-            println!("Evidence (base64 compressed, copy to file):");
+            // Just print the base64 string
             println!("{}", evidence_string);
-
-            // Also save to file for convenience
-            fs::write("evidence.b64", &evidence_string)?;
-            println!("Evidence saved to evidence.b64");
         }
 
         "verify" => {
