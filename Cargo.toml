@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-attestation = ["tdx"]
+attestation = ["tdx", "az-snp-vtpm/attester"]
 wasm = [
     "dep:wasm-bindgen",
     "dep:serde-wasm-bindgen",
@@ -26,10 +26,15 @@ hex = "0.4"
 tdx = { git = "https://github.com/automata-network/tdx-attestation-sdk", package = "tdx", branch = "main", optional = true }
 reqwest = { version = "0.12", features = ["json"] }
 serde_json = "1.0"
+serde = "1.0"
+bincode = "1.3.1"
+
 urlencoding = "2.1"
 flate2 = "1.0"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+openssl = "0.10"
+az-snp-vtpm = { git = "https://github.com/AmeanAsad/azure-cvm-tooling.git", package = "az-snp-vtpm" }
 
 wasm-bindgen = { version = "0.2", optional = true }
 getrandom = { version = "0.2", optional = true }
