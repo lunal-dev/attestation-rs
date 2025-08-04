@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let custom_data = b"application-data";
 
             // Generate attestation evidence
-            let evidence = attest::attest(custom_data)?;
+            let evidence = attest::attest(custom_data).await?;
 
             // Serialize to bytes
             let evidence_bytes = evidence.to_bytes()?;
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Evidence saved to evidence.hex");
 
             // Show compressed base64 version too
-            let compressed = attest::attest_compressed(custom_data)?;
+            let compressed = attest::attest_compressed(custom_data).await?;
             println!("Compressed base64 evidence:");
             println!("{}", compressed);
         }
