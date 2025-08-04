@@ -1070,6 +1070,7 @@ dependencies = [
  "reqwest",
  "rsa",
  "serde",
+ "serde_json",
  "sev",
  "sha2",
  "signature",

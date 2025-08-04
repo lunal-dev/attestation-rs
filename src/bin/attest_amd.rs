@@ -59,13 +59,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Deserialize evidence
             let evidence = AttestationEvidence::from_bytes(&evidence_bytes)?;
-            println!("Report Data {:#?}", evidence.report_data);
             // The same custom data used during attestation
             let custom_data = b"my-application-nonce-12345";
 
             // Verify the evidence
             match verify_evidence(custom_data, &evidence).await {
-                Ok(()) => println!("✅ Attestation evidence verified successfully!"),
+                Ok(verification_result) => {
+                    println!("✅ Attestation evidence verified successfully!");
+                    // println!("\nVerification Results:");
+                    // println!(
+                    //     "Quote: {}",
+                    //     serde_json::to_string_pretty(&verification_result.quote)?
+                    // );
+                    // println!(
+                    //     "Report: {}",
+                    //     serde_json::to_string_pretty(&verification_result.report)?
+                    // );
+                    // println!(
+                    //     "Certs: {}",
+                    //     serde_json::to_string_pretty(&verification_result.certs)?
+                    // );
+                    // println!("Report Data: {}", verification_result.report_data);
+                }
                 Err(e) => println!("❌ Verification failed: {}", e),
             }
         }

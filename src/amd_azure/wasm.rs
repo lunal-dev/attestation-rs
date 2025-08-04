@@ -1,5 +1,5 @@
 use crate::amd_azure::AttestationEvidence;
-use crate::amd_azure::verify::verify_evidence;
+use crate::amd_azure::verify::{VerificationResult as VerifyResult, verify_evidence};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -20,6 +20,10 @@ macro_rules! console_log {
 pub struct VerificationResult {
     success: bool,
     message: String,
+    quote: Option<String>,
+    report: Option<String>,
+    certs: Option<String>,
+    report_data: Option<String>,
 }
 
 #[wasm_bindgen]
@@ -32,6 +36,26 @@ impl VerificationResult {
     #[wasm_bindgen(getter)]
     pub fn message(&self) -> String {
         self.message.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn quote(&self) -> Option<String> {
+        self.quote.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn report(&self) -> Option<String> {
+        self.report.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn certs(&self) -> Option<String> {
+        self.certs.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn report_data(&self) -> Option<String> {
+        self.report_data.clone()
     }
 }
 
@@ -51,6 +75,10 @@ pub fn verify_attestation_evidence(custom_data: &str, evidence_hex: &str) -> Pro
                 let result = VerificationResult {
                     success: false,
                     message: format!("Failed to decode hex evidence: {}", e),
+                    quote: None,
+                    report: None,
+                    certs: None,
+                    report_data: None,
                 };
                 return Ok(JsValue::from(result));
             }
@@ -63,6 +91,10 @@ pub fn verify_attestation_evidence(custom_data: &str, evidence_hex: &str) -> Pro
                 let result = VerificationResult {
                     success: false,
                     message: format!("Failed to deserialize evidence: {}", e),
+                    quote: None,
+                    report: None,
+                    certs: None,
+                    report_data: None,
                 };
                 return Ok(JsValue::from(result));
             }
@@ -70,10 +102,14 @@ pub fn verify_attestation_evidence(custom_data: &str, evidence_hex: &str) -> Pro
 
         // Verify the evidence
         match verify_evidence(custom_data_bytes, &evidence).await {
-            Ok(()) => {
+            Ok(verify_result) => {
                 let result = VerificationResult {
                     success: true,
                     message: "Attestation evidence verified successfully!".to_string(),
+                    quote: Some(serde_json::to_string(&verify_result.quote).unwrap_or_default()),
+                    report: Some(serde_json::to_string(&verify_result.report).unwrap_or_default()),
+                    certs: Some(serde_json::to_string(&verify_result.certs).unwrap_or_default()),
+                    report_data: Some(verify_result.report_data),
                 };
                 Ok(JsValue::from(result))
             }
@@ -81,6 +117,10 @@ pub fn verify_attestation_evidence(custom_data: &str, evidence_hex: &str) -> Pro
                 let result = VerificationResult {
                     success: false,
                     message: format!("Verification failed: {}", e),
+                    quote: None,
+                    report: None,
+                    certs: None,
+                    report_data: None,
                 };
                 Ok(JsValue::from(result))
             }
