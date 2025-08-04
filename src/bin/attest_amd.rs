@@ -35,8 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Generate attestation evidence (compressed and base64 encoded)
             let evidence_string = attest::attest_compressed(custom_data).await?;
 
-            // Just print the base64 string
+            // Print the base64 string that can be copied
             println!("{}", evidence_string);
+            fs::write("evidence.b64", &evidence_string)?;
         }
 
         "verify" => {

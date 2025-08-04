@@ -9,12 +9,10 @@ use std::io::Write;
 /// Generate attestation evidence with custom data
 pub async fn attest(custom_data: &[u8]) -> Result<AttestationEvidence, Box<dyn Error>> {
     let report = vtpm::get_report()?;
-    let quote = vtpm::get_quote(custom_data)?;
     let certs = imds::get_certs().await?;
 
     Ok(AttestationEvidence {
         report,
-        quote,
         certs,
         report_data: custom_data.into(),
     })

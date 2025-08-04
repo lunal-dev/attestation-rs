@@ -13,7 +13,6 @@ use std::io::Read;
 use crate::amd_azure::AttestationEvidence;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationResult {
-    pub quote: serde_json::Value,
     pub report: serde_json::Value,
     pub certs: serde_json::Value,
     pub report_data: String,
@@ -25,14 +24,12 @@ pub async fn verify_evidence(
     evidence: &AttestationEvidence,
 ) -> Result<VerificationResult, Box<dyn Error>> {
     let AttestationEvidence {
-        quote,
         report,
         certs,
         report_data,
     } = evidence.clone();
 
     // Convert fields to JSON
-    let quote_json = serde_json::to_value(&quote)?;
     let certs_json = serde_json::to_value(&certs)?;
     let report_data_string = String::from_utf8_lossy(&report_data).to_string();
 
@@ -58,14 +55,13 @@ pub async fn verify_evidence(
         return Err("Variable data hash mismatch".into());
     }
 
-    // Verify quote with custom data (nonce)
-    // let der = ak_pub.key.try_to_der()?;
-    // let pub_key = PKey::public_key_from_der(&der)?;
-    // quote.verify(&pub_key, custom_data)?;
+    let data_vec: Vec<u8> = custom_data.into();
+    if data_vec != report_data {
+        return Err("Variable data hash mismatch".into());
+    }
 
     // Return the converted fields as a struct
     Ok(VerificationResult {
-        quote: quote_json,
         report: report_json,
         certs: certs_json,
         report_data: report_data_string,

@@ -13,7 +13,6 @@ use std::error::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationEvidence {
     pub report: Vec<u8>,
-    pub quote: quote::Quote,
     pub certs: imds::Certificates,
     pub report_data: Vec<u8>,
 }

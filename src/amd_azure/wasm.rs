@@ -19,7 +19,6 @@ macro_rules! console_log {
 pub struct VerificationResult {
     success: bool,
     message: String,
-    quote: Option<String>,
     report: Option<String>,
     certs: Option<String>,
     report_data: Option<String>,
@@ -73,7 +72,6 @@ pub fn verify_attestation_evidence(custom_data: &str, compressed_evidence: &str)
                 let result = VerificationResult {
                     success: true,
                     message: "Attestation evidence verified successfully!".to_string(),
-                    quote: Some(serde_json::to_string(&verify_result.quote).unwrap_or_default()),
                     report: Some(serde_json::to_string(&verify_result.report).unwrap_or_default()),
                     certs: Some(serde_json::to_string(&verify_result.certs).unwrap_or_default()),
                     report_data: Some(verify_result.report_data),
@@ -84,7 +82,6 @@ pub fn verify_attestation_evidence(custom_data: &str, compressed_evidence: &str)
                 let result = VerificationResult {
                     success: false,
                     message: format!("Verification failed: {}", e),
-                    quote: None,
                     report: None,
                     certs: None,
                     report_data: None,
