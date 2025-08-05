@@ -37,11 +37,6 @@ impl VerificationResult {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn quote(&self) -> Option<String> {
-        self.quote.clone()
-    }
-
-    #[wasm_bindgen(getter)]
     pub fn report(&self) -> Option<String> {
         self.report.clone()
     }
