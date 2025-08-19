@@ -14,6 +14,16 @@ all: build
 build:
 	$(CARGO) build --release --features attestation
 
+# Build for WASM web target
+.PHONY: wasm
+wasm:
+	wasm-pack build --target web --features wasm
+
+# Build WASM in dev mode
+.PHONY: wasm-dev
+wasm-dev:
+	wasm-pack build --target web --features wasm --dev
+
 # Install the binary to /usr/local/bin
 .PHONY: install
 install: build
@@ -31,12 +41,15 @@ uninstall:
 .PHONY: clean
 clean:
 	$(CARGO) clean
+	rm -rf pkg/
 
 # Help
 .PHONY: help
 help:
 	@echo "Available targets:"
 	@echo "  build     - Build with attestation feature"
+	@echo "  wasm      - Build for WASM web target"
+	@echo "  wasm-dev  - Build WASM in development mode"
 	@echo "  install   - Build and install binary to $(INSTALL_PATH)"
 	@echo "  uninstall - Remove binary from $(INSTALL_PATH)"
-	@echo "  clean     - Clean build artifacts"
+	@echo "  clean     - Clean build artifacts and pkg directory"
