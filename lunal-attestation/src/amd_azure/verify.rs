@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-use az_snp_vtpm::amd_kds;
-use az_snp_vtpm::certs::Vcek;
-use az_snp_vtpm::hcl::HclReport;
-use az_snp_vtpm::report::{AttestationReport, Validateable};
+use amd_vtpm::amd_kds;
+use amd_vtpm::certs::Vcek;
+use amd_vtpm::hcl::HclReport;
+use amd_vtpm::report::{AttestationReport, Validateable};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::error::Error;

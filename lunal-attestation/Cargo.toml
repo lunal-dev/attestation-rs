@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-attestation = ["tdx", "az-snp-vtpm/attester"]
+attestation = ["tdx", "amd-vtpm/attester"]
 wasm = [
     "dep:wasm-bindgen",
     "dep:serde-wasm-bindgen",
@@ -34,7 +34,7 @@ flate2 = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 # Use local workspace member instead of git dependency
-az-snp-vtpm = { path = "../az-snp-vtpm" }
+amd-vtpm = { path = "../amd-vtpm" }
 
 wasm-bindgen = { version = "0.2", optional = true }
 getrandom = { version = "0.2", optional = true }

@@ -1,5 +1,5 @@
 use crate::amd_azure::AttestationEvidence;
-use az_snp_vtpm::{imds, vtpm};
+use amd_vtpm::{imds, vtpm};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
