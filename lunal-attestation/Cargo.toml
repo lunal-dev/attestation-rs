@@ -1,7 +1,7 @@
 [package]
 name = "lunal-attestation"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -35,6 +35,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 # Use local workspace member instead of git dependency
 amd-vtpm = { path = "../amd-vtpm" }
+az-snp-vtpm = "0.1.0"  # Add this dependency for AMD attestation
 
 wasm-bindgen = { version = "0.2", optional = true }
 getrandom = { version = "0.2", optional = true }
@@ -50,6 +51,17 @@ tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
 
+# Main library demonstration binary
 [[bin]]
-name = "attest"
-path = "src/bin/attest.rs"
+name = "lunal-main"
+path = "src/main.rs"
+
+# Intel TDX attestation binary
+[[bin]]
+name = "attest-tdx"
+path = "src/bin/attest_tdx.rs"
+
+# AMD Azure attestation binary
+[[bin]]
+name = "attest-amd"
+path = "src/bin/attest_amd.rs"

@@ -1,18 +1,28 @@
-# Makefile for lunal-attestation
-
 # Variables
-BINARY_NAME = attest
+TDX_BINARY_NAME = attest-tdx
+AMD_BINARY_NAME = attest-amd
+MAIN_BINARY_NAME = lunal-main
 INSTALL_PATH = /usr/local/bin
 CARGO = cargo
 
-# Default target - build with attestation
+# Default target - build all binaries with attestation
 .PHONY: all
 all: build
 
-# Build with attestation feature
+# Build all binaries with attestation feature
 .PHONY: build
 build:
 	$(CARGO) build --release --features attestation
+
+# Build only TDX attestation binary
+.PHONY: build-tdx
+build-tdx:
+	$(CARGO) build --release --features attestation --bin $(TDX_BINARY_NAME)
+
+# Build only AMD attestation binary
+.PHONY: build-amd
+build-amd:
+	$(CARGO) build --release --features attestation --bin $(AMD_BINARY_NAME)
 
 # Build for WASM web target
 .PHONY: wasm
@@ -24,32 +34,57 @@ wasm:
 wasm-dev:
 	wasm-pack build --target web --features wasm --dev
 
-# Install the binary to /usr/local/bin
+# Install all binaries to /usr/local/bin
 .PHONY: install
 install: build
-	sudo cp target/release/$(BINARY_NAME) $(INSTALL_PATH)/$(BINARY_NAME)
-	sudo chmod +x $(INSTALL_PATH)/$(BINARY_NAME)
-	@echo "$(BINARY_NAME) installed to $(INSTALL_PATH)"
+	sudo cp target/release/$(TDX_BINARY_NAME) $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	sudo cp target/release/$(AMD_BINARY_NAME) $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	sudo cp target/release/$(MAIN_BINARY_NAME) $(INSTALL_PATH)/$(MAIN_BINARY_NAME)
+	sudo chmod +x $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	sudo chmod +x $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	sudo chmod +x $(INSTALL_PATH)/$(MAIN_BINARY_NAME)
+	@echo "Binaries installed to $(INSTALL_PATH)"
 
-# Uninstall the binary
+# Install only TDX binary
+.PHONY: install-tdx
+install-tdx: build-tdx
+	sudo cp target/release/$(TDX_BINARY_NAME) $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	sudo chmod +x $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	@echo "$(TDX_BINARY_NAME) installed to $(INSTALL_PATH)"
+
+# Install only AMD binary
+.PHONY: install-amd
+install-amd: build-amd
+	sudo cp target/release/$(AMD_BINARY_NAME) $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	sudo chmod +x $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	@echo "$(AMD_BINARY_NAME) installed to $(INSTALL_PATH)"
+
+# Uninstall all binaries
 .PHONY: uninstall
 uninstall:
-	sudo rm -f $(INSTALL_PATH)/$(BINARY_NAME)
-	@echo "$(BINARY_NAME) removed from $(INSTALL_PATH)"
+	sudo rm -f $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	sudo rm -f $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	sudo rm -f $(INSTALL_PATH)/$(MAIN_BINARY_NAME)
+	@echo "All binaries removed from $(INSTALL_PATH)"
 
 # Clean build artifacts
 .PHONY: clean
 clean:
 	$(CARGO) clean
 	rm -rf pkg/
-
+	rm -f evidence.b64
 # Help
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  build     - Build with attestation feature"
-	@echo "  wasm      - Build for WASM web target"
-	@echo "  wasm-dev  - Build WASM in development mode"
-	@echo "  install   - Build and install binary to $(INSTALL_PATH)"
-	@echo "  uninstall - Remove binary from $(INSTALL_PATH)"
-	@echo "  clean     - Clean build artifacts and pkg directory"
+	@echo "  build       - Build all binaries with attestation feature"
+	@echo "  build-tdx   - Build only TDX attestation binary"
+	@echo "  build-amd   - Build only AMD attestation binary"
+	@echo "  build-main  - Build main demonstration binary"
+	@echo "  wasm        - Build for WASM web target"
+	@echo "  wasm-dev    - Build WASM in development mode"
+	@echo "  install     - Build and install all binaries to $(INSTALL_PATH)"
+	@echo "  install-tdx - Build and install TDX binary to $(INSTALL_PATH)"
+	@echo "  install-amd - Build and install AMD binary to $(INSTALL_PATH)"
+	@echo "  uninstall   - Remove all binaries from $(INSTALL_PATH)"
+	@echo "  clean       - Clean build artifacts and pkg directory"
