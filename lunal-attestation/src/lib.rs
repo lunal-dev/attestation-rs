@@ -1,4 +1,4 @@
-#[cfg(feature = "attestation")]
+#[cfg(feature = "attestation-tdx")]
 pub mod attestation;
 
 // #[cfg(target_arch = "wasm32")]

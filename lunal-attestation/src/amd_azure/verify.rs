@@ -22,6 +22,7 @@ pub struct VerificationResult {
 pub async fn verify_evidence(
     custom_data: &[u8],
     evidence: &AttestationEvidence,
+    check_custom_data: Option<bool>,
 ) -> Result<VerificationResult, Box<dyn Error>> {
     let AttestationEvidence {
         report,
@@ -55,9 +56,11 @@ pub async fn verify_evidence(
         return Err("Variable data hash mismatch".into());
     }
 
-    let data_vec: Vec<u8> = custom_data.into();
-    if data_vec != report_data {
-        return Err("Variable data hash mismatch".into());
+    if check_custom_data.unwrap_or(false) {
+        let data_vec: Vec<u8> = custom_data.into();
+        if data_vec != report_data {
+            return Err("Variable data hash mismatch".into());
+        }
     }
 
     // Return the converted fields as a struct
@@ -71,15 +74,17 @@ pub async fn verify_evidence(
 pub async fn verify_bytes(
     custom_data: &[u8],
     evidence_bytes: &[u8],
+    check_custom_data: Option<bool>,
 ) -> Result<VerificationResult, Box<dyn Error>> {
     let evidence = AttestationEvidence::from_bytes(evidence_bytes)?;
-    verify_evidence(custom_data, &evidence).await
+    verify_evidence(custom_data, &evidence, check_custom_data).await
 }
 
 /// Verify compressed and base64-encoded attestation evidence
 pub async fn verify_compressed(
     custom_data: &[u8],
     compressed_evidence: &str,
+    check_custom_data: Option<bool>,
 ) -> Result<VerificationResult, Box<dyn Error>> {
     // Decode from base64
     let compressed_bytes = base64::decode(compressed_evidence)?;
@@ -90,5 +95,5 @@ pub async fn verify_compressed(
     decoder.read_to_end(&mut decompressed)?;
 
     // Verify the decompressed evidence
-    verify_bytes(custom_data, &decompressed).await
+    verify_bytes(custom_data, &decompressed, check_custom_data).await
 }

@@ -1,4 +1,4 @@
-use crate::amd_azure::verify::{VerificationResult as VerifyResult, verify_compressed};
+use crate::amd_azure::verify::{verify_compressed, VerificationResult as VerifyResult};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
@@ -53,7 +53,11 @@ impl VerificationResult {
 }
 
 #[wasm_bindgen]
-pub fn verify_attestation_evidence(custom_data: &str, compressed_evidence: &str) -> Promise {
+pub fn verify_attestation_evidence(
+    custom_data: &str,
+    compressed_evidence: &str,
+    check_custom_data: Option<bool>,
+) -> Promise {
     let custom_data = custom_data.to_string();
     let compressed_evidence = compressed_evidence.to_string();
 
@@ -62,7 +66,7 @@ pub fn verify_attestation_evidence(custom_data: &str, compressed_evidence: &str)
         let custom_data_bytes = custom_data.as_bytes();
 
         // Verify the compressed evidence
-        match verify_compressed(custom_data_bytes, &compressed_evidence).await {
+        match verify_compressed(custom_data_bytes, &compressed_evidence, check_custom_data).await {
             Ok(verify_result) => {
                 let result = VerificationResult {
                     success: true,
