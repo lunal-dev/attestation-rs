@@ -2,8 +2,8 @@ use std::env;
 use std::fs;
 
 #[cfg(feature = "attestation")]
-use lunal_attestation::amd_azure::attest;
-use lunal_attestation::amd_azure::verify::verify_compressed;
+use lunal_attestation::amd::attest;
+use lunal_attestation::amd::verify::verify_compressed;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

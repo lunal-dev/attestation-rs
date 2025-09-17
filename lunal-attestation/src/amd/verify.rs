@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::io::Read;
 
-use crate::amd_azure::AttestationEvidence;
+use crate::amd::AttestationEvidence;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationResult {
     pub report: serde_json::Value,

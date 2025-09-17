@@ -1,4 +1,4 @@
-use crate::amd_azure::verify::{verify_compressed, VerificationResult as VerifyResult};
+use crate::amd::verify::{verify_compressed, VerificationResult as VerifyResult};
 use js_sys::Promise;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
