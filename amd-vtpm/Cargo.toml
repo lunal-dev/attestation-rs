@@ -1,12 +1,12 @@
 [package]
 name = "amd-vtpm"
-version = "0.7.3"
+version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/kinvolk/azure-cvm-tooling/"
 license = "MIT"
-keywords = ["azure", "tpm", "sev-snp"]
+keywords = ["tpm", "sev-snp"]
 categories = ["cryptography", "virtualization"]
-description = "vTPM based SEV-SNP attestation for Azure Confidential VMs"
+description = "Library for vTPM-based SEV-SNP attestation for Confidential Virtual Machiness"
 
 [lib]
 path = "src/lib.rs"

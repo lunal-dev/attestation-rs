@@ -1,12 +1,12 @@
 [package]
 name = "vtpm-attestation"
-version = "0.7.3"
+version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/kinvolk/azure-cvm-tooling/"
 license = "MIT"
-keywords = ["azure", "tpm", "sev-snp", "tdx"]
+keywords = ["tpm", "sev-snp", "tdx"]
 categories = ["cryptography", "virtualization"]
-description = "Package with shared code for Azure Confidential VMs"
+description = "Library for vTPM-based attestation in confidential computing environments"
 
 [lib]
 path = "src/lib.rs"
