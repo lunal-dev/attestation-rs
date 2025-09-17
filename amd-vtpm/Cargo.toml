@@ -17,7 +17,7 @@ path = "src/main.rs"
 required-features = ["attester", "verifier"]
 
 [dependencies]
-vtpm-attestation = { path = "../vtpm-attestation", version = "0.7.1" }
+vtpm-attestation = { path = "../vtpm-attestation", version = "0.1.0" }
 bincode.workspace = true
 clap.workspace = true
 serde.workspace = true
