@@ -1,7 +1,7 @@
-use crate::amd_azure::AttestationEvidence;
-use az_snp_vtpm::{imds, vtpm};
-use flate2::Compression;
+use crate::amd::AttestationEvidence;
+use amd_vtpm::{imds, vtpm};
 use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::io::Write;

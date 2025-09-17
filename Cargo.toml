@@ -1,54 +1,27 @@
-[package]
-name = "lunal-attestation"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
-[features]
-default = []
-attestation = ["tdx", "az-snp-vtpm/attester"]
-wasm = [
-    "dep:wasm-bindgen",
-    "dep:serde-wasm-bindgen",
-    "dep:wasm-bindgen-futures",
-    "dep:js-sys",
-    "dep:web-sys",
-    "dep:console_error_panic_hook",
-    "getrandom/js"
+[workspace]
+members = [
+    "lunal-attestation",
+    "vtpm-attestation",
+    "amd-vtpm",
+    "amd-vtpm/example"
 ]
+resolver = "2"
 
-[dependencies]
-clap = "4.5"
-dcap-rs = { git = "https://github.com/automata-network/dcap-rs.git" }
-hex = "0.4"
-tdx = { git = "https://github.com/automata-network/tdx-attestation-sdk", package = "tdx", branch = "main", optional = true }
-reqwest = { version = "0.12", features = ["json"] }
+[workspace.dependencies]
+# Common dependencies shared across workspace members
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde = "1.0"
-bincode = "1.3.1"
-
-urlencoding = "2.1"
-flate2 = "1.0"
+tokio = "1.45"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+hex = "0.4"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-az-snp-vtpm = { git = "https://github.com/AmeanAsad/azure-cvm-tooling.git", branch = "feat/replace-openssl" }
+clap = { version = "4.5", features = ["derive"] }
+bincode = "1.3.1"
+urlencoding = "2.1"
+flate2 = "1.0"
 
-wasm-bindgen = { version = "0.2", optional = true }
-getrandom = { version = "0.2", optional = true }
-serde-wasm-bindgen = { version = "0.6", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-js-sys = { version = "0.3", optional = true }
-web-sys = { version = "0.3", features = ['console'], optional = true }
-console_error_panic_hook = { version = "0.1", optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-tokio = { version = "1.45", features = ["macros", "rt", "time", "sync"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.45", features = ["full"] }
-
-[[bin]]
-name = "attest"
-path = "src/bin/attest.rs"
+# Dependencies from vtpm-attestation
+thiserror = "2.0.3"
+sev = { version = "6.2.1", features = ["crypto_nossl"] }
+zerocopy = { version = "0.8.26", features = ["derive"] }

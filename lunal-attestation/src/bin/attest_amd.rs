@@ -1,10 +1,9 @@
 use std::env;
 use std::fs;
 
-use lunal_attestation::amd_azure::AttestationEvidence;
 #[cfg(feature = "attestation")]
-use lunal_attestation::amd_azure::attest;
-use lunal_attestation::amd_azure::verify::verify_compressed;
+use lunal_attestation::amd::attest;
+use lunal_attestation::amd::verify::verify_compressed;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,18 +11,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: {} <attest|verify> [evidence_file] [custom_data]",
+            "Usage: {} <attest|verify> [evidence_file] [custom_data] [--check-custom-data]",
             args[0]
         );
         eprintln!("  attest [custom_data]: Generate attestation evidence");
-        eprintln!("  verify <file> [custom_data]: Verify evidence from file");
+        eprintln!("  verify <file> [custom_data] [--check-custom-data]: Verify evidence from file");
+        eprintln!("    --check-custom-data: Enable custom data validation (default: false)");
         return Ok(());
     }
 
-    // Get custom data from args or use empty
-    let custom_data = if args.len() > 3 {
+    // Check for --check-custom-data flag
+    let check_custom_data = args.iter().any(|arg| arg == "--check-custom-data");
+
+    // Get custom data from args or use empty (excluding flags)
+    let custom_data = if args.len() > 3 && !args[3].starts_with("--") {
         args[3].as_bytes()
-    } else if args.len() > 2 && args[1] == "attest" {
+    } else if args.len() > 2 && args[1] == "attest" && !args[2].starts_with("--") {
         args[2].as_bytes()
     } else {
         b""
@@ -60,8 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Using empty custom data");
             }
 
+            if check_custom_data {
+                println!("Custom data validation: ENABLED");
+            } else {
+                println!("Custom data validation: DISABLED (default)");
+            }
+
             // Verify the evidence
-            match verify_compressed(custom_data, evidence_string.trim()).await {
+            match verify_compressed(custom_data, evidence_string.trim(), Some(check_custom_data))
+                .await
+            {
                 Ok(verification_result) => {
                     println!("✅ Attestation evidence verified successfully!");
                     // println!("\nVerification Results:");
