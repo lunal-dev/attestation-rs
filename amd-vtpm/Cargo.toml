@@ -2,7 +2,7 @@
 name = "amd-vtpm"
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/kinvolk/azure-cvm-tooling/"
+repository = "https://github.com/lunal-dev/attestation-rs"
 license = "MIT"
 keywords = ["tpm", "sev-snp"]
 categories = ["cryptography", "virtualization"]

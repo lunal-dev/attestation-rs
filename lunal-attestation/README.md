@@ -31,7 +31,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-lunal-attestation = { git = "https://github.com/lunal-dev/lunal-attestation.git" }
+lunal-attestation = { git = "https://github.com/lunal-dev/attestation-rs.git" }
 
 # For TDX attestation
 lunal-attestation = { git = "...", features = ["attestation-tdx"] }

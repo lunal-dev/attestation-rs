@@ -61,7 +61,7 @@ amd-vtpm = "0.1.0"
 
 ```toml
 [dependencies]
-amd-vtpm = { git = "https://github.com/lunal-dev/lunal-attestation.git" }
+amd-vtpm = { git = "https://github.com/lunal-dev/attestation-rs.git" }
 ```
 
 ## Usage

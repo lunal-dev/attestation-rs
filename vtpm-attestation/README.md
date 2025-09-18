@@ -66,13 +66,13 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-vtpm-attestation = { git = "https://github.com/lunal-dev/lunal-attestation.git" }
+vtpm-attestation = { git = "https://github.com/lunal-dev/attestation-rs.git" }
 
 # For attestation generation
-vtpm-attestation = { git = "https://github.com/lunal-dev/lunal-attestation.git", features = ["attestation"] }
+vtpm-attestation = { git = "https://github.com/lunal-dev/attestation-rs.git", features = ["attestation"] }
 
 # For verification only
-vtpm-attestation = { git = "https://github.com/lunal-dev/lunal-attestation.git", features = ["verifier"] }
+vtpm-attestation = { git = "https://github.com/lunal-dev/attestation-rs.git", features = ["verifier"] }
 ```
 
 ### System Dependencies
