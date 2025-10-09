@@ -1,8 +1,9 @@
 # Variables
 TDX_BINARY_NAME = attest-tdx
-AMD_BINARY_NAME = attest-amd
+AMD_BINARY_NAME = attest-sev-snp
 MAIN_BINARY_NAME = lunal-main
 INSTALL_PATH = /usr/local/bin
+BIN_DIR = ../bin
 CARGO = cargo
 
 # Default target - build all binaries with attestation
@@ -17,12 +18,24 @@ build:
 # Build only TDX attestation binary
 .PHONY: build-tdx
 build-tdx:
-	$(CARGO) build --release --features attestation --bin $(TDX_BINARY_NAME)
+	$(CARGO) build --release --features attestation-tdx --bin $(TDX_BINARY_NAME)
 
 # Build only AMD attestation binary
 .PHONY: build-amd
 build-amd:
-	$(CARGO) build --release --features attestation --bin $(AMD_BINARY_NAME)
+	$(CARGO) build --release --features attestation --bin attest-amd
+
+# Build release binaries for production deployment
+.PHONY: build-release
+build-release:
+	@echo "Building release binaries..."
+	$(CARGO) build --release --features attestation --bin attest-amd
+	$(CARGO) build --release --features attestation-tdx --bin $(TDX_BINARY_NAME)
+	@echo "Copying binaries to $(BIN_DIR)..."
+	@mkdir -p $(BIN_DIR)
+	cp target/release/attest-amd $(BIN_DIR)/$(AMD_BINARY_NAME)
+	cp target/release/$(TDX_BINARY_NAME) $(BIN_DIR)/$(TDX_BINARY_NAME)
+	@echo "Release binaries ready in $(BIN_DIR)/"
 
 # Build for WASM web target
 .PHONY: wasm
