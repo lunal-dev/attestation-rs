@@ -4,6 +4,7 @@ AMD_BINARY_NAME = attest-sev-snp
 MAIN_BINARY_NAME = lunal-main
 INSTALL_PATH = /usr/local/bin
 BIN_DIR = ../bin
+TARGET_DIR = ../target
 CARGO = cargo
 
 # Default target - build all binaries with attestation
@@ -33,8 +34,8 @@ build-release:
 	$(CARGO) build --release --features attestation-tdx --bin $(TDX_BINARY_NAME)
 	@echo "Copying binaries to $(BIN_DIR)..."
 	@mkdir -p $(BIN_DIR)
-	cp target/release/attest-amd $(BIN_DIR)/$(AMD_BINARY_NAME)
-	cp target/release/$(TDX_BINARY_NAME) $(BIN_DIR)/$(TDX_BINARY_NAME)
+	cp $(TARGET_DIR)/release/attest-amd $(BIN_DIR)/$(AMD_BINARY_NAME)
+	cp $(TARGET_DIR)/release/$(TDX_BINARY_NAME) $(BIN_DIR)/$(TDX_BINARY_NAME)
 	@echo "Release binaries ready in $(BIN_DIR)/"
 
 # Build for WASM web target
@@ -50,9 +51,9 @@ wasm-dev:
 # Install all binaries to /usr/local/bin
 .PHONY: install
 install: build
-	sudo cp target/release/$(TDX_BINARY_NAME) $(INSTALL_PATH)/$(TDX_BINARY_NAME)
-	sudo cp target/release/$(AMD_BINARY_NAME) $(INSTALL_PATH)/$(AMD_BINARY_NAME)
-	sudo cp target/release/$(MAIN_BINARY_NAME) $(INSTALL_PATH)/$(MAIN_BINARY_NAME)
+	sudo cp $(TARGET_DIR)/release/$(TDX_BINARY_NAME) $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	sudo cp $(TARGET_DIR)/release/$(AMD_BINARY_NAME) $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	sudo cp $(TARGET_DIR)/release/$(MAIN_BINARY_NAME) $(INSTALL_PATH)/$(MAIN_BINARY_NAME)
 	sudo chmod +x $(INSTALL_PATH)/$(TDX_BINARY_NAME)
 	sudo chmod +x $(INSTALL_PATH)/$(AMD_BINARY_NAME)
 	sudo chmod +x $(INSTALL_PATH)/$(MAIN_BINARY_NAME)
@@ -61,14 +62,14 @@ install: build
 # Install only TDX binary
 .PHONY: install-tdx
 install-tdx: build-tdx
-	sudo cp target/release/$(TDX_BINARY_NAME) $(INSTALL_PATH)/$(TDX_BINARY_NAME)
+	sudo cp $(TARGET_DIR)/release/$(TDX_BINARY_NAME) $(INSTALL_PATH)/$(TDX_BINARY_NAME)
 	sudo chmod +x $(INSTALL_PATH)/$(TDX_BINARY_NAME)
 	@echo "$(TDX_BINARY_NAME) installed to $(INSTALL_PATH)"
 
 # Install only AMD binary
 .PHONY: install-amd
 install-amd: build-amd
-	sudo cp target/release/$(AMD_BINARY_NAME) $(INSTALL_PATH)/$(AMD_BINARY_NAME)
+	sudo cp $(TARGET_DIR)/release/$(AMD_BINARY_NAME) $(INSTALL_PATH)/$(AMD_BINARY_NAME)
 	sudo chmod +x $(INSTALL_PATH)/$(AMD_BINARY_NAME)
 	@echo "$(AMD_BINARY_NAME) installed to $(INSTALL_PATH)"
 
