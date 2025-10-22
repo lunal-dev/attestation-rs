@@ -75,22 +75,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 Ok(verification_result) => {
                     println!("✅ Attestation evidence verified successfully!");
-                    // println!("\nVerification Results:");
-                    // println!(
-                    //     "Quote: {}",
-                    //     serde_json::to_string_pretty(&verification_result.quote)?
-                    // );
-                    // println!(
-                    //     "Report: {}",
-                    //     serde_json::to_string_pretty(&verification_result.report)?
-                    // );
-                    // println!(
-                    //     "Certs: {}",
-                    //     serde_json::to_string_pretty(&verification_result.certs)?
-                    // );
-                    // println!("Report Data: {}", verification_result.report_data);
+
+                    // Create a single JSON object with all verification results
+                    let json_output = serde_json::json!({
+                        "status": "verified",
+                        "report": verification_result.report,
+                        "certs": verification_result.certs,
+                        "report_data": verification_result.report_data
+                    });
+
+                    println!("\nVerification Results (JSON):");
+                    println!("{}", serde_json::to_string_pretty(&json_output)?);
                 }
-                Err(e) => println!("❌ Verification failed: {}", e),
+                Err(e) => {
+                    let error_json = serde_json::json!({
+                        "status": "failed",
+                        "error": e.to_string()
+                    });
+                    println!("{}", serde_json::to_string_pretty(&error_json)?);
+                }
             }
         }
 
