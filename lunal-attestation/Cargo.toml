@@ -60,8 +60,10 @@ path = "src/main.rs"
 [[bin]]
 name = "attest-tdx"
 path = "src/bin/attest_tdx.rs"
+required-features = ["attestation-tdx"]
 
 # AMD Azure attestation binary
 [[bin]]
 name = "attest-amd"
 path = "src/bin/attest_amd.rs"
+required-features = ["attestation"]
