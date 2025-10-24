@@ -49,8 +49,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
 
-            println!("Verifying attestation evidence...");
-
             // Read evidence from file (assuming base64 compressed format)
             let evidence_string = fs::read_to_string(&args[2])?;
 
@@ -59,8 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await
             {
                 Ok(verification_result) => {
-                    println!("✅ Attestation evidence verified successfully!");
-
                     // Create a single JSON object with all verification results
                     let json_output = serde_json::json!({
                         "status": "verified",
