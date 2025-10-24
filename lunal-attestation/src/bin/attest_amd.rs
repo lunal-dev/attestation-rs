@@ -54,21 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Read evidence from file (assuming base64 compressed format)
             let evidence_string = fs::read_to_string(&args[2])?;
 
-            if !custom_data.is_empty() {
-                println!(
-                    "Using custom data: {}",
-                    String::from_utf8_lossy(custom_data)
-                );
-            } else {
-                println!("Using empty custom data");
-            }
-
-            if check_custom_data {
-                println!("Custom data validation: ENABLED");
-            } else {
-                println!("Custom data validation: DISABLED (default)");
-            }
-
             // Verify the evidence
             match verify_compressed(custom_data, evidence_string.trim(), Some(check_custom_data))
                 .await
@@ -84,7 +69,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "report_data": verification_result.report_data
                     });
 
-                    println!("\nVerification Results (JSON):");
                     println!("{}", serde_json::to_string_pretty(&json_output)?);
                 }
                 Err(e) => {
