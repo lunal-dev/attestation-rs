@@ -8,7 +8,7 @@ use x509_cert::Certificate;
 
 const KDS_CERT_SITE: &str = "https://kdsintf.amd.com";
 const KDS_VCEK: &str = "/vcek/v1";
-const SEV_PROD_NAME: &str = "Milan";
+const SEV_PROD_NAME: &str = "Genoa";
 const KDS_CERT_CHAIN: &str = "cert_chain";
 
 async fn get(url: &str) -> Result<Vec<u8>, HttpError> {
