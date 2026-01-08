@@ -3,6 +3,8 @@ use std::fs;
 
 #[cfg(feature = "attestation")]
 use lunal_attestation::amd::attest;
+#[cfg(feature = "attestation")]
+use lunal_attestation::amd::kbs::attest::attest_az_snp_vtpm;
 use lunal_attestation::amd::verify::verify_compressed;
 
 #[tokio::main]
@@ -11,19 +13,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.len() < 2 {
         eprintln!(
-            "Usage: {} <attest|verify> [evidence_file] [custom_data] [--check-custom-data]",
+            "Usage: {} <attest|verify> [evidence_file] [custom_data] [--kbs] [--check-custom-data]",
             args[0]
         );
-        eprintln!("  attest [custom_data]: Generate attestation evidence");
+        eprintln!("  attest [custom_data] [--kbs]: Generate attestation evidence");
+        eprintln!("    --kbs: Output Azure vTPM evidence for KBS (azsnpvtpm format)");
         eprintln!("  verify <file> [custom_data] [--check-custom-data]: Verify evidence from file");
         eprintln!("    --check-custom-data: Enable custom data validation (default: false)");
         return Ok(());
     }
 
-    // Check for --check-custom-data flag
+    // Check for flags
     let check_custom_data = args.iter().any(|arg| arg == "--check-custom-data");
+    let kbs_mode = args.iter().any(|arg| arg == "--kbs");
 
     // Get custom data from args or use empty (excluding flags)
+    // For attest command, custom_data is args[2]
+    // For verify command, custom_data is args[3]
     let custom_data = if args.len() > 3 && !args[3].starts_with("--") {
         args[3].as_bytes()
     } else if args.len() > 2 && args[1] == "attest" && !args[2].starts_with("--") {
@@ -35,12 +41,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args[1].as_str() {
         #[cfg(feature = "attestation")]
         "attest" => {
-            // Generate attestation evidence (compressed and base64 encoded)
-            let evidence_string = attest::attest_compressed(custom_data).await?;
-
-            // Print the base64 string that can be copied
-            println!("{}", evidence_string);
-            fs::write("evidence.b64", &evidence_string)?;
+            if kbs_mode {
+                // Generate attestation evidence in Azure vTPM format (azsnpvtpm)
+                let evidence_json = attest_az_snp_vtpm(custom_data).await?;
+                println!("{}", evidence_json);
+                fs::write("evidence-kbs.json", &evidence_json)?;
+            } else {
+                // Generate attestation evidence (compressed and base64 encoded)
+                let evidence_string = attest::attest_compressed(custom_data).await?;
+                println!("{}", evidence_string);
+                fs::write("evidence.b64", &evidence_string)?;
+            }
         }
 
         "verify" => {

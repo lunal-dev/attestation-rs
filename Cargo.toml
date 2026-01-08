@@ -25,3 +25,4 @@ flate2 = "1.0"
 thiserror = "2.0.3"
 sev = { version = "6.2.1", features = ["crypto_nossl"] }
 zerocopy = { version = "0.8.26", features = ["derive"] }
+pem = "3.0"
