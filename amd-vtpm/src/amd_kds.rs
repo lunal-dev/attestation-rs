@@ -2,14 +2,32 @@ use crate::certs::{AmdChain, Vcek};
 use crate::HttpError;
 use pem::parse_many;
 use sev::firmware::guest::AttestationReport;
+use sev::Generation;
 use thiserror::Error;
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
 const KDS_CERT_SITE: &str = "https://kdsintf.amd.com";
 const KDS_VCEK: &str = "/vcek/v1";
-const SEV_PROD_NAME: &str = "Genoa";
 const KDS_CERT_CHAIN: &str = "cert_chain";
+
+/// Derive the SEV product name from an AttestationReport.
+/// Uses CPUID family/model from v3+ reports, or falls back to "Genoa" for v2 reports.
+fn get_product_name(report: &AttestationReport) -> &'static str {
+    match (report.cpuid_fam_id, report.cpuid_mod_id) {
+        (Some(family), Some(model)) => {
+            match Generation::identify_cpu(family, model) {
+                Ok(Generation::Milan) => "Milan",
+                Ok(Generation::Genoa) => "Genoa",
+                Ok(Generation::Turin) => "Turin",
+                // Naples/Rome don't support SNP, but handle for completeness
+                Ok(_) | Err(_) => "Genoa",
+            }
+        }
+        // v2 reports don't have CPUID fields; fall back to Genoa
+        _ => "Genoa",
+    }
+}
 
 async fn get(url: &str) -> Result<Vec<u8>, HttpError> {
     let response = reqwest::get(url).await?; // Remove ::blocking
@@ -30,9 +48,9 @@ pub enum AmdKdsError {
 }
 
 /// Retrieve the AMD chain of trust (ASK & ARK) from AMD's KDS
-pub async fn get_cert_chain() -> Result<AmdChain, AmdKdsError> {
-    // Make async
-    let url = format!("{KDS_CERT_SITE}{KDS_VCEK}/{SEV_PROD_NAME}/{KDS_CERT_CHAIN}");
+pub async fn get_cert_chain(report: &AttestationReport) -> Result<AmdChain, AmdKdsError> {
+    let product_name = get_product_name(report);
+    let url = format!("{KDS_CERT_SITE}{KDS_VCEK}/{product_name}/{KDS_CERT_CHAIN}");
     let bytes = get(&url).await?; // Add .await
 
     // Parse PEM certificates
@@ -61,9 +79,10 @@ fn hexify(bytes: &[u8]) -> String {
 
 /// Retrieve a VCEK cert from AMD's KDS, based on an AttestationReport's platform information
 pub async fn get_vcek(report: &AttestationReport) -> Result<Vcek, AmdKdsError> {
+    let product_name = get_product_name(report);
     let hw_id = hexify(&*report.chip_id);
     let url = format!(
-        "{KDS_CERT_SITE}{KDS_VCEK}/{SEV_PROD_NAME}/{hw_id}?blSPL={:02}&teeSPL={:02}&snpSPL={:02}&ucodeSPL={:02}",
+        "{KDS_CERT_SITE}{KDS_VCEK}/{product_name}/{hw_id}?blSPL={:02}&teeSPL={:02}&snpSPL={:02}&ucodeSPL={:02}",
         report.reported_tcb.bootloader,
         report.reported_tcb.tee,
         report.reported_tcb.snp,

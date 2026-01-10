@@ -43,7 +43,7 @@ pub async fn verify_evidence(
     let report_json = serde_json::to_value(&snp_report)?;
 
     // Get and validate certificate chain
-    let cert_chain = amd_kds::get_cert_chain().await?;
+    let cert_chain = amd_kds::get_cert_chain(&snp_report).await?;
     let vcek = Vcek::from_pem(&certs.vcek)?;
 
     // Validate certificates and report

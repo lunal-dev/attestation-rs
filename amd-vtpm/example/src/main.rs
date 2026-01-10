@@ -44,7 +44,7 @@ mod attester_example {
             let ak_pub = hcl_report.ak_pub()?;
             let snp_report: AttestationReport = hcl_report.try_into()?;
 
-            let cert_chain = amd_kds::get_cert_chain()?;
+            let cert_chain = futures::executor::block_on(amd_kds::get_cert_chain(&snp_report))?;
             let vcek = Vcek::from_pem(&evidence.certs.vcek)?;
 
             cert_chain.validate()?;
