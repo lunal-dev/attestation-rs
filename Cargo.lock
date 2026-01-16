@@ -1287,6 +1287,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "canon-json"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5ae9f90437d2e2efba2a6c75b8279aa6b8f2f4017e0a4aeb64a76cd9d3a2bab"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "cbindgen"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2816,6 +2828,7 @@ dependencies = [
  "amd-vtpm",
  "base64 0.22.1",
  "bincode 1.3.3",
+ "canon-json",
  "chrono",
  "clap",
  "console_error_panic_hook",
@@ -2824,10 +2837,12 @@ dependencies = [
  "getrandom 0.2.16",
  "hex",
  "js-sys",
+ "pem",
  "reqwest",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sha2",
  "tdx",
  "tokio",
  "urlencoding",

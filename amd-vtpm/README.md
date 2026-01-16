@@ -80,13 +80,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let certificates = imds::get_certs().await?;
     let vcek = Vcek::from_pem(&certificates.vcek)?;
 
-    // Or fetch from AMD KDS
-    // let cert_chain = amd_kds::get_cert_chain().await?;
-    // let vcek = amd_kds::get_vcek(&snp_report).await?;
-
     // Parse and validate report
     let report_bytes = std::fs::read("report.bin")?;
     let snp_report = report::parse(&report_bytes)?;
+
+    // Or fetch from AMD KDS (dynamically determines product from report)
+    // let cert_chain = amd_kds::get_cert_chain(&snp_report).await?;
+    // let vcek = amd_kds::get_vcek(&snp_report).await?;
 
     // Validate certificate chain and report
     cert_chain.validate()?;

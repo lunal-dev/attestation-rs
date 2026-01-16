@@ -1,6 +1,7 @@
 #[cfg(feature = "attestation")]
 pub mod attest;
 
+pub mod kbs;
 pub mod verify;
 
 #[cfg(target_arch = "wasm32")]
