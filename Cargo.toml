@@ -36,6 +36,7 @@ cfg-if = "1"
 p256 = { version = "0.13", features = ["ecdsa"] }
 p384 = { version = "0.13", features = ["ecdsa"] }
 ecdsa = { version = "0.16", features = ["verifying", "hazmat"] }
+rsa = { version = "0.9", features = ["sha2"] }
 x509-cert = "0.2"
 der = { version = "0.7", features = ["alloc", "oid"] }
 spki = "0.7"
