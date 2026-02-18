@@ -1,6 +1,68 @@
 [package]
 name = "attestation"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Unified TEE attestation evidence generation and verification"
+license = "Apache-2.0"
+
+[features]
+default = []
+
+# Guest-side evidence generation (Linux-only, requires TEE hardware)
+attest = []
+
+# Per-platform features
+tdx = []
+snp = []
+az-tdx = ["tdx"]
+az-snp = ["snp"]
+
+# Convenience
+all-platforms = ["tdx", "snp", "az-tdx", "az-snp"]
 
 [dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+cfg-if = "1"
+
+# Crypto
+p256 = { version = "0.13", features = ["ecdsa"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
+ecdsa = { version = "0.16", features = ["verifying"] }
+x509-cert = "0.2"
+der = { version = "0.7", features = ["alloc", "oid"] }
+spki = "0.7"
+signature = "2"
+
+# Binary parsing
+scroll = "0.12"
+
+# HTTP client for cert fetching (native)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"], optional = true }
+
+# SNP types from the sev crate (verification structs)
+# We vendor the key types to avoid pulling in the full sev crate with its linux deps
+
+[target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+tempfile = "3"
+
+[[bench]]
+name = "verification"
+harness = false
