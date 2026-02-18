@@ -428,9 +428,10 @@ fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<bool>
         s_be[i] = sig_s[47 - i];
     }
 
-    let r_bytes: p384::FieldBytes = *p384::FieldBytes::from_slice(&r_be);
-    let s_bytes: p384::FieldBytes = *p384::FieldBytes::from_slice(&s_be);
-    let signature = Signature::from_scalars(r_bytes, s_bytes)
+    let signature = Signature::from_scalars(
+        p384::FieldBytes::from(r_be),
+        p384::FieldBytes::from(s_be),
+    )
     .map_err(|e| AttestationError::SignatureVerificationFailed(format!("sig construct: {}", e)))?;
 
     match verifying_key.verify(signed_data, &signature) {
@@ -832,9 +833,10 @@ mod tests {
             s_be[i] = sig_s[47 - i];
         }
 
-        let r_bytes: p384::FieldBytes = *p384::FieldBytes::from_slice(&r_be);
-        let s_bytes: p384::FieldBytes = *p384::FieldBytes::from_slice(&s_be);
-        let signature = p384::ecdsa::Signature::from_scalars(r_bytes, s_bytes);
+        let signature = p384::ecdsa::Signature::from_scalars(
+            p384::FieldBytes::from(r_be),
+            p384::FieldBytes::from(s_be),
+        );
         assert!(
             signature.is_ok(),
             "should be able to construct P-384 signature from report: {:?}",

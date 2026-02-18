@@ -94,7 +94,7 @@ impl DefaultCertProvider {
     }
 
     /// Build AMD KDS URL for cert chain (ARK + ASK).
-    fn cert_chain_url(processor_gen: ProcessorGeneration) -> String {
+    pub fn cert_chain_url(processor_gen: ProcessorGeneration) -> String {
         format!(
             "https://kdsintf.amd.com/vcek/v1/{}/cert_chain",
             processor_gen.product_name()

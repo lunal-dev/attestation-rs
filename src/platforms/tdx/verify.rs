@@ -128,6 +128,7 @@ impl TdxReportBody {
         let rtmr_2 = read_bytes!(48);
         let rtmr_3 = read_bytes!(48);
         let report_data = read_bytes!(64);
+        let _ = offset; // suppress unused assignment warning from macro
 
         Ok(Self {
             tee_tcb_svn,
