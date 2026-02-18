@@ -1,3 +1,33 @@
+//! Unified TEE attestation evidence generation and verification.
+//!
+//! This library provides a single interface for generating and verifying
+//! attestation evidence across multiple Trusted Execution Environment (TEE)
+//! platforms: AMD SEV-SNP, Intel TDX, Azure SEV-SNP (vTPM), and Azure TDX (vTPM).
+//!
+//! # Platform Support
+//!
+//! Each platform is enabled via feature flags (`snp`, `tdx`, `az-snp`, `az-tdx`).
+//! Verification is always available when a platform feature is enabled.
+//! Evidence generation requires the `attest` feature and appropriate hardware.
+//!
+//! # Quick Start
+//!
+//! **Verifier** (any machine, including WASM):
+//! ```rust,ignore
+//! use attestation::platforms::snp::Snp;
+//! use attestation::platforms::Platform;
+//!
+//! let snp = Snp::with_default_provider();
+//! let result = snp.verify(&evidence, &params).await?;
+//! assert!(result.signature_valid);
+//! ```
+//!
+//! **Attester** (inside TEE, with `attest` feature):
+//! ```rust,ignore
+//! let platform = attestation::detect()?;
+//! let evidence_json = platform.attest_json(b"nonce").await?;
+//! ```
+
 pub mod error;
 pub mod types;
 pub mod platforms;
