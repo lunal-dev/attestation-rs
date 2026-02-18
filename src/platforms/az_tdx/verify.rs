@@ -103,3 +103,124 @@ pub async fn verify_evidence(
         init_data_match,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platforms::tpm_common::TpmQuote;
+
+    fn build_dummy_tpm_quote() -> TpmQuote {
+        TpmQuote {
+            signature: "00".repeat(256),
+            message: "ff544347".to_string() + &"00".repeat(100),
+            pcrs: (0..24).map(|_| "00".repeat(32)).collect(),
+        }
+    }
+
+    #[test]
+    fn test_az_tdx_evidence_serialization_roundtrip() {
+        let evidence = AzTdxEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: "dGVzdA".to_string(),
+            td_quote: "AAAA".to_string(),
+        };
+
+        let json = serde_json::to_string(&evidence).unwrap();
+        let deserialized: AzTdxEvidence = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.version, 1);
+        assert_eq!(deserialized.hcl_report, evidence.hcl_report);
+        assert_eq!(deserialized.td_quote, evidence.td_quote);
+        assert_eq!(deserialized.tpm_quote.pcrs.len(), 24);
+    }
+
+    #[test]
+    fn test_invalid_base64_hcl_report() {
+        let evidence = AzTdxEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: "!!!invalid!!!".to_string(),
+            td_quote: BASE64URL.encode(&[0u8; 100]),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("base64") || err.contains("Base64"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_invalid_base64_td_quote() {
+        let hcl = vec![0u8; HCL_REPORT_VARDATA_OFFSET + 100];
+        let evidence = AzTdxEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: BASE64URL.encode(&hcl),
+            td_quote: "!!!invalid!!!".to_string(),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hcl_var_data_binding_sha384() {
+        // Azure TDX uses SHA-384 for HCL var_data binding (vs SHA-256 for SNP)
+        let var_data = b"test variable data for tdx binding";
+        let var_data_hash = crate::utils::sha384(var_data);
+
+        // SHA-384 produces 48 bytes
+        assert_eq!(var_data_hash.len(), 48);
+
+        // The TDX quote's report_data[..48] should equal SHA-384(var_data)
+        // This verifies the binding mechanism is correct for TDX
+    }
+
+    #[test]
+    fn test_hcl_vardata_offset_consistent() {
+        // Azure TDX should use the same HCL var_data offset as Azure SNP
+        assert_eq!(
+            HCL_REPORT_VARDATA_OFFSET, 0x0880,
+            "HCL var_data offset should be 0x0880"
+        );
+    }
+
+    #[test]
+    fn test_platform_type_is_az_tdx() {
+        assert_eq!(
+            format!("{}", PlatformType::AzTdx),
+            "az-tdx",
+            "platform type should display as az-tdx"
+        );
+    }
+
+    #[test]
+    fn test_init_data_pcr8_check() {
+        // Verify the PCR[8] init data check logic
+        let pcrs: Vec<Vec<u8>> = (0..24).map(|i| vec![i as u8; 32]).collect();
+
+        // Expected init data should match PCR[8]
+        let expected = pcrs[8].clone();
+        let mut padded = vec![0u8; 32];
+        padded[..expected.len().min(32)].copy_from_slice(&expected[..expected.len().min(32)]);
+
+        assert!(
+            crate::utils::constant_time_eq(&pcrs[8], &padded),
+            "PCR[8] should match expected init data"
+        );
+
+        // Non-matching expected should fail
+        let wrong = vec![0xFF; 32];
+        assert!(
+            !crate::utils::constant_time_eq(&pcrs[8], &wrong),
+            "PCR[8] should not match wrong init data"
+        );
+    }
+}

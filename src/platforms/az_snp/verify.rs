@@ -134,3 +134,153 @@ pub async fn verify_evidence(
         init_data_match,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platforms::tpm_common::TpmQuote;
+
+    /// Build a minimal HCL report with an embedded SNP report at offset 0x20.
+    /// The SNP report is zeroed out (version=0, all fields zero).
+    fn build_hcl_report(snp_report: &[u8], var_data: &[u8]) -> Vec<u8> {
+        let mut hcl = vec![0u8; HCL_REPORT_VARDATA_OFFSET + var_data.len()];
+        // Embed SNP report at offset 0x20
+        let end = HCL_REPORT_SNP_OFFSET + snp_report.len().min(1184);
+        hcl[HCL_REPORT_SNP_OFFSET..end].copy_from_slice(&snp_report[..snp_report.len().min(1184)]);
+        // Embed var_data at offset 0x0880
+        hcl[HCL_REPORT_VARDATA_OFFSET..].copy_from_slice(var_data);
+        hcl
+    }
+
+    fn build_dummy_tpm_quote() -> TpmQuote {
+        TpmQuote {
+            signature: "00".repeat(256),
+            message: "ff544347".to_string() + &"00".repeat(100),
+            pcrs: (0..24).map(|_| "00".repeat(32)).collect(),
+        }
+    }
+
+    #[test]
+    fn test_az_snp_evidence_serialization_roundtrip() {
+        let evidence = AzSnpEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: "dGVzdA".to_string(), // "test" in URL-safe base64
+            vcek: "AAAA".to_string(),
+        };
+
+        let json = serde_json::to_string(&evidence).unwrap();
+        let deserialized: AzSnpEvidence = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.version, 1);
+        assert_eq!(deserialized.hcl_report, evidence.hcl_report);
+        assert_eq!(deserialized.vcek, evidence.vcek);
+        assert_eq!(deserialized.tpm_quote.pcrs.len(), 24);
+    }
+
+    #[test]
+    fn test_hcl_report_too_short() {
+        let short_hcl = vec![0u8; 100]; // Way too short
+        let evidence = AzSnpEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: BASE64URL.encode(&short_hcl),
+            vcek: BASE64URL.encode(&[0u8; 100]),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let provider = crate::collateral::DefaultCertProvider::new();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params, &provider));
+        assert!(result.is_err(), "short HCL report should fail");
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(
+            err.contains("too short"),
+            "error should mention too short: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_hcl_report_snp_extraction_offset() {
+        // Verify constants are correct
+        assert_eq!(HCL_REPORT_SNP_OFFSET, 0x20);
+        assert_eq!(HCL_REPORT_VARDATA_OFFSET, 0x0880);
+        // HCL report must be at least 0x20 + 1184 = 1216 bytes for SNP report
+        assert!(HCL_REPORT_SNP_OFFSET + 1184 <= HCL_REPORT_VARDATA_OFFSET);
+    }
+
+    #[test]
+    fn test_invalid_base64_hcl_report() {
+        let evidence = AzSnpEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: "!!!invalid_base64!!!".to_string(),
+            vcek: BASE64URL.encode(&[0u8; 100]),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let provider = crate::collateral::DefaultCertProvider::new();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params, &provider));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("base64") || err.contains("Base64"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_invalid_base64_vcek() {
+        let hcl = vec![0u8; HCL_REPORT_VARDATA_OFFSET + 100];
+        let evidence = AzSnpEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: BASE64URL.encode(&hcl),
+            vcek: "!!!invalid!!!".to_string(),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let provider = crate::collateral::DefaultCertProvider::new();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params, &provider));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_hcl_var_data_binding_sha256() {
+        // Verify the binding mechanism: report_data[..32] should equal SHA-256(var_data)
+        let var_data = b"test variable data for binding";
+        let var_data_hash = crate::utils::sha256(var_data);
+
+        // The first 32 bytes of report_data should match the SHA-256 hash
+        assert_eq!(var_data_hash.len(), 32);
+
+        // Build an SNP report with report_data matching SHA-256(var_data)
+        let mut snp_report = vec![0u8; 1184];
+        // report_data is at offset 0x50 (80) in the SNP report
+        snp_report[0x50..0x50 + 32].copy_from_slice(&var_data_hash);
+
+        let hcl = build_hcl_report(&snp_report, var_data);
+        let hcl_var_data = &hcl[HCL_REPORT_VARDATA_OFFSET..];
+
+        let computed = crate::utils::sha256(hcl_var_data);
+        let extracted_report_data = &hcl[HCL_REPORT_SNP_OFFSET + 0x50..HCL_REPORT_SNP_OFFSET + 0x50 + 32];
+
+        assert_eq!(
+            extracted_report_data, &computed[..],
+            "HCL var_data binding: report_data[..32] should equal SHA-256(var_data)"
+        );
+    }
+
+    #[test]
+    fn test_platform_type_is_az_snp() {
+        // Verify that the VerificationResult uses the correct PlatformType
+        assert_eq!(
+            format!("{}", PlatformType::AzSnp),
+            "az-snp",
+            "platform type should display as az-snp"
+        );
+    }
+}

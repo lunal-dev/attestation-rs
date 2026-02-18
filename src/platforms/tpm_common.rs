@@ -435,6 +435,66 @@ pub fn decode_tpm_quote(quote: &TpmQuote) -> Result<(Vec<u8>, Vec<u8>, Vec<Vec<u
 mod tests {
     use super::*;
 
+    // --- Helper: build a synthetic TPMS_ATTEST message ---
+    fn build_tpms_attest(nonce: &[u8], pcr_selection: &[u8], pcr_digest: &[u8]) -> Vec<u8> {
+        let mut msg = Vec::new();
+        // magic: 0xFF544347
+        msg.extend_from_slice(&[0xFF, 0x54, 0x43, 0x47]);
+        // type: TPM_ST_ATTEST_QUOTE = 0x8018
+        msg.extend_from_slice(&[0x80, 0x18]);
+        // qualifiedSigner: size=0
+        msg.extend_from_slice(&[0x00, 0x00]);
+        // extraData (nonce): size + data
+        msg.extend_from_slice(&(nonce.len() as u16).to_be_bytes());
+        msg.extend_from_slice(nonce);
+        // clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17 bytes
+        msg.extend_from_slice(&[0u8; 17]);
+        // firmwareVersion: 8 bytes
+        msg.extend_from_slice(&[0u8; 8]);
+        // TPML_PCR_SELECTION: count=1
+        msg.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        // TPMS_PCR_SELECTION: hash=SHA256(0x000B), sizeofSelect + bitmap
+        msg.extend_from_slice(&[0x00, 0x0B]);
+        msg.extend_from_slice(pcr_selection);
+        // TPM2B_DIGEST: size + data
+        msg.extend_from_slice(&(pcr_digest.len() as u16).to_be_bytes());
+        msg.extend_from_slice(pcr_digest);
+        msg
+    }
+
+    // --- Helper: build a minimal TPM2B_PUBLIC for RSA 2048 ---
+    fn build_tpm2b_public_rsa(modulus: &[u8]) -> Vec<u8> {
+        let mut data = Vec::new();
+        // Content (after size field)
+        let mut content = Vec::new();
+        // type: TPM_ALG_RSA = 0x0001
+        content.extend_from_slice(&[0x00, 0x01]);
+        // nameAlg: TPM_ALG_SHA256 = 0x000B
+        content.extend_from_slice(&[0x00, 0x0B]);
+        // objectAttributes: 4 bytes
+        content.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        // authPolicy: size=0
+        content.extend_from_slice(&[0x00, 0x00]);
+        // symmetric: TPM_ALG_NULL = 0x0010
+        content.extend_from_slice(&[0x00, 0x10]);
+        // scheme: TPM_ALG_NULL = 0x0010
+        content.extend_from_slice(&[0x00, 0x10]);
+        // keyBits: 2048 = 0x0800
+        content.extend_from_slice(&[0x08, 0x00]);
+        // exponent: 0 (default 65537)
+        content.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        // unique (TPM2B_PUBLIC_KEY_RSA): size + modulus
+        content.extend_from_slice(&(modulus.len() as u16).to_be_bytes());
+        content.extend_from_slice(modulus);
+
+        // TPM2B_PUBLIC.size
+        data.extend_from_slice(&(content.len() as u16).to_be_bytes());
+        data.extend_from_slice(&content);
+        data
+    }
+
+    // --- Nonce tests ---
+
     #[test]
     fn test_tpm_nonce_parse_bad_magic() {
         let msg = vec![
@@ -447,5 +507,356 @@ mod tests {
     fn test_tpm_nonce_parse_too_short() {
         let msg = vec![0xFF, 0x54, 0x43, 0x47, 0x00];
         assert!(verify_tpm_nonce(&msg, b"test").is_err());
+    }
+
+    #[test]
+    fn test_tpm_nonce_valid_sha256_match() {
+        let report_data = b"hello world";
+        let expected_nonce = crate::utils::sha256(report_data);
+        let pcr_digest = [0u8; 32];
+        // sizeofSelect=3, select all 24 PCRs (0xFF, 0xFF, 0xFF)
+        let msg = build_tpms_attest(&expected_nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+        let result = verify_tpm_nonce(&msg, report_data).unwrap();
+        assert!(result, "nonce should match SHA-256 of report_data");
+    }
+
+    #[test]
+    fn test_tpm_nonce_mismatch() {
+        let nonce = crate::utils::sha256(b"correct data");
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(&nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+        let result = verify_tpm_nonce(&msg, b"wrong data").unwrap();
+        assert!(!result, "nonce should not match for different data");
+    }
+
+    #[test]
+    fn test_tpm_nonce_direct_match() {
+        // When nonce length != 32 (SHA-256 output) but matches expected length,
+        // do direct byte comparison instead of SHA-256 comparison.
+        let nonce = b"short_nonce"; // 11 bytes, not 32
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+        let result = verify_tpm_nonce(&msg, nonce.as_slice()).unwrap();
+        assert!(result, "nonce should match via direct comparison");
+    }
+
+    #[test]
+    fn test_tpm_nonce_truncated_at_signer() {
+        // Valid magic + type, but truncated before qualifiedSigner size
+        let msg = vec![0xFF, 0x54, 0x43, 0x47, 0x80, 0x18];
+        assert!(verify_tpm_nonce(&msg, b"test").is_err());
+    }
+
+    #[test]
+    fn test_tpm_nonce_truncated_at_extra_data() {
+        let mut msg = vec![0xFF, 0x54, 0x43, 0x47, 0x80, 0x18];
+        msg.extend_from_slice(&[0x00, 0x00]); // qualifiedSigner size=0
+        // No extraData follows
+        assert!(verify_tpm_nonce(&msg, b"test").is_err());
+    }
+
+    // --- PCR verification tests ---
+
+    #[test]
+    fn test_tpm_pcrs_valid_digest() {
+        // Build 24 PCR values (all zeros)
+        let pcrs: Vec<Vec<u8>> = (0..24).map(|_| vec![0u8; 32]).collect();
+
+        // Select PCRs 0-7 (first byte = 0xFF)
+        let mut pcr_concat = Vec::new();
+        for i in 0..8 {
+            pcr_concat.extend_from_slice(&pcrs[i]);
+        }
+        let expected_digest = crate::utils::sha256(&pcr_concat);
+
+        // Build TPMS_ATTEST with sizeofSelect=3, bitmap [0xFF, 0x00, 0x00] (PCRs 0-7)
+        let nonce = [0u8; 32];
+        let msg = build_tpms_attest(&nonce, &[3, 0xFF, 0x00, 0x00], &expected_digest);
+
+        let result = verify_tpm_pcrs(&msg, &pcrs);
+        assert!(result.is_ok(), "valid PCR digest should pass: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_tpm_pcrs_wrong_digest() {
+        let pcrs: Vec<Vec<u8>> = (0..24).map(|_| vec![0u8; 32]).collect();
+        let wrong_digest = [0xAA; 32];
+        let nonce = [0u8; 32];
+        let msg = build_tpms_attest(&nonce, &[3, 0xFF, 0x00, 0x00], &wrong_digest);
+
+        let result = verify_tpm_pcrs(&msg, &pcrs);
+        assert!(result.is_err(), "wrong PCR digest should fail");
+    }
+
+    #[test]
+    fn test_tpm_pcrs_empty() {
+        let result = verify_tpm_pcrs(&[], &[]);
+        assert!(result.is_err(), "empty PCR list should fail");
+    }
+
+    #[test]
+    fn test_tpm_pcrs_wrong_size() {
+        let pcrs = vec![vec![0u8; 16]]; // Wrong size (should be 32)
+        let result = verify_tpm_pcrs(&[0u8; 100], &pcrs);
+        assert!(result.is_err(), "PCR with wrong size should fail");
+    }
+
+    #[test]
+    fn test_tpm_pcrs_single_pcr_selected() {
+        // Select only PCR[0]
+        let pcrs: Vec<Vec<u8>> = (0..24).map(|i| vec![i as u8; 32]).collect();
+        let pcr0_digest = crate::utils::sha256(&pcrs[0]);
+
+        let nonce = [0u8; 32];
+        let msg = build_tpms_attest(&nonce, &[3, 0x01, 0x00, 0x00], &pcr0_digest);
+
+        assert!(verify_tpm_pcrs(&msg, &pcrs).is_ok());
+    }
+
+    #[test]
+    fn test_tpm_pcrs_non_contiguous_selection() {
+        // Select PCR 0, 2, 4 (bitmap: 0b00010101 = 0x15)
+        let pcrs: Vec<Vec<u8>> = (0..24).map(|i| vec![i as u8; 32]).collect();
+        let mut concat = Vec::new();
+        concat.extend_from_slice(&pcrs[0]);
+        concat.extend_from_slice(&pcrs[2]);
+        concat.extend_from_slice(&pcrs[4]);
+        let digest = crate::utils::sha256(&concat);
+
+        let nonce = [0u8; 32];
+        let msg = build_tpms_attest(&nonce, &[3, 0x15, 0x00, 0x00], &digest);
+
+        assert!(verify_tpm_pcrs(&msg, &pcrs).is_ok());
+    }
+
+    // --- TPM2B_PUBLIC / AK extraction tests ---
+
+    #[test]
+    fn test_extract_ak_pub_rsa_2048() {
+        let modulus = vec![0xAB; 256]; // 2048-bit modulus
+        let var_data = build_tpm2b_public_rsa(&modulus);
+
+        let (extracted_mod, extracted_exp) = extract_ak_pub_from_var_data(&var_data).unwrap();
+        assert_eq!(extracted_mod, modulus, "modulus should match");
+        assert_eq!(extracted_exp, vec![0x01, 0x00, 0x01], "exponent should be 65537");
+    }
+
+    #[test]
+    fn test_extract_ak_pub_custom_exponent() {
+        let mut var_data = Vec::new();
+        let mut content = Vec::new();
+        content.extend_from_slice(&[0x00, 0x01]); // RSA
+        content.extend_from_slice(&[0x00, 0x0B]); // SHA-256
+        content.extend_from_slice(&[0x00; 4]); // objectAttributes
+        content.extend_from_slice(&[0x00, 0x00]); // authPolicy size=0
+        content.extend_from_slice(&[0x00, 0x10]); // symmetric=NULL
+        content.extend_from_slice(&[0x00, 0x10]); // scheme=NULL
+        content.extend_from_slice(&[0x08, 0x00]); // keyBits=2048
+        content.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // exponent=65537 explicit
+        let modulus = vec![0xCD; 256];
+        content.extend_from_slice(&(modulus.len() as u16).to_be_bytes());
+        content.extend_from_slice(&modulus);
+
+        var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
+        var_data.extend_from_slice(&content);
+
+        let (extracted_mod, extracted_exp) = extract_ak_pub_from_var_data(&var_data).unwrap();
+        assert_eq!(extracted_mod, modulus);
+        // Non-zero exponent is returned as big-endian bytes of the u32
+        assert_eq!(extracted_exp, vec![0x00, 0x01, 0x00, 0x01]);
+    }
+
+    #[test]
+    fn test_extract_ak_pub_too_short() {
+        let var_data = vec![0u8; 10]; // Too short for TPM2B_PUBLIC
+        assert!(extract_ak_pub_from_var_data(&var_data).is_err());
+    }
+
+    #[test]
+    fn test_extract_ak_pub_not_rsa() {
+        let mut var_data = Vec::new();
+        let mut content = Vec::new();
+        content.extend_from_slice(&[0x00, 0x23]); // TPM_ALG_ECC (not RSA)
+        content.extend_from_slice(&[0x00, 0x0B]); // SHA-256
+        content.extend_from_slice(&[0x00; 4]); // objectAttributes
+        content.extend_from_slice(&[0x00, 0x00]); // authPolicy size=0
+        content.extend_from_slice(&[0x00; 20]); // padding
+
+        var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
+        var_data.extend_from_slice(&content);
+
+        let result = extract_ak_pub_from_var_data(&var_data);
+        assert!(result.is_err(), "non-RSA key type should be rejected");
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(err_msg.contains("not RSA"), "error should mention RSA: {}", err_msg);
+    }
+
+    #[test]
+    fn test_extract_ak_pub_truncated_at_auth_policy() {
+        let mut var_data = Vec::new();
+        let mut content = Vec::new();
+        content.extend_from_slice(&[0x00, 0x01]); // RSA
+        content.extend_from_slice(&[0x00, 0x0B]); // SHA-256
+        content.extend_from_slice(&[0x00; 4]); // objectAttributes
+        // No authPolicy follows
+
+        var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
+        var_data.extend_from_slice(&content);
+
+        assert!(extract_ak_pub_from_var_data(&var_data).is_err());
+    }
+
+    #[test]
+    fn test_extract_ak_pub_truncated_at_modulus() {
+        let mut var_data = Vec::new();
+        let mut content = Vec::new();
+        content.extend_from_slice(&[0x00, 0x01]); // RSA
+        content.extend_from_slice(&[0x00, 0x0B]); // SHA-256
+        content.extend_from_slice(&[0x00; 4]); // objectAttributes
+        content.extend_from_slice(&[0x00, 0x00]); // authPolicy size=0
+        content.extend_from_slice(&[0x00, 0x10]); // symmetric=NULL
+        content.extend_from_slice(&[0x00, 0x10]); // scheme=NULL
+        content.extend_from_slice(&[0x08, 0x00]); // keyBits=2048
+        content.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // exponent=0
+        content.extend_from_slice(&[0x01, 0x00]); // modulus size=256 but no data
+
+        var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
+        var_data.extend_from_slice(&content);
+
+        assert!(extract_ak_pub_from_var_data(&var_data).is_err());
+    }
+
+    #[test]
+    fn test_extract_ak_pub_with_auth_policy_data() {
+        // Test with non-empty authPolicy (32-byte SHA-256 digest)
+        let modulus = vec![0xEF; 256];
+        let mut var_data = Vec::new();
+        let mut content = Vec::new();
+        content.extend_from_slice(&[0x00, 0x01]); // RSA
+        content.extend_from_slice(&[0x00, 0x0B]); // SHA-256
+        content.extend_from_slice(&[0x00; 4]); // objectAttributes
+        content.extend_from_slice(&[0x00, 0x20]); // authPolicy size=32
+        content.extend_from_slice(&[0xAA; 32]); // authPolicy data
+        content.extend_from_slice(&[0x00, 0x10]); // symmetric=NULL
+        content.extend_from_slice(&[0x00, 0x10]); // scheme=NULL
+        content.extend_from_slice(&[0x08, 0x00]); // keyBits=2048
+        content.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // exponent=0
+        content.extend_from_slice(&(modulus.len() as u16).to_be_bytes());
+        content.extend_from_slice(&modulus);
+
+        var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
+        var_data.extend_from_slice(&content);
+
+        let (extracted_mod, extracted_exp) = extract_ak_pub_from_var_data(&var_data).unwrap();
+        assert_eq!(extracted_mod, modulus);
+        assert_eq!(extracted_exp, vec![0x01, 0x00, 0x01]);
+    }
+
+    // --- decode_tpm_quote tests ---
+
+    #[test]
+    fn test_decode_tpm_quote_valid() {
+        let quote = TpmQuote {
+            signature: "deadbeef".to_string(),
+            message: "cafebabe".to_string(),
+            pcrs: vec![
+                "00".repeat(32),
+                "ff".repeat(32),
+            ],
+        };
+
+        let (sig, msg, pcrs) = decode_tpm_quote(&quote).unwrap();
+        assert_eq!(sig, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(msg, vec![0xCA, 0xFE, 0xBA, 0xBE]);
+        assert_eq!(pcrs.len(), 2);
+        assert_eq!(pcrs[0], vec![0x00; 32]);
+        assert_eq!(pcrs[1], vec![0xFF; 32]);
+    }
+
+    #[test]
+    fn test_decode_tpm_quote_invalid_hex_sig() {
+        let quote = TpmQuote {
+            signature: "not_hex!".to_string(),
+            message: "cafebabe".to_string(),
+            pcrs: vec![],
+        };
+        assert!(decode_tpm_quote(&quote).is_err());
+    }
+
+    #[test]
+    fn test_decode_tpm_quote_invalid_hex_msg() {
+        let quote = TpmQuote {
+            signature: "deadbeef".to_string(),
+            message: "zzz".to_string(),
+            pcrs: vec![],
+        };
+        assert!(decode_tpm_quote(&quote).is_err());
+    }
+
+    #[test]
+    fn test_decode_tpm_quote_invalid_hex_pcr() {
+        let quote = TpmQuote {
+            signature: "deadbeef".to_string(),
+            message: "cafebabe".to_string(),
+            pcrs: vec!["00".repeat(32), "invalid_hex".to_string()],
+        };
+        assert!(decode_tpm_quote(&quote).is_err());
+    }
+
+    // --- parse_quote_info tests ---
+
+    #[test]
+    fn test_parse_quote_info_valid() {
+        let digest = [0xBB; 32];
+        // Select PCRs 0, 1, 2 (bitmap byte 0 = 0b00000111 = 0x07)
+        let msg = build_tpms_attest(&[0u8; 32], &[3, 0x07, 0x00, 0x00], &digest);
+
+        let (selected, extracted_digest) = parse_quote_info(&msg).unwrap();
+        assert_eq!(selected, vec![0, 1, 2]);
+        assert_eq!(extracted_digest, digest.to_vec());
+    }
+
+    #[test]
+    fn test_parse_quote_info_high_pcrs() {
+        // Select PCRs 16, 17, 18 (byte 2, bits 0,1,2 = 0x07)
+        let digest = [0xCC; 32];
+        let msg = build_tpms_attest(&[0u8; 32], &[3, 0x00, 0x00, 0x07], &digest);
+
+        let (selected, _) = parse_quote_info(&msg).unwrap();
+        assert_eq!(selected, vec![16, 17, 18]);
+    }
+
+    #[test]
+    fn test_parse_quote_info_all_24_pcrs() {
+        let digest = [0xDD; 32];
+        let msg = build_tpms_attest(&[0u8; 32], &[3, 0xFF, 0xFF, 0xFF], &digest);
+
+        let (selected, _) = parse_quote_info(&msg).unwrap();
+        assert_eq!(selected.len(), 24);
+        assert_eq!(selected, (0..24).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_quote_info_truncated() {
+        assert!(parse_quote_info(&[]).is_err());
+        assert!(parse_quote_info(&[0xFF, 0x54, 0x43, 0x47, 0x80, 0x18]).is_err());
+    }
+
+    // --- TpmQuote serialization tests ---
+
+    #[test]
+    fn test_tpm_quote_serialization_roundtrip() {
+        let quote = TpmQuote {
+            signature: "aabbccdd".to_string(),
+            message: "11223344".to_string(),
+            pcrs: (0..24).map(|i| format!("{:02x}", i).repeat(32)).collect(),
+        };
+
+        let json = serde_json::to_string(&quote).unwrap();
+        let deserialized: TpmQuote = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.signature, quote.signature);
+        assert_eq!(deserialized.message, quote.message);
+        assert_eq!(deserialized.pcrs.len(), quote.pcrs.len());
     }
 }
