@@ -1,13 +1,16 @@
+use async_trait::async_trait;
 use base64::Engine;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use der::Decode;
 
+use attestation::collateral::CertProvider;
+use attestation::error::Result as AttResult;
 use attestation::platforms::snp::certs::get_bundled_certs;
 use attestation::platforms::snp::claims::extract_claims as snp_extract_claims;
 use attestation::platforms::snp::verify::{verify_cert_chain_pub, SnpReport};
 use attestation::platforms::tdx::claims::extract_claims as tdx_extract_claims;
 use attestation::platforms::tdx::verify::parse_tdx_quote;
-use attestation::types::ProcessorGeneration;
+use attestation::types::{ProcessorGeneration, SnpTcb, VerifyParams};
 
 // Pre-load all test data at compile time so benchmarks do zero I/O.
 static SNP_REPORT_BYTES: &[u8] = include_bytes!("../test_data/snp/test-report.bin");
@@ -296,6 +299,145 @@ fn bench_az_tdx_evidence_deserialize(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Full verification pipeline benchmarks
+// ---------------------------------------------------------------------------
+
+static AZ_SNP_LIVE_EVIDENCE_JSON: &str = include_str!("../test_data/az_snp/live-evidence.json");
+
+/// Mock CertProvider that returns pre-loaded IMDS certs (no network I/O).
+struct BenchCertProvider;
+
+#[async_trait]
+impl CertProvider for BenchCertProvider {
+    async fn get_snp_vcek(
+        &self,
+        _processor_gen: ProcessorGeneration,
+        _chip_id: &[u8; 64],
+        _reported_tcb: &SnpTcb,
+    ) -> AttResult<Vec<u8>> {
+        Ok(IMDS_VCEK.to_vec())
+    }
+
+    async fn get_snp_cert_chain(
+        &self,
+        _processor_gen: ProcessorGeneration,
+    ) -> AttResult<(Vec<u8>, Vec<u8>)> {
+        // Return IMDS ARK + ASK (Milan)
+        Ok((IMDS_ARK.to_vec(), IMDS_ASK.to_vec()))
+    }
+}
+
+fn bench_az_snp_full_pipeline(c: &mut Criterion) {
+    // Full Az SNP verification pipeline using CoCo evidence fixture
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_str(AZ_SNP_EVIDENCE_JSON).unwrap();
+    let params = VerifyParams::default();
+    let provider = BenchCertProvider;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    c.bench_function("az_snp/full_pipeline", |b| {
+        b.to_async(&rt).iter(|| async {
+            let result = attestation::platforms::az_snp::verify::verify_evidence(
+                black_box(&evidence),
+                black_box(&params),
+                black_box(&provider),
+            )
+            .await
+            .unwrap();
+            black_box(&result);
+        });
+    });
+}
+
+fn bench_az_snp_full_pipeline_live(c: &mut Criterion) {
+    // Full Az SNP verification pipeline using live-captured evidence
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_str(AZ_SNP_LIVE_EVIDENCE_JSON).unwrap();
+    let params = VerifyParams::default();
+    let provider = BenchCertProvider;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    c.bench_function("az_snp/full_pipeline_live", |b| {
+        b.to_async(&rt).iter(|| async {
+            let result = attestation::platforms::az_snp::verify::verify_evidence(
+                black_box(&evidence),
+                black_box(&params),
+                black_box(&provider),
+            )
+            .await
+            .unwrap();
+            black_box(&result);
+        });
+    });
+}
+
+fn bench_az_tdx_full_pipeline(c: &mut Criterion) {
+    // Full Az TDX verification pipeline using CoCo evidence fixture
+    let evidence: attestation::platforms::az_tdx::evidence::AzTdxEvidence =
+        serde_json::from_str(AZ_TDX_EVIDENCE_JSON).unwrap();
+    let params = VerifyParams::default();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    c.bench_function("az_tdx/full_pipeline", |b| {
+        b.to_async(&rt).iter(|| async {
+            let result = attestation::platforms::az_tdx::verify::verify_evidence(
+                black_box(&evidence),
+                black_box(&params),
+            )
+            .await
+            .unwrap();
+            black_box(&result);
+        });
+    });
+}
+
+fn bench_snp_report_signature_ecdsa(c: &mut Criterion) {
+    // Benchmark just the ECDSA P-384 report signature verification
+    c.bench_function("snp/report_signature_ecdsa", |b| {
+        b.iter(|| {
+            let result = attestation::platforms::snp::verify::verify_report_signature_pub(
+                black_box(SNP_REPORT_BYTES),
+                black_box(SNP_VCEK),
+            )
+            .unwrap();
+            black_box(&result);
+        });
+    });
+}
+
+fn bench_az_snp_tpm_checks_only(c: &mut Criterion) {
+    // Benchmark just the TPM checks: sig verify + PCR verify (no cert chain)
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_str(AZ_SNP_EVIDENCE_JSON).unwrap();
+
+    let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(evidence.hcl_report.trim_end_matches('='))
+        .unwrap();
+    let parsed = attestation::platforms::tpm_common::parse_hcl_report(&hcl_bytes).unwrap();
+    let (tpm_sig, tpm_msg, tpm_pcrs) =
+        attestation::platforms::tpm_common::decode_tpm_quote(&evidence.tpm_quote).unwrap();
+
+    c.bench_function("az_snp/tpm_checks_only", |b| {
+        b.iter(|| {
+            // TPM signature verification
+            let sig_valid = attestation::platforms::tpm_common::verify_tpm_signature(
+                black_box(&tpm_sig),
+                black_box(&tpm_msg),
+                black_box(&parsed.var_data),
+            )
+            .unwrap();
+            // TPM PCR integrity
+            attestation::platforms::tpm_common::verify_tpm_pcrs(
+                black_box(&tpm_msg),
+                black_box(&tpm_pcrs),
+            )
+            .unwrap();
+            black_box(sig_valid);
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Criterion wiring
 // ---------------------------------------------------------------------------
 
@@ -329,4 +471,13 @@ criterion_group!(
     bench_az_tdx_evidence_deserialize,
 );
 
-criterion_main!(snp_benches, tdx_benches, azure_benches);
+criterion_group!(
+    pipeline_benches,
+    bench_az_snp_full_pipeline,
+    bench_az_snp_full_pipeline_live,
+    bench_az_tdx_full_pipeline,
+    bench_snp_report_signature_ecdsa,
+    bench_az_snp_tpm_checks_only,
+);
+
+criterion_main!(snp_benches, tdx_benches, azure_benches, pipeline_benches);

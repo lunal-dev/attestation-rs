@@ -328,6 +328,11 @@ pub fn verify_cert_chain_pub(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) ->
     verify_cert_chain(ark_der, ask_der, vcek_der)
 }
 
+/// Public entry point for report signature verification (used by benchmarks).
+pub fn verify_report_signature_pub(report_bytes: &[u8], vcek_der: &[u8]) -> Result<bool> {
+    verify_report_signature(report_bytes, vcek_der)
+}
+
 /// Verify the AMD certificate chain: ARK (self-signed) -> ASK -> VCEK.
 /// Uses pure-Rust crypto for WASM compatibility.
 fn verify_cert_chain(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) -> Result<()> {

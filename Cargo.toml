@@ -67,6 +67,7 @@ getrandom = { version = "0.2", features = ["js"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
+async-trait = "0.1"
 tempfile = "3"
 
 [[bench]]
