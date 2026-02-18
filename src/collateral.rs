@@ -65,6 +65,7 @@ impl DefaultCertProvider {
         }
     }
 
+    #[allow(dead_code)] // Only used in native (non-WASM) builds
     fn set_cached(&self, key: String, data: Vec<u8>) {
         if let Ok(mut cache) = self.cache.write() {
             cache.insert(

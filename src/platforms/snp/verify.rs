@@ -358,20 +358,13 @@ fn verify_cert_chain(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) -> Result<
     Ok(())
 }
 
-/// Verify that `issuer_cert` signed `subject_cert` using ECDSA P-384.
+/// Verify that `issuer_cert` signed `subject_cert`.
+/// Supports both ECDSA P-384 (Genoa/Turin) and RSA-PSS SHA-384 (Milan).
 fn verify_cert_signature(
     issuer_cert: &x509_cert::Certificate,
     subject_cert: &x509_cert::Certificate,
 ) -> Result<()> {
     use der::Encode;
-    use p384::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-
-    // Extract the public key from the issuer
-    let issuer_spki = &issuer_cert.tbs_certificate.subject_public_key_info;
-    let pub_key_bytes = issuer_spki.subject_public_key.raw_bytes();
-
-    let verifying_key = VerifyingKey::from_sec1_bytes(pub_key_bytes)
-        .map_err(|e| AttestationError::CertChainError(format!("issuer pubkey: {}", e)))?;
 
     // The TBS (to-be-signed) certificate bytes
     let tbs_bytes = subject_cert
@@ -382,14 +375,72 @@ fn verify_cert_signature(
     // The signature from the subject cert
     let sig_bytes = subject_cert.signature.raw_bytes();
 
-    let signature = Signature::from_der(sig_bytes)
-        .map_err(|e| AttestationError::CertChainError(format!("signature parse: {}", e)))?;
+    // Determine key type from the issuer's SubjectPublicKeyInfo algorithm OID
+    let issuer_spki = &issuer_cert.tbs_certificate.subject_public_key_info;
+    let algorithm_oid = &issuer_spki.algorithm.oid;
 
-    // AMD certs use SHA-384 with ECDSA P-384
-    // The p384 crate's VerifyingKey.verify() uses SHA-384 by default
+    // OID 1.2.840.113549.1.1.1 = rsaEncryption
+    const RSA_OID: der::oid::ObjectIdentifier =
+        der::oid::ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+    // OID 1.2.840.10045.2.1 = id-ecPublicKey
+    const EC_OID: der::oid::ObjectIdentifier =
+        der::oid::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+
+    if *algorithm_oid == RSA_OID {
+        verify_cert_signature_rsa_pss(&issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
+    } else if *algorithm_oid == EC_OID {
+        verify_cert_signature_ecdsa_p384(&issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
+    } else {
+        Err(AttestationError::CertChainError(format!(
+            "unsupported issuer key algorithm OID: {}",
+            algorithm_oid
+        )))
+    }
+}
+
+/// Verify an RSA-PSS SHA-384 signature (used by Milan ARK/ASK).
+fn verify_cert_signature_rsa_pss(
+    pub_key_bytes: &[u8],
+    tbs_bytes: &[u8],
+    sig_bytes: &[u8],
+) -> Result<()> {
+    use rsa::pkcs1::DecodeRsaPublicKey;
+    use rsa::pss::{Signature, VerifyingKey};
+    use signature::Verifier;
+
+    // The BIT STRING content for RSA is a PKCS#1 RSAPublicKey DER encoding
+    let public_key = rsa::RsaPublicKey::from_pkcs1_der(pub_key_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("RSA pubkey parse: {}", e)))?;
+
+    let verifying_key = VerifyingKey::<sha2::Sha384>::new(public_key);
+
+    let signature = Signature::try_from(sig_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("RSA-PSS sig parse: {}", e)))?;
+
     verifying_key
-        .verify(&tbs_bytes, &signature)
-        .map_err(|e| AttestationError::CertChainError(format!("signature verify: {}", e)))?;
+        .verify(tbs_bytes, &signature)
+        .map_err(|e| AttestationError::CertChainError(format!("RSA-PSS verify: {}", e)))?;
+
+    Ok(())
+}
+
+/// Verify an ECDSA P-384 signature (used by Genoa/Turin ARK/ASK).
+fn verify_cert_signature_ecdsa_p384(
+    pub_key_bytes: &[u8],
+    tbs_bytes: &[u8],
+    sig_bytes: &[u8],
+) -> Result<()> {
+    use p384::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+
+    let verifying_key = VerifyingKey::from_sec1_bytes(pub_key_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("EC pubkey parse: {}", e)))?;
+
+    let signature = Signature::from_der(sig_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("ECDSA sig parse: {}", e)))?;
+
+    verifying_key
+        .verify(tbs_bytes, &signature)
+        .map_err(|e| AttestationError::CertChainError(format!("ECDSA verify: {}", e)))?;
 
     Ok(())
 }
@@ -515,6 +566,11 @@ mod tests {
         include_bytes!("../../../test_data/snp/test-vcek-invalid-legacy.der");
     const TEST_VCEK_INVALID_NEW: &[u8] =
         include_bytes!("../../../test_data/snp/test-vcek-invalid-new.der");
+
+    // Azure IMDS real certificates (Milan)
+    const IMDS_VCEK: &[u8] = include_bytes!("../../../test_data/az_snp/imds-vcek.der");
+    const IMDS_ASK: &[u8] = include_bytes!("../../../test_data/az_snp/imds-chain-0.der");
+    const IMDS_ARK: &[u8] = include_bytes!("../../../test_data/az_snp/imds-chain-1.der");
 
     #[test]
     fn test_processor_generation_detection() {
@@ -715,17 +771,180 @@ mod tests {
     }
 
     #[test]
-    fn test_cert_chain_validation_rejects_rsa_pss_certs() {
-        // The Milan ARK/ASK/VCEK use RSA-PSS signatures, but verify_cert_chain
-        // currently only handles ECDSA P-384. This test documents that RSA-PSS
-        // cert chains are correctly rejected rather than silently passing.
-        // When RSA-PSS support is added, this test should be updated to expect Ok.
+    fn test_cert_chain_validation_milan_rsa_pss() {
+        // Milan ARK/ASK use RSA-PSS SHA-384 to sign certs.
+        // verify_cert_chain now supports both RSA-PSS and ECDSA P-384.
         let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
 
         let result = verify_cert_chain(ark_der, ask_der, TEST_VCEK);
         assert!(
+            result.is_ok(),
+            "Milan RSA-PSS cert chain should verify successfully: {:?}",
+            result.err()
+        );
+    }
+
+    // --- Azure IMDS real certificate integration tests ---
+
+    #[test]
+    fn test_imds_vcek_parses_as_x509() {
+        let cert = x509_cert::Certificate::from_der(IMDS_VCEK)
+            .expect("IMDS VCEK should parse as X.509");
+
+        let subject = format!("{}", cert.tbs_certificate.subject);
+        assert!(
+            subject.contains("SEV-VCEK"),
+            "IMDS VCEK subject should contain SEV-VCEK, got: {}",
+            subject
+        );
+
+        let issuer = format!("{}", cert.tbs_certificate.issuer);
+        assert!(
+            issuer.contains("SEV-Milan"),
+            "IMDS VCEK issuer should reference SEV-Milan, got: {}",
+            issuer
+        );
+    }
+
+    #[test]
+    fn test_imds_ask_parses_as_x509() {
+        let cert = x509_cert::Certificate::from_der(IMDS_ASK)
+            .expect("IMDS ASK should parse as X.509");
+
+        let subject = format!("{}", cert.tbs_certificate.subject);
+        assert!(
+            subject.contains("SEV-Milan"),
+            "IMDS ASK subject should contain SEV-Milan, got: {}",
+            subject
+        );
+
+        let issuer = format!("{}", cert.tbs_certificate.issuer);
+        assert!(
+            issuer.contains("ARK-Milan"),
+            "IMDS ASK issuer should reference ARK-Milan, got: {}",
+            issuer
+        );
+    }
+
+    #[test]
+    fn test_imds_ark_is_self_signed() {
+        let cert = x509_cert::Certificate::from_der(IMDS_ARK)
+            .expect("IMDS ARK should parse as X.509");
+
+        assert_eq!(
+            cert.tbs_certificate.issuer,
+            cert.tbs_certificate.subject,
+            "IMDS ARK should be self-signed"
+        );
+
+        let subject = format!("{}", cert.tbs_certificate.subject);
+        assert!(
+            subject.contains("ARK-Milan"),
+            "IMDS ARK subject should contain ARK-Milan, got: {}",
+            subject
+        );
+    }
+
+    #[test]
+    fn test_imds_full_cert_chain_verification() {
+        // End-to-end: verify the real Azure IMDS cert chain (ARK -> ASK -> VCEK)
+        // All three use RSA-PSS SHA-384 signatures (Milan processor generation)
+        let result = verify_cert_chain(IMDS_ARK, IMDS_ASK, IMDS_VCEK);
+        assert!(
+            result.is_ok(),
+            "real IMDS cert chain (ARK -> ASK -> VCEK) should verify: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_imds_cert_chain_matches_bundled_ark() {
+        // The IMDS ARK should match our bundled Milan ARK
+        let (bundled_ark, _) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+
+        // Parse both and compare subjects
+        let imds_ark = x509_cert::Certificate::from_der(IMDS_ARK)
+            .expect("IMDS ARK parse");
+        let bundled = x509_cert::Certificate::from_der(bundled_ark)
+            .expect("bundled ARK parse");
+
+        assert_eq!(
+            imds_ark.tbs_certificate.subject,
+            bundled.tbs_certificate.subject,
+            "IMDS ARK subject should match bundled ARK subject"
+        );
+
+        // The public keys should also match (same root of trust)
+        let imds_pk = imds_ark.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
+        let bundled_pk = bundled.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
+        assert_eq!(
+            imds_pk, bundled_pk,
+            "IMDS ARK public key should match bundled ARK public key"
+        );
+    }
+
+    #[test]
+    fn test_imds_cert_chain_with_bundled_certs() {
+        // Verify IMDS VCEK against bundled Milan certs (not IMDS certs)
+        // This proves the IMDS VCEK is in the real AMD chain of trust
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+
+        let result = verify_cert_chain(ark_der, ask_der, IMDS_VCEK);
+        assert!(
+            result.is_ok(),
+            "IMDS VCEK should verify against bundled Milan certs: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_imds_cert_chain_wrong_generation_fails() {
+        // IMDS certs are Milan; using Genoa certs should fail
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Genoa);
+
+        let result = verify_cert_chain(ark_der, ask_der, IMDS_VCEK);
+        assert!(
             result.is_err(),
-            "RSA-PSS cert chains are not yet supported by verify_cert_chain"
+            "IMDS VCEK should not verify against Genoa certs"
+        );
+    }
+
+    #[test]
+    fn test_imds_vcek_tcb_extraction() {
+        // Extract TCB from the real IMDS VCEK certificate
+        let tcb = extract_vcek_tcb(IMDS_VCEK)
+            .expect("should extract TCB from IMDS VCEK");
+
+        // The IMDS TCBM was DB18000000000004, which maps to:
+        // microcode=0xDB(219), snp=0x18(24), bootloader=4, tee=0
+        assert_eq!(tcb.microcode, 219, "microcode should be 0xDB=219");
+        assert_eq!(tcb.snp, 24, "snp should be 0x18=24");
+        assert_eq!(tcb.bootloader, 4, "bootloader should be 4");
+        assert_eq!(tcb.tee, 0, "tee should be 0");
+    }
+
+    #[test]
+    fn test_imds_vcek_has_ecdsa_p384_key() {
+        // The VCEK should have an ECDSA P-384 public key
+        let cert = x509_cert::Certificate::from_der(IMDS_VCEK)
+            .expect("IMDS VCEK parse");
+
+        let spki = &cert.tbs_certificate.subject_public_key_info;
+        let algo_oid = spki.algorithm.oid.to_string();
+
+        // OID 1.2.840.10045.2.1 = id-ecPublicKey
+        assert_eq!(
+            algo_oid, "1.2.840.10045.2.1",
+            "VCEK should use EC public key algorithm"
+        );
+
+        // Should be parseable as P-384 key
+        let key_bytes = spki.subject_public_key.raw_bytes();
+        let vk = p384::ecdsa::VerifyingKey::from_sec1_bytes(key_bytes);
+        assert!(
+            vk.is_ok(),
+            "VCEK public key should be a valid P-384 point: {:?}",
+            vk.err()
         );
     }
 
