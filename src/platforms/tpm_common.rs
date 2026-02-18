@@ -1,9 +1,128 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use rsa::pkcs1v15::VerifyingKey as RsaVerifyingKey;
 use rsa::signature::Verifier;
 use rsa::RsaPublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AttestationError, Result};
+
+// --- HCL report parsing ---
+
+/// HCL report header magic: "HCLA".
+const HCL_MAGIC: [u8; 4] = *b"HCLA";
+
+/// Offset of the TEE report within the HCL report.
+const HCL_TEE_REPORT_OFFSET: usize = 0x20;
+
+/// Size of the TEE report area (both SNP and TDX use 1184 bytes).
+const HCL_TEE_REPORT_SIZE: usize = 1184;
+
+/// Size of the var_data header after the TEE report (5 × u32 LE).
+const HCL_VARDATA_HEADER_SIZE: usize = 20;
+
+/// HCL report type: AMD SEV-SNP.
+pub const HCL_REPORT_TYPE_SNP: u32 = 2;
+
+/// HCL report type: Intel TDX.
+pub const HCL_REPORT_TYPE_TDX: u32 = 4;
+
+/// Parsed HCL report data.
+pub struct HclReportData {
+    /// Raw TEE report bytes (1184 bytes).
+    pub tee_report: Vec<u8>,
+    /// Report type (2=SNP, 4=TDX).
+    pub report_type: u32,
+    /// Null-trimmed var_data content (JSON with JWK keys).
+    pub var_data: Vec<u8>,
+}
+
+/// Parse an HCL report blob into its components.
+///
+/// The HCL report structure:
+/// - Bytes 0x00..0x1F: Header (starts with "HCLA" magic)
+/// - Bytes 0x20..0x4BF: TEE report (1184 bytes, SNP or TDX)
+/// - Bytes 0x4C0..0x4D3: var_data header (20 bytes, 5 × LE u32)
+///   - total_remaining, count, report_type, version, content_length
+/// - Bytes 0x4D4..end: var_data content (JSON with JWK keys, null-padded)
+pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
+    let tee_report_end = HCL_TEE_REPORT_OFFSET + HCL_TEE_REPORT_SIZE;
+    let content_start = tee_report_end + HCL_VARDATA_HEADER_SIZE;
+
+    if hcl_report.len() < content_start {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "HCL report too short: {} < {}",
+            hcl_report.len(),
+            content_start
+        )));
+    }
+
+    if hcl_report[..4] != HCL_MAGIC {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "invalid HCL magic: {:02X}{:02X}{:02X}{:02X}",
+            hcl_report[0], hcl_report[1], hcl_report[2], hcl_report[3]
+        )));
+    }
+
+    let tee_report = hcl_report[HCL_TEE_REPORT_OFFSET..tee_report_end].to_vec();
+
+    // Parse var_data header (all fields are little-endian u32)
+    let header = &hcl_report[tee_report_end..content_start];
+    let report_type = u32::from_le_bytes(header[8..12].try_into().unwrap());
+
+    // Extract content and trim trailing nulls
+    let content = &hcl_report[content_start..];
+    let trimmed_len = content
+        .iter()
+        .rposition(|&b| b != 0)
+        .map_or(0, |i| i + 1);
+
+    Ok(HclReportData {
+        tee_report,
+        report_type,
+        var_data: content[..trimmed_len].to_vec(),
+    })
+}
+
+/// Extract the AK public key (RSA modulus and exponent) from HCL var_data JSON.
+///
+/// The var_data contains JSON with a "keys" array. The AK public key
+/// has `kid="HCLAkPub"` and `kty="RSA"`, with base64url-encoded `n`
+/// (modulus) and `e` (exponent) fields.
+pub fn extract_ak_pub_from_jwk_json(json_bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let json: serde_json::Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("HCL var_data JSON: {}", e)))?;
+
+    let keys = json["keys"].as_array().ok_or_else(|| {
+        AttestationError::QuoteParseFailed("HCL var_data JSON missing 'keys' array".to_string())
+    })?;
+
+    for key in keys {
+        let kid = key["kid"].as_str().unwrap_or("");
+        let kty = key["kty"].as_str().unwrap_or("");
+
+        if kid == "HCLAkPub" && kty == "RSA" {
+            let n_b64 = key["n"].as_str().ok_or_else(|| {
+                AttestationError::QuoteParseFailed("HCLAkPub missing 'n' field".to_string())
+            })?;
+            let e_b64 = key["e"].as_str().ok_or_else(|| {
+                AttestationError::QuoteParseFailed("HCLAkPub missing 'e' field".to_string())
+            })?;
+
+            let modulus = BASE64URL.decode(n_b64).map_err(|e| {
+                AttestationError::QuoteParseFailed(format!("HCLAkPub 'n' base64: {}", e))
+            })?;
+            let exponent = BASE64URL.decode(e_b64).map_err(|e| {
+                AttestationError::QuoteParseFailed(format!("HCLAkPub 'e' base64: {}", e))
+            })?;
+
+            return Ok((modulus, exponent));
+        }
+    }
+
+    Err(AttestationError::QuoteParseFailed(
+        "HCL var_data JSON does not contain HCLAkPub RSA key".to_string(),
+    ))
+}
 
 /// TPM quote data, shared between Azure SNP and Azure TDX platforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,14 +139,16 @@ pub struct TpmQuote {
 ///
 /// The Azure vTPM uses RSA 2048 with RSASSA-PKCS1-v1.5 and SHA-256 for
 /// its Attestation Key (AK). The AK public key is embedded in the HCL
-/// report's variable data as a TPM2B_PUBLIC structure.
+/// report's variable data, either as JWK JSON (real Azure format) or
+/// as a TPM2B_PUBLIC structure (synthetic test data).
 pub fn verify_tpm_signature(
     signature: &[u8],
     message: &[u8],
     var_data: &[u8],
 ) -> Result<bool> {
-    // Extract the RSA public key from the HCL var_data
-    let (modulus, exponent) = extract_ak_pub_from_var_data(var_data)?;
+    // Extract the RSA public key: try JWK JSON first, fall back to TPM2B_PUBLIC
+    let (modulus, exponent) = extract_ak_pub_from_jwk_json(var_data)
+        .or_else(|_| extract_ak_pub_from_var_data(var_data))?;
 
     let n = rsa::BigUint::from_bytes_be(&modulus);
     let e = rsa::BigUint::from_bytes_be(&exponent);
@@ -71,7 +192,7 @@ pub fn verify_tpm_signature(
 ///   - unique (TPM2B_PUBLIC_KEY_RSA):
 ///     - size: 2 bytes
 ///     - modulus: size bytes
-fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     if var_data.len() < 14 {
         return Err(AttestationError::QuoteParseFailed(
             "var_data too short for TPM2B_PUBLIC".to_string(),
@@ -858,5 +979,129 @@ mod tests {
         assert_eq!(deserialized.signature, quote.signature);
         assert_eq!(deserialized.message, quote.message);
         assert_eq!(deserialized.pcrs.len(), quote.pcrs.len());
+    }
+
+    // --- HCL report parsing tests ---
+
+    /// Build a minimal HCL report for testing.
+    fn build_hcl_report(tee_report: &[u8], report_type: u32, content: &[u8]) -> Vec<u8> {
+        let tee_end = 0x20 + 1184;
+        let content_start = tee_end + 20;
+        let mut hcl = vec![0u8; content_start + content.len()];
+
+        hcl[0..4].copy_from_slice(b"HCLA");
+        let copy_len = tee_report.len().min(1184);
+        hcl[0x20..0x20 + copy_len].copy_from_slice(&tee_report[..copy_len]);
+
+        let total = (20 + content.len()) as u32;
+        hcl[tee_end..tee_end + 4].copy_from_slice(&total.to_le_bytes());
+        hcl[tee_end + 4..tee_end + 8].copy_from_slice(&1u32.to_le_bytes());
+        hcl[tee_end + 8..tee_end + 12].copy_from_slice(&report_type.to_le_bytes());
+        hcl[tee_end + 12..tee_end + 16].copy_from_slice(&1u32.to_le_bytes());
+        hcl[tee_end + 16..tee_end + 20].copy_from_slice(&(content.len() as u32).to_le_bytes());
+        hcl[content_start..].copy_from_slice(content);
+        hcl
+    }
+
+    #[test]
+    fn test_parse_hcl_report_valid_snp() {
+        let content = br#"{"keys":[]}"#;
+        let hcl = build_hcl_report(&[0u8; 1184], HCL_REPORT_TYPE_SNP, content);
+
+        let parsed = parse_hcl_report(&hcl).unwrap();
+        assert_eq!(parsed.tee_report.len(), 1184);
+        assert_eq!(parsed.report_type, HCL_REPORT_TYPE_SNP);
+        assert_eq!(parsed.var_data, content);
+    }
+
+    #[test]
+    fn test_parse_hcl_report_valid_tdx() {
+        let content = br#"{"keys":[]}"#;
+        let hcl = build_hcl_report(&[0u8; 1184], HCL_REPORT_TYPE_TDX, content);
+
+        let parsed = parse_hcl_report(&hcl).unwrap();
+        assert_eq!(parsed.report_type, HCL_REPORT_TYPE_TDX);
+        assert_eq!(parsed.var_data, content);
+    }
+
+    #[test]
+    fn test_parse_hcl_report_trims_nulls() {
+        let content = b"test data";
+        let mut hcl = build_hcl_report(&[0u8; 1184], HCL_REPORT_TYPE_SNP, content);
+        // Extend with null padding
+        hcl.extend_from_slice(&[0u8; 100]);
+
+        let parsed = parse_hcl_report(&hcl).unwrap();
+        assert_eq!(parsed.var_data, content);
+    }
+
+    #[test]
+    fn test_parse_hcl_report_too_short() {
+        let hcl = vec![0u8; 100];
+        assert!(parse_hcl_report(&hcl).is_err());
+    }
+
+    #[test]
+    fn test_parse_hcl_report_bad_magic() {
+        let mut hcl = build_hcl_report(&[0u8; 1184], HCL_REPORT_TYPE_SNP, b"{}");
+        hcl[0..4].copy_from_slice(b"BAAD");
+        assert!(parse_hcl_report(&hcl).is_err());
+    }
+
+    // --- JWK JSON extraction tests ---
+
+    #[test]
+    fn test_extract_ak_pub_from_jwk_json_valid() {
+        // 256 zero bytes = 342 base64url chars (all 'A')
+        let n_b64 = "A".repeat(342);
+        let json_str = format!(
+            r#"{{"keys":[{{"kid":"HCLAkPub","key_ops":["sign"],"kty":"RSA","e":"AQAB","n":"{}"}}]}}"#,
+            n_b64
+        );
+
+        let (modulus, exponent) = extract_ak_pub_from_jwk_json(json_str.as_bytes()).unwrap();
+        assert_eq!(exponent, vec![0x01, 0x00, 0x01]); // 65537
+        assert_eq!(modulus.len(), 256); // RSA 2048
+    }
+
+    #[test]
+    fn test_extract_ak_pub_from_jwk_json_no_ak_key() {
+        let json = br#"{"keys":[{"kid":"HCLEkPub","kty":"RSA","e":"AQAB","n":"AA"}]}"#;
+        assert!(extract_ak_pub_from_jwk_json(json).is_err());
+    }
+
+    #[test]
+    fn test_extract_ak_pub_from_jwk_json_not_json() {
+        assert!(extract_ak_pub_from_jwk_json(b"not json at all").is_err());
+    }
+
+    #[test]
+    fn test_extract_ak_pub_from_jwk_json_no_keys_array() {
+        let json = br#"{"data": "test"}"#;
+        assert!(extract_ak_pub_from_jwk_json(json).is_err());
+    }
+
+    #[test]
+    fn test_verify_tpm_signature_tries_jwk_then_tpm2b() {
+        // verify_tpm_signature should accept both JWK JSON and TPM2B_PUBLIC
+        // formats for var_data. This test verifies the TPM2B_PUBLIC fallback
+        // still works even though JWK JSON is tried first.
+        let modulus = vec![0xAB; 256];
+        let var_data = build_tpm2b_public_rsa(&modulus);
+
+        // This will fail at signature verification (dummy data) but should
+        // successfully extract the key from TPM2B_PUBLIC format
+        let dummy_sig = vec![0u8; 256];
+        let dummy_msg = vec![0xFF, 0x54, 0x43, 0x47, 0x80, 0x18, 0x00, 0x00, 0x00, 0x00];
+
+        let result = verify_tpm_signature(&dummy_sig, &dummy_msg, &var_data);
+        // Should fail at verification step, not at key extraction
+        assert!(result.is_err());
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(
+            err.contains("RSA") || err.contains("sig") || err.contains("Signature"),
+            "error should be about signature verification, not key extraction: {}",
+            err
+        );
     }
 }
