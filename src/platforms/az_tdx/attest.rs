@@ -32,9 +32,13 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
     let _padded = pad_report_data(report_data, 64)?;
 
-    // 1. Read HCL report from vTPM NVRAM (extends PCR with report_data hash)
-    let hcl_report_bytes = vtpm::get_report().map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("vtpm::get_report failed: {}", e))
+    // 1. Write report_data to TPM NV index, wait for HCL to regenerate TD report,
+    //    then read the updated HCL report from vTPM NVRAM.
+    let hcl_report_bytes = vtpm::get_report_with_report_data(report_data).map_err(|e| {
+        AttestationError::HardwareAccessFailed(format!(
+            "vtpm::get_report_with_report_data failed: {}",
+            e
+        ))
     })?;
 
     // 2. Parse HCL envelope and extract TD report
