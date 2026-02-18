@@ -137,9 +137,9 @@ impl SnpReport {
         let reported_tcb = u64::from_le_bytes(data[0x180..0x188].try_into().unwrap());
         let reported_tcb_bootloader = data[0x180];
         let reported_tcb_tee = data[0x181];
-        // bytes 0x182..0x184 are reserved
-        let reported_tcb_snp = data[0x184];
-        // bytes 0x185..0x187 are reserved
+        // bytes 0x182..0x185 are reserved
+        let reported_tcb_snp = data[0x186];
+        // byte 7
         let reported_tcb_microcode = data[0x187];
 
         // 0x188..0x1A0 reserved
@@ -573,6 +573,12 @@ mod tests {
     // Load real test fixtures at compile time
     const TEST_REPORT: &[u8] = include_bytes!("../../../test_data/snp/test-report.bin");
     const TEST_VCEK: &[u8] = include_bytes!("../../../test_data/snp/test-vcek.der");
+
+    // Live Genoa v5 fixtures captured from this machine
+    const LIVE_REPORT_V5: &[u8] =
+        include_bytes!("../../../test_data/snp/live-report-v5-genoa.bin");
+    const LIVE_VCEK_GENOA: &[u8] =
+        include_bytes!("../../../test_data/snp/live-vcek-genoa.der");
     const TEST_VLEK: &[u8] = include_bytes!("../../../test_data/snp/test-vlek.der");
     const TEST_VLEK_REPORT: &[u8] = include_bytes!("../../../test_data/snp/test-vlek-report.bin");
     const TEST_VCEK_INVALID_LEGACY: &[u8] =
@@ -706,7 +712,7 @@ mod tests {
         // TCB components from the reported_tcb field
         assert_eq!(report.reported_tcb_bootloader, 3);
         assert_eq!(report.reported_tcb_tee, 0);
-        assert_eq!(report.reported_tcb_snp, 0);
+        assert_eq!(report.reported_tcb_snp, 8);
         assert_eq!(report.reported_tcb_microcode, 115);
 
         // family_id first byte is 1
@@ -1159,5 +1165,143 @@ mod tests {
         // More than 1184 bytes should also work (extra bytes ignored)
         let data = vec![0u8; 2000];
         assert!(SnpReport::from_bytes(&data).is_ok());
+    }
+
+    // ---------------------------------------------------------------
+    // Live Genoa v5 diagnostic tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_live_v5_report_parses() {
+        assert_eq!(LIVE_REPORT_V5.len(), 1184);
+        let report = SnpReport::from_bytes(LIVE_REPORT_V5).expect("failed to parse live v5 report");
+        assert_eq!(report.version, 5);
+        assert_eq!(report.vmpl, 0);
+        assert_eq!(report.signature_algo, 1);
+        assert_eq!(report.cpuid_fam_id, 0x19);
+        assert_eq!(report.cpuid_mod_id, 0xA0);
+        let gen = ProcessorGeneration::from_cpuid(report.cpuid_fam_id, report.cpuid_mod_id);
+        assert_eq!(gen, Some(ProcessorGeneration::Genoa));
+    }
+
+    #[test]
+    fn test_live_v5_vcek_parses() {
+        let cert = x509_cert::Certificate::from_der(LIVE_VCEK_GENOA)
+            .expect("live Genoa VCEK should parse as X.509");
+        let subject = format!("{}", cert.tbs_certificate.subject);
+        assert!(
+            subject.contains("SEV-VCEK"),
+            "subject should contain SEV-VCEK, got: {}",
+            subject
+        );
+        let issuer = format!("{}", cert.tbs_certificate.issuer);
+        assert!(
+            issuer.contains("SEV-Genoa"),
+            "issuer should reference SEV-Genoa, got: {}",
+            issuer
+        );
+    }
+
+    #[test]
+    fn test_live_v5_genoa_cert_chain() {
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Genoa);
+        let result = verify_cert_chain(ark_der, ask_der, LIVE_VCEK_GENOA);
+        assert!(
+            result.is_ok(),
+            "Genoa cert chain (ARK -> ASK -> VCEK) should verify: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_live_v5_report_signature() {
+        let result = verify_report_signature(LIVE_REPORT_V5, LIVE_VCEK_GENOA);
+        match &result {
+            Ok(valid) => assert!(*valid, "signature should be valid"),
+            Err(e) => panic!("report signature verification failed: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_live_v5_signature_components_detailed() {
+        // Detailed check of signature extraction and conversion
+        let report = LIVE_REPORT_V5;
+
+        // R: bytes 0x2A0..0x2A0+48 (first 48 of 72-byte LE field)
+        let sig_r = &report[0x2A0..0x2A0 + 48];
+        // S: bytes 0x2E8..0x2E8+48 (first 48 of 72-byte LE field)
+        let sig_s = &report[0x2A0 + 72..0x2A0 + 72 + 48];
+
+        // Both should be non-zero
+        assert!(sig_r.iter().any(|&b| b != 0), "R should not be all zeroes");
+        assert!(sig_s.iter().any(|&b| b != 0), "S should not be all zeroes");
+
+        // Padding bytes (48..72) should be zero
+        let r_padding = &report[0x2A0 + 48..0x2A0 + 72];
+        let s_padding = &report[0x2A0 + 72 + 48..0x2A0 + 144];
+        assert!(
+            r_padding.iter().all(|&b| b == 0),
+            "R padding (bytes 48-71) should be zero, got: {:?}",
+            r_padding
+        );
+        assert!(
+            s_padding.iter().all(|&b| b == 0),
+            "S padding (bytes 48-71) should be zero, got: {:?}",
+            s_padding
+        );
+
+        // Convert LE to BE and construct signature
+        let mut r_be = [0u8; 48];
+        let mut s_be = [0u8; 48];
+        for i in 0..48 {
+            r_be[i] = sig_r[47 - i];
+            s_be[i] = sig_s[47 - i];
+        }
+
+        let sig = p384::ecdsa::Signature::from_scalars(
+            p384::FieldBytes::from(r_be),
+            p384::FieldBytes::from(s_be),
+        );
+        assert!(
+            sig.is_ok(),
+            "should construct valid P-384 signature: {:?}",
+            sig.err()
+        );
+
+        // Now try to verify manually
+        let vcek_cert = x509_cert::Certificate::from_der(LIVE_VCEK_GENOA)
+            .expect("VCEK parse");
+        let pub_key_bytes = vcek_cert
+            .tbs_certificate
+            .subject_public_key_info
+            .subject_public_key
+            .raw_bytes();
+        let verifying_key = p384::ecdsa::VerifyingKey::from_sec1_bytes(pub_key_bytes)
+            .expect("VCEK pubkey parse");
+
+        let signed_data = &report[..0x2A0];
+        let sig = sig.unwrap();
+
+        // Method 1: verify() (what our code does - hashes internally)
+        use p384::ecdsa::signature::Verifier;
+        let result1 = verifying_key.verify(signed_data, &sig);
+
+        // Method 2: verify_digest() (what the sev crate does)
+        use p384::ecdsa::signature::DigestVerifier;
+        use sha2::Digest;
+        let digest = sha2::Sha384::new_with_prefix(signed_data);
+        let result2 = verifying_key.verify_digest(digest, &sig);
+
+        if let Err(ref e) = result1 {
+            eprintln!("Method 1 (verify) failed: {:?}", e);
+        }
+        if let Err(ref e) = result2 {
+            eprintln!("Method 2 (verify_digest) failed: {:?}", e);
+        }
+
+        assert!(
+            result1.is_ok() || result2.is_ok(),
+            "at least one verification method should succeed"
+        );
     }
 }

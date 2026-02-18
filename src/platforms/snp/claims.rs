@@ -84,7 +84,7 @@ mod tests {
             } => {
                 assert_eq!(*bootloader, 3);
                 assert_eq!(*tee, 0);
-                assert_eq!(*snp, 0);
+                assert_eq!(*snp, 8);
                 assert_eq!(*microcode, 115);
             }
             other => panic!("expected TcbInfo::Snp, got: {:?}", other),

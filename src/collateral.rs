@@ -118,7 +118,6 @@ impl DefaultCertProvider {
         let bytes = self
             .client
             .get(url)
-            .header("Accept", "application/x-pem-file")
             .send()
             .await
             .map_err(|e| {
