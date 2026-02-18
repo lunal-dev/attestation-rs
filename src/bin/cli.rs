@@ -1,0 +1,262 @@
+use std::io::{self, Read, Write};
+use std::path::PathBuf;
+use std::process;
+use std::time::Instant;
+
+use clap::{Parser, Subcommand, ValueEnum};
+
+use attestation::platforms::ErasedPlatform;
+use attestation::types::VerifyParams;
+
+#[derive(Parser)]
+#[command(
+    name = "attestation-cli",
+    about = "TEE attestation evidence generation and verification",
+    version
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate attestation evidence from TEE hardware.
+    Attest(AttestArgs),
+    /// Verify attestation evidence.
+    Verify(VerifyArgs),
+    /// Detect the current TEE platform.
+    Detect,
+}
+
+#[derive(clap::Args)]
+#[group(multiple = false)]
+struct ReportDataGroup {
+    /// Custom report data as a UTF-8 string.
+    #[arg(long)]
+    report_data: Option<String>,
+
+    /// Custom report data as hex-encoded bytes.
+    #[arg(long)]
+    report_data_hex: Option<String>,
+
+    /// Read custom report data from a file.
+    #[arg(long)]
+    report_data_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct AttestArgs {
+    #[command(flatten)]
+    data: ReportDataGroup,
+
+    /// Write evidence JSON to a file instead of stdout.
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct VerifyArgs {
+    /// Path to evidence JSON file. Reads from stdin if not specified.
+    #[arg(short, long)]
+    evidence: Option<PathBuf>,
+
+    /// Platform type of the evidence.
+    #[arg(short, long)]
+    platform: PlatformArg,
+
+    /// Expected report data (hex-encoded) for nonce binding verification.
+    #[arg(long)]
+    expected_report_data: Option<String>,
+
+    /// Expected init data hash (hex-encoded) for init data binding verification.
+    #[arg(long)]
+    expected_init_data: Option<String>,
+}
+
+#[derive(Clone, ValueEnum)]
+enum PlatformArg {
+    Snp,
+    Tdx,
+    AzSnp,
+    AzTdx,
+}
+
+impl PlatformArg {
+    fn to_platform(&self) -> Box<dyn ErasedPlatform> {
+        match self {
+            PlatformArg::Snp => {
+                Box::new(attestation::platforms::snp::Snp::with_default_provider())
+            }
+            PlatformArg::Tdx => Box::new(attestation::platforms::tdx::Tdx::new()),
+            PlatformArg::AzSnp => {
+                Box::new(attestation::platforms::az_snp::AzSnp::with_default_provider())
+            }
+            PlatformArg::AzTdx => Box::new(attestation::platforms::az_tdx::AzTdx::new()),
+        }
+    }
+}
+
+fn resolve_report_data(group: &ReportDataGroup) -> Result<Vec<u8>, String> {
+    if let Some(ref s) = group.report_data {
+        Ok(s.as_bytes().to_vec())
+    } else if let Some(ref h) = group.report_data_hex {
+        hex::decode(h).map_err(|e| format!("invalid hex for --report-data-hex: {e}"))
+    } else if let Some(ref path) = group.report_data_file {
+        std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn read_evidence(args: &VerifyArgs) -> Result<Vec<u8>, String> {
+    if let Some(ref path) = args.evidence {
+        std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))
+    } else {
+        let mut buf = Vec::new();
+        io::stdin()
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("failed to read stdin: {e}"))?;
+        Ok(buf)
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Detect => cmd_detect(),
+        Commands::Attest(args) => cmd_attest(args).await,
+        Commands::Verify(args) => cmd_verify(args).await,
+    }
+}
+
+fn cmd_detect() {
+    match attestation::detect() {
+        Ok(platform) => {
+            println!("{}", platform.platform_type());
+        }
+        Err(_) => {
+            eprintln!("No TEE platform detected.");
+            process::exit(1);
+        }
+    }
+}
+
+async fn cmd_attest(args: AttestArgs) {
+    let report_data = match resolve_report_data(&args.data) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+
+    let platform = match attestation::detect() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+
+    eprintln!("Platform: {}", platform.platform_type());
+    if report_data.is_empty() {
+        eprintln!("Report data: (empty)");
+    } else {
+        eprintln!("Report data: {} bytes", report_data.len());
+    }
+
+    let t0 = Instant::now();
+    let evidence_json = match platform.attest_json(&report_data).await {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Attestation failed: {e}");
+            process::exit(1);
+        }
+    };
+    let elapsed = t0.elapsed();
+
+    eprintln!("Evidence generated in {:?} ({} bytes)", elapsed, evidence_json.len());
+
+    if let Some(ref path) = args.output {
+        if let Err(e) = std::fs::write(path, &evidence_json) {
+            eprintln!("Failed to write {}: {e}", path.display());
+            process::exit(1);
+        }
+        eprintln!("Written to {}", path.display());
+    } else {
+        io::stdout().write_all(&evidence_json).unwrap();
+        // Ensure trailing newline for terminal readability
+        if !evidence_json.ends_with(b"\n") {
+            println!();
+        }
+    }
+}
+
+async fn cmd_verify(args: VerifyArgs) {
+    let evidence_json = match read_evidence(&args) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    };
+
+    let mut params = VerifyParams::default();
+
+    if let Some(ref hex_str) = args.expected_report_data {
+        match hex::decode(hex_str) {
+            Ok(data) => params.expected_report_data = Some(data),
+            Err(e) => {
+                eprintln!("Error: invalid hex for --expected-report-data: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
+    if let Some(ref hex_str) = args.expected_init_data {
+        match hex::decode(hex_str) {
+            Ok(data) => params.expected_init_data_hash = Some(data),
+            Err(e) => {
+                eprintln!("Error: invalid hex for --expected-init-data: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
+    let platform = args.platform.to_platform();
+
+    eprintln!("Verifying {} evidence...", platform.platform_type());
+
+    let t0 = Instant::now();
+    let result = match platform.verify_json(&evidence_json, &params).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Verification failed: {e}");
+            process::exit(1);
+        }
+    };
+    let elapsed = t0.elapsed();
+
+    // Human-readable summary to stderr
+    eprintln!("Verified in {:?}", elapsed);
+    eprintln!("  Signature valid: {}", result.signature_valid);
+    eprintln!("  Platform: {}", result.platform);
+    eprintln!("  Launch digest: {}", result.claims.launch_digest);
+    if let Some(m) = result.report_data_match {
+        eprintln!("  Report data match: {m}");
+    }
+    if let Some(m) = result.init_data_match {
+        eprintln!("  Init data match: {m}");
+    }
+
+    // Structured JSON to stdout
+    let json = serde_json::to_string_pretty(&result).expect("failed to serialize result");
+    println!("{json}");
+
+    if !result.signature_valid {
+        process::exit(1);
+    }
+}

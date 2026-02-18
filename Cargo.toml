@@ -20,6 +20,9 @@ az-snp = ["snp"]
 # Convenience
 all-platforms = ["tdx", "snp", "az-tdx", "az-snp"]
 
+# CLI binary
+cli = ["attest", "all-platforms", "dep:clap"]
+
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
@@ -52,6 +55,7 @@ sev = { version = "6", default-features = false, features = ["snp"], optional = 
 az-snp-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
 az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
+clap = { version = "4", features = ["derive"], optional = true }
 
 # HTTP client for cert fetching (native)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
@@ -95,3 +99,12 @@ required-features = ["attest", "all-platforms"]
 [[example]]
 name = "attest"
 required-features = ["attest", "all-platforms"]
+
+[[example]]
+name = "az_snp_attest_cli"
+required-features = ["attest", "all-platforms"]
+
+[[bin]]
+name = "attestation-cli"
+path = "src/bin/cli.rs"
+required-features = ["cli"]
