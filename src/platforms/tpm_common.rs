@@ -192,7 +192,7 @@ pub fn verify_tpm_signature(
 ///   - unique (TPM2B_PUBLIC_KEY_RSA):
 ///     - size: 2 bytes
 ///     - modulus: size bytes
-pub(crate) fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     if var_data.len() < 14 {
         return Err(AttestationError::QuoteParseFailed(
             "var_data too short for TPM2B_PUBLIC".to_string(),

@@ -162,8 +162,47 @@ fn bench_tdx_evidence_deserialize(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// TPM benchmarks
+// Azure / TPM benchmarks
 // ---------------------------------------------------------------------------
+
+static AZ_SNP_HCL_REPORT: &[u8] = include_bytes!("../test_data/az_snp/hcl-report.bin");
+static AZ_SNP_EVIDENCE_JSON: &str = include_str!("../test_data/az_snp/evidence-v1.json");
+static AZ_TDX_HCL_REPORT: &[u8] = include_bytes!("../test_data/az_tdx/hcl-report.bin");
+static AZ_TDX_EVIDENCE_JSON: &str = include_str!("../test_data/az_tdx/evidence-v1.json");
+
+fn bench_hcl_report_parse(c: &mut Criterion) {
+    c.bench_function("hcl_report_parse_snp", |b| {
+        b.iter(|| {
+            let parsed =
+                attestation::platforms::tpm_common::parse_hcl_report(black_box(AZ_SNP_HCL_REPORT))
+                    .unwrap();
+            black_box(&parsed);
+        });
+    });
+    c.bench_function("hcl_report_parse_tdx", |b| {
+        b.iter(|| {
+            let parsed =
+                attestation::platforms::tpm_common::parse_hcl_report(black_box(AZ_TDX_HCL_REPORT))
+                    .unwrap();
+            black_box(&parsed);
+        });
+    });
+}
+
+fn bench_jwk_ak_extraction(c: &mut Criterion) {
+    let parsed =
+        attestation::platforms::tpm_common::parse_hcl_report(AZ_SNP_HCL_REPORT).unwrap();
+
+    c.bench_function("jwk_ak_extraction", |b| {
+        b.iter(|| {
+            let result = attestation::platforms::tpm_common::extract_ak_pub_from_jwk_json(
+                black_box(&parsed.var_data),
+            )
+            .unwrap();
+            black_box(&result);
+        });
+    });
+}
 
 fn bench_tpm_ak_pub_extraction(c: &mut Criterion) {
     // Build a synthetic TPM2B_PUBLIC for benchmarking
@@ -184,16 +223,12 @@ fn bench_tpm_ak_pub_extraction(c: &mut Criterion) {
     var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
     var_data.extend_from_slice(&content);
 
-    c.bench_function("tpm_ak_pub_extraction", |b| {
+    c.bench_function("tpm_ak_pub_extraction_tpm2b", |b| {
         b.iter(|| {
-            // This exercises the TPM2B_PUBLIC parsing path
-            let result = attestation::platforms::tpm_common::verify_tpm_signature(
-                &[0u8; 256],
-                &[0u8; 100],
+            let result = attestation::platforms::tpm_common::extract_ak_pub_from_var_data(
                 black_box(&var_data),
-            );
-            // We expect this to fail at signature verification (key is synthetic)
-            // but the parsing benchmark is what matters
+            )
+            .unwrap();
             black_box(&result);
         });
     });
@@ -208,8 +243,54 @@ fn bench_tpm_quote_decode(c: &mut Criterion) {
 
     c.bench_function("tpm_quote_decode", |b| {
         b.iter(|| {
-            let result = attestation::platforms::tpm_common::decode_tpm_quote(black_box(&quote)).unwrap();
+            let result =
+                attestation::platforms::tpm_common::decode_tpm_quote(black_box(&quote)).unwrap();
             black_box(&result);
+        });
+    });
+}
+
+fn bench_tpm_signature_verification(c: &mut Criterion) {
+    // Use real CoCo evidence for end-to-end TPM sig verification
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_str(AZ_SNP_EVIDENCE_JSON).unwrap();
+
+    let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(evidence.hcl_report.trim_end_matches('='))
+        .unwrap();
+    let parsed = attestation::platforms::tpm_common::parse_hcl_report(&hcl_bytes).unwrap();
+    let sig = hex::decode(&evidence.tpm_quote.signature).unwrap();
+    let msg = hex::decode(&evidence.tpm_quote.message).unwrap();
+
+    c.bench_function("tpm_signature_verification", |b| {
+        b.iter(|| {
+            let result = attestation::platforms::tpm_common::verify_tpm_signature(
+                black_box(&sig),
+                black_box(&msg),
+                black_box(&parsed.var_data),
+            )
+            .unwrap();
+            black_box(&result);
+        });
+    });
+}
+
+fn bench_az_snp_evidence_deserialize(c: &mut Criterion) {
+    c.bench_function("az_snp_evidence_deserialize", |b| {
+        b.iter(|| {
+            let e: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+                serde_json::from_str(black_box(AZ_SNP_EVIDENCE_JSON)).unwrap();
+            black_box(&e);
+        });
+    });
+}
+
+fn bench_az_tdx_evidence_deserialize(c: &mut Criterion) {
+    c.bench_function("az_tdx_evidence_deserialize", |b| {
+        b.iter(|| {
+            let e: attestation::platforms::az_tdx::evidence::AzTdxEvidence =
+                serde_json::from_str(black_box(AZ_TDX_EVIDENCE_JSON)).unwrap();
+            black_box(&e);
         });
     });
 }
@@ -238,9 +319,14 @@ criterion_group!(
 );
 
 criterion_group!(
-    tpm_benches,
+    azure_benches,
+    bench_hcl_report_parse,
+    bench_jwk_ak_extraction,
     bench_tpm_ak_pub_extraction,
     bench_tpm_quote_decode,
+    bench_tpm_signature_verification,
+    bench_az_snp_evidence_deserialize,
+    bench_az_tdx_evidence_deserialize,
 );
 
-criterion_main!(snp_benches, tdx_benches, tpm_benches);
+criterion_main!(snp_benches, tdx_benches, azure_benches);
