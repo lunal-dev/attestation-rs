@@ -31,8 +31,9 @@ fn has_tpm_device() -> bool {
 }
 
 fn is_azure_environment() -> bool {
-    // Check for Hyper-V KVP pool (present on all Azure VMs)
+    // Check for Hyper-V KVP pool or IMDS indicator
     std::path::Path::new("/var/lib/hyperv/.kvp_pool_3").exists()
+        || std::path::Path::new("/var/lib/waagent").exists()
         || std::env::var("AZURE_INSTANCE_METADATA_SERVICE").is_ok()
 }
 
@@ -101,9 +102,6 @@ fn generate_tpm_quote(report_data: &[u8]) -> Result<TpmQuote> {
     let sig_file = tempfile::NamedTempFile::new().map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("failed to create temp file: {}", e))
     })?;
-    let pcr_file = tempfile::NamedTempFile::new().map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("failed to create temp file: {}", e))
-    })?;
 
     // Run tpm2_quote
     let pcr_list = "sha256:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23";
@@ -119,10 +117,6 @@ fn generate_tpm_quote(report_data: &[u8]) -> Result<TpmQuote> {
             &msg_file.path().to_string_lossy(),
             "-s",
             &sig_file.path().to_string_lossy(),
-            "-o",
-            &pcr_file.path().to_string_lossy(),
-            "-F",
-            "tss",
         ])
         .output()
         .map_err(|e| {
@@ -294,13 +288,15 @@ fn pem_to_der(pem: &str) -> Result<Vec<u8>> {
 
 /// Generate Azure SNP attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
-    let padded = pad_report_data(report_data, 64)?;
+    let _padded = pad_report_data(report_data, 64)?;
 
     // 1. Read HCL report from TPM NVRAM
     let hcl_report_bytes = read_hcl_report()?;
 
-    // 2. Generate TPM quote with the padded report data as nonce
-    let tpm_quote = generate_tpm_quote(&padded)?;
+    // 2. Generate TPM quote with the report data as nonce.
+    // Azure vTPMs limit qualifying data to ~50 bytes. The raw report_data
+    // (before padding) is used as the TPM nonce.
+    let tpm_quote = generate_tpm_quote(report_data)?;
 
     // 3. Fetch VCEK certificate from Azure IMDS
     let vcek_der = fetch_vcek_from_imds()?;

@@ -60,19 +60,43 @@ pub async fn verify_evidence(
     }
 
     // 10. VCEK validation against bundled AMD CA chain
+    // Azure CVMs may have zeroed CPUID fields in the SNP report.
+    // Try CPUID first, then try each processor generation's cert chain.
     let processor_gen = crate::types::ProcessorGeneration::from_cpuid(
         snp_report.cpuid_fam_id,
         snp_report.cpuid_mod_id,
-    )
-    .ok_or_else(|| {
-        AttestationError::QuoteParseFailed(format!(
-            "unknown processor: family=0x{:02X}, model=0x{:02X}",
-            snp_report.cpuid_fam_id, snp_report.cpuid_mod_id
-        ))
-    })?;
+    );
 
-    let (ark_der, ask_der) = cert_provider.get_snp_cert_chain(processor_gen).await?;
-    crate::platforms::snp::verify::verify_cert_chain_pub(&ark_der, &ask_der, &vcek_der)?;
+    let cert_chain_result = if let Some(gen) = processor_gen {
+        // Known processor generation from CPUID
+        let (ark_der, ask_der) = cert_provider.get_snp_cert_chain(gen).await?;
+        crate::platforms::snp::verify::verify_cert_chain_pub(&ark_der, &ask_der, &vcek_der)
+    } else {
+        // CPUID fields zeroed (common on Azure CVMs) — try each generation
+        use crate::types::ProcessorGeneration::*;
+        let mut last_err = None;
+        let mut ok = false;
+        for gen in &[Milan, Genoa, Turin] {
+            let (ark_der, ask_der) = cert_provider.get_snp_cert_chain(*gen).await?;
+            match crate::platforms::snp::verify::verify_cert_chain_pub(
+                &ark_der, &ask_der, &vcek_der,
+            ) {
+                Ok(()) => {
+                    ok = true;
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if ok {
+            Ok(())
+        } else {
+            Err(last_err.unwrap_or_else(|| {
+                AttestationError::CertChainError("no matching AMD root cert found".to_string())
+            }))
+        }
+    };
+    cert_chain_result?;
 
     // 11. VMPL check
     if snp_report.vmpl != 0 {

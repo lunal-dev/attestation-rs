@@ -25,8 +25,14 @@ fn is_az_snp_cvm() -> bool {
     let has_tpm = std::path::Path::new("/dev/tpmrm0").exists()
         || std::path::Path::new("/dev/tpm0").exists();
 
-    // Check for Azure environment
-    let is_azure = std::path::Path::new("/var/lib/hyperv/.kvp_pool_3").exists();
+    // Check for Azure environment via IMDS (more reliable than file checks)
+    let is_azure = std::process::Command::new("curl")
+        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2",
+               "-H", "Metadata:true",
+               "http://169.254.169.254/metadata/instance?api-version=2021-02-01"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
+        .unwrap_or(false);
 
     // Check for tpm2-tools
     let has_tools = std::process::Command::new("which")

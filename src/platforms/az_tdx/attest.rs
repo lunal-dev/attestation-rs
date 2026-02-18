@@ -11,13 +11,31 @@ pub fn is_available() -> bool {
 
 fn is_azure_environment() -> bool {
     std::path::Path::new("/var/lib/hyperv/.kvp_pool_3").exists()
+        || std::path::Path::new("/var/lib/waagent").exists()
         || std::env::var("AZURE_INSTANCE_METADATA_SERVICE").is_ok()
 }
 
 fn has_tdx_indicators() -> bool {
-    // On Azure TDX CVMs, there's no /dev/tdx_guest but the
-    // vTPM and IMDS provide TDX attestation capabilities
-    std::path::Path::new("/sys/kernel/config/tsm/report").exists()
+    // On Azure TDX CVMs, the HCL report in TPM NVRAM has report_type=4 (TDX).
+    // Also check for the tdx_guest device or TSM provider indicating TDX.
+    std::path::Path::new("/dev/tdx_guest").exists()
+        || check_tsm_provider_is_tdx()
+}
+
+fn check_tsm_provider_is_tdx() -> bool {
+    // Check if any TSM report entry has provider "tdx_guest"
+    let report_dir = std::path::Path::new("/sys/kernel/config/tsm/report");
+    if let Ok(entries) = std::fs::read_dir(report_dir) {
+        for entry in entries.flatten() {
+            let provider_path = entry.path().join("provider");
+            if let Ok(provider) = std::fs::read_to_string(provider_path) {
+                if provider.trim() == "tdx_guest" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Generate Azure TDX attestation evidence.
