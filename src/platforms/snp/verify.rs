@@ -160,12 +160,11 @@ impl SnpReport {
         // 0x1EF reserved
 
         let launch_tcb = u64::from_le_bytes(data[0x1F0..0x1F8].try_into().unwrap());
-
-        // CPUID fields (only valid in version >= 3)
-        let cpuid_fam_id = if version >= 3 { data[0x1F8] } else { 0 };
-        let cpuid_mod_id = if version >= 3 { data[0x1F9] } else { 0 };
-        let cpuid_stepping = if version >= 3 { data[0x1FA] } else { 0 };
-
+        // CPUID fields at 0x188-0x18A (only valid in version >= 3)
+        // Per AMD SEV-SNP ABI spec (56860 Rev 1.58), Table 23
+        let cpuid_fam_id = if version >= 3 { data[0x188] } else { 0 };
+        let cpuid_mod_id = if version >= 3 { data[0x189] } else { 0 };
+        let cpuid_stepping = if version >= 3 { data[0x18A] } else { 0 };
         // Signature at offset 0x2A0 (672)
         let sig_offset = 0x2A0;
         let mut signature_r = [0u8; 72];
@@ -247,11 +246,11 @@ pub async fn verify_evidence(
     // 3. Determine processor generation
     let processor_gen = ProcessorGeneration::from_cpuid(report.cpuid_fam_id, report.cpuid_mod_id)
         .ok_or_else(|| {
-            AttestationError::QuoteParseFailed(format!(
-                "unknown processor: family=0x{:02X}, model=0x{:02X}",
-                report.cpuid_fam_id, report.cpuid_mod_id
-            ))
-        })?;
+        AttestationError::QuoteParseFailed(format!(
+            "unknown processor: family=0x{:02X}, model=0x{:02X}",
+            report.cpuid_fam_id, report.cpuid_mod_id
+        ))
+    })?;
 
     // 4. Resolve VCEK cert
     let vcek_der = resolve_vcek(evidence, &report, processor_gen, cert_provider).await?;
@@ -392,9 +391,17 @@ fn verify_cert_signature(
         der::oid::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 
     if *algorithm_oid == RSA_OID {
-        verify_cert_signature_rsa_pss(issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
+        verify_cert_signature_rsa_pss(
+            issuer_spki.subject_public_key.raw_bytes(),
+            &tbs_bytes,
+            sig_bytes,
+        )
     } else if *algorithm_oid == EC_OID {
-        verify_cert_signature_ecdsa_p384(issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
+        verify_cert_signature_ecdsa_p384(
+            issuer_spki.subject_public_key.raw_bytes(),
+            &tbs_bytes,
+            sig_bytes,
+        )
     } else {
         Err(AttestationError::CertChainError(format!(
             "unsupported issuer key algorithm OID: {}",
@@ -465,8 +472,9 @@ fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<bool>
         .subject_public_key
         .raw_bytes();
 
-    let verifying_key = VerifyingKey::from_sec1_bytes(pub_key_bytes)
-        .map_err(|e| AttestationError::SignatureVerificationFailed(format!("VCEK pubkey: {}", e)))?;
+    let verifying_key = VerifyingKey::from_sec1_bytes(pub_key_bytes).map_err(|e| {
+        AttestationError::SignatureVerificationFailed(format!("VCEK pubkey: {}", e))
+    })?;
 
     // The signed portion is bytes 0..0x2A0 (672 bytes)
     let signed_data = &report_bytes[..0x2A0];
@@ -484,11 +492,11 @@ fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<bool>
         s_be[i] = sig_s[47 - i];
     }
 
-    let signature = Signature::from_scalars(
-        p384::FieldBytes::from(r_be),
-        p384::FieldBytes::from(s_be),
-    )
-    .map_err(|e| AttestationError::SignatureVerificationFailed(format!("sig construct: {}", e)))?;
+    let signature =
+        Signature::from_scalars(p384::FieldBytes::from(r_be), p384::FieldBytes::from(s_be))
+            .map_err(|e| {
+                AttestationError::SignatureVerificationFailed(format!("sig construct: {}", e))
+            })?;
 
     match verifying_key.verify(signed_data, &signature) {
         Ok(()) => Ok(true),
@@ -631,7 +639,10 @@ mod tests {
         // Verify that key fields are populated (non-zero) for a valid report
         assert!(report.version > 0, "version should be non-zero");
         assert!(report.policy != 0, "policy should be non-zero");
-        assert!(report.signature_algo != 0, "signature_algo should be non-zero");
+        assert!(
+            report.signature_algo != 0,
+            "signature_algo should be non-zero"
+        );
         assert!(report.current_tcb != 0, "current_tcb should be non-zero");
         assert!(report.reported_tcb != 0, "reported_tcb should be non-zero");
         assert!(report.launch_tcb != 0, "launch_tcb should be non-zero");
@@ -723,8 +734,7 @@ mod tests {
     #[test]
     fn test_parse_vlek_report() {
         // Parse the VLEK report fixture (version 3, different from the VCEK report)
-        let report =
-            SnpReport::from_bytes(TEST_VLEK_REPORT).expect("failed to parse VLEK report");
+        let report = SnpReport::from_bytes(TEST_VLEK_REPORT).expect("failed to parse VLEK report");
 
         assert_eq!(report.version, 3);
         assert_eq!(report.guest_svn, 0);
@@ -748,8 +758,7 @@ mod tests {
         tampered[0x90] ^= 0xFF;
 
         // The report should still parse (structure is valid)
-        let _report =
-            SnpReport::from_bytes(&tampered).expect("tampered report should still parse");
+        let _report = SnpReport::from_bytes(&tampered).expect("tampered report should still parse");
 
         // But signature verification against the VCEK should fail
         let result = verify_report_signature(&tampered, TEST_VCEK);
@@ -793,8 +802,8 @@ mod tests {
 
     #[test]
     fn test_imds_vcek_parses_as_x509() {
-        let cert = x509_cert::Certificate::from_der(IMDS_VCEK)
-            .expect("IMDS VCEK should parse as X.509");
+        let cert =
+            x509_cert::Certificate::from_der(IMDS_VCEK).expect("IMDS VCEK should parse as X.509");
 
         let subject = format!("{}", cert.tbs_certificate.subject);
         assert!(
@@ -813,8 +822,8 @@ mod tests {
 
     #[test]
     fn test_imds_ask_parses_as_x509() {
-        let cert = x509_cert::Certificate::from_der(IMDS_ASK)
-            .expect("IMDS ASK should parse as X.509");
+        let cert =
+            x509_cert::Certificate::from_der(IMDS_ASK).expect("IMDS ASK should parse as X.509");
 
         let subject = format!("{}", cert.tbs_certificate.subject);
         assert!(
@@ -833,12 +842,11 @@ mod tests {
 
     #[test]
     fn test_imds_ark_is_self_signed() {
-        let cert = x509_cert::Certificate::from_der(IMDS_ARK)
-            .expect("IMDS ARK should parse as X.509");
+        let cert =
+            x509_cert::Certificate::from_der(IMDS_ARK).expect("IMDS ARK should parse as X.509");
 
         assert_eq!(
-            cert.tbs_certificate.issuer,
-            cert.tbs_certificate.subject,
+            cert.tbs_certificate.issuer, cert.tbs_certificate.subject,
             "IMDS ARK should be self-signed"
         );
 
@@ -868,20 +876,25 @@ mod tests {
         let (bundled_ark, _) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
 
         // Parse both and compare subjects
-        let imds_ark = x509_cert::Certificate::from_der(IMDS_ARK)
-            .expect("IMDS ARK parse");
-        let bundled = x509_cert::Certificate::from_der(bundled_ark)
-            .expect("bundled ARK parse");
+        let imds_ark = x509_cert::Certificate::from_der(IMDS_ARK).expect("IMDS ARK parse");
+        let bundled = x509_cert::Certificate::from_der(bundled_ark).expect("bundled ARK parse");
 
         assert_eq!(
-            imds_ark.tbs_certificate.subject,
-            bundled.tbs_certificate.subject,
+            imds_ark.tbs_certificate.subject, bundled.tbs_certificate.subject,
             "IMDS ARK subject should match bundled ARK subject"
         );
 
         // The public keys should also match (same root of trust)
-        let imds_pk = imds_ark.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
-        let bundled_pk = bundled.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
+        let imds_pk = imds_ark
+            .tbs_certificate
+            .subject_public_key_info
+            .subject_public_key
+            .raw_bytes();
+        let bundled_pk = bundled
+            .tbs_certificate
+            .subject_public_key_info
+            .subject_public_key
+            .raw_bytes();
         assert_eq!(
             imds_pk, bundled_pk,
             "IMDS ARK public key should match bundled ARK public key"
@@ -917,8 +930,7 @@ mod tests {
     #[test]
     fn test_imds_vcek_tcb_extraction() {
         // Extract TCB from the real IMDS VCEK certificate
-        let tcb = extract_vcek_tcb(IMDS_VCEK)
-            .expect("should extract TCB from IMDS VCEK");
+        let tcb = extract_vcek_tcb(IMDS_VCEK).expect("should extract TCB from IMDS VCEK");
 
         // The IMDS TCBM was DB18000000000004, which maps to:
         // microcode=0xDB(219), snp=0x18(24), bootloader=4, tee=0
@@ -931,8 +943,7 @@ mod tests {
     #[test]
     fn test_imds_vcek_has_ecdsa_p384_key() {
         // The VCEK should have an ECDSA P-384 public key
-        let cert = x509_cert::Certificate::from_der(IMDS_VCEK)
-            .expect("IMDS VCEK parse");
+        let cert = x509_cert::Certificate::from_der(IMDS_VCEK).expect("IMDS VCEK parse");
 
         let spki = &cert.tbs_certificate.subject_public_key_info;
         let algo_oid = spki.algorithm.oid.to_string();
@@ -994,11 +1005,9 @@ mod tests {
         // The Milan ARK should be self-signed (issuer == subject)
         let (ark_der, _ask_der) =
             super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
-        let ark_cert = x509_cert::Certificate::from_der(ark_der)
-            .expect("failed to parse ARK cert");
+        let ark_cert = x509_cert::Certificate::from_der(ark_der).expect("failed to parse ARK cert");
         assert_eq!(
-            ark_cert.tbs_certificate.issuer,
-            ark_cert.tbs_certificate.subject,
+            ark_cert.tbs_certificate.issuer, ark_cert.tbs_certificate.subject,
             "ARK should be self-signed"
         );
     }
@@ -1006,15 +1015,11 @@ mod tests {
     #[test]
     fn test_cert_chain_ask_issued_by_ark() {
         // The ASK should be issued by the ARK
-        let (ark_der, ask_der) =
-            super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
-        let ark_cert = x509_cert::Certificate::from_der(ark_der)
-            .expect("failed to parse ARK cert");
-        let ask_cert = x509_cert::Certificate::from_der(ask_der)
-            .expect("failed to parse ASK cert");
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+        let ark_cert = x509_cert::Certificate::from_der(ark_der).expect("failed to parse ARK cert");
+        let ask_cert = x509_cert::Certificate::from_der(ask_der).expect("failed to parse ASK cert");
         assert_eq!(
-            ask_cert.tbs_certificate.issuer,
-            ark_cert.tbs_certificate.subject,
+            ask_cert.tbs_certificate.issuer, ark_cert.tbs_certificate.subject,
             "ASK issuer should match ARK subject"
         );
     }
@@ -1024,13 +1029,11 @@ mod tests {
         // The VCEK should be issued by the ASK (SEV-Milan)
         let (_ark_der, ask_der) =
             super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
-        let ask_cert = x509_cert::Certificate::from_der(ask_der)
-            .expect("failed to parse ASK cert");
-        let vcek_cert = x509_cert::Certificate::from_der(TEST_VCEK)
-            .expect("failed to parse VCEK cert");
+        let ask_cert = x509_cert::Certificate::from_der(ask_der).expect("failed to parse ASK cert");
+        let vcek_cert =
+            x509_cert::Certificate::from_der(TEST_VCEK).expect("failed to parse VCEK cert");
         assert_eq!(
-            vcek_cert.tbs_certificate.issuer,
-            ask_cert.tbs_certificate.subject,
+            vcek_cert.tbs_certificate.issuer, ask_cert.tbs_certificate.subject,
             "VCEK issuer should match ASK subject"
         );
     }
@@ -1124,10 +1127,7 @@ mod tests {
         let tcb = extract_vcek_tcb(TEST_VCEK).expect("should extract TCB from VCEK");
 
         // TCB components should be populated (at least some non-zero)
-        let has_nonzero = tcb.bootloader != 0
-            || tcb.tee != 0
-            || tcb.snp != 0
-            || tcb.microcode != 0;
+        let has_nonzero = tcb.bootloader != 0 || tcb.tee != 0 || tcb.snp != 0 || tcb.microcode != 0;
         assert!(
             has_nonzero,
             "at least one TCB component should be non-zero: {:?}",
