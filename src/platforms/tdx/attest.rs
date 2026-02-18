@@ -32,11 +32,14 @@ fn check_tsm_provider() -> bool {
 /// Generate TDX attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
     let padded = pad_report_data(report_data, 64)?;
+    let padded_arr: [u8; 64] = padded.try_into().map_err(|_| {
+        AttestationError::ReportDataTooLarge { max: 64 }
+    })?;
 
     // Try ConfigFS TSM first, fall back to ioctl
-    let quote_bytes = match generate_quote_tsm(&padded) {
+    let quote_bytes = match generate_quote_tsm(&padded_arr) {
         Ok(q) => q,
-        Err(_) => generate_quote_ioctl(&padded)?,
+        Err(_) => generate_quote_ioctl(&padded_arr)?,
     };
 
     let quote = BASE64.encode(&quote_bytes);

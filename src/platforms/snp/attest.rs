@@ -20,7 +20,10 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<SnpEvidence> {
 
     // Use /dev/sev-guest to get extended report
     // The extended report includes the attestation report + cert table
-    let (report_bytes, cert_table) = get_extended_report(&padded)?;
+    let padded_arr: [u8; 64] = padded.try_into().map_err(|_| {
+        AttestationError::ReportDataTooLarge { max: 64 }
+    })?;
+    let (report_bytes, cert_table) = get_extended_report(&padded_arr)?;
 
     let attestation_report = BASE64.encode(&report_bytes);
 

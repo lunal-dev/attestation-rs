@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use crate::error::{AttestationError, Result};
 use crate::utils::pad_report_data;
 
-use super::evidence::{AzSnpEvidence, TpmQuote};
+use super::evidence::AzSnpEvidence;
 
 /// Check if Azure SNP platform is available.
 pub fn is_available() -> bool {

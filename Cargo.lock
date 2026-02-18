@@ -58,6 +58,7 @@ dependencies = [
  "der",
  "ecdsa",
  "hex",
+ "libc",
  "log",
  "p256",
  "p384",
