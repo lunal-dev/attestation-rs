@@ -109,7 +109,7 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
 
     // The temp dir is cleaned up by the Drop impl of tempfile
     // But ConfigFS dirs need rmdir, not recursive delete
-    let path = temp_dir.into_path();
+    let path = temp_dir.keep();
     let _ = std::fs::remove_dir(&path);
 
     Ok(quote)
