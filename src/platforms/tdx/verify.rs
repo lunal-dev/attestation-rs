@@ -263,10 +263,13 @@ pub async fn verify_evidence(
 mod tests {
     use super::*;
 
+    // Load real test fixtures at compile time
+    const V4_QUOTE: &[u8] = include_bytes!("../../../test_data/tdx_quote_4.dat");
+    const V5_QUOTE: &[u8] = include_bytes!("../../../test_data/tdx_quote_5.dat");
+
     #[test]
     fn test_parse_v4_quote() {
-        let quote_data = include_bytes!("../../../test_data/tdx_quote_4.dat");
-        let quote = parse_tdx_quote(quote_data).unwrap();
+        let quote = parse_tdx_quote(V4_QUOTE).unwrap();
         assert_eq!(quote.header.version, 4);
         assert_eq!(quote.quote_version, QuoteVersion::V4);
         // TDX TEE type is 0x81
@@ -275,8 +278,7 @@ mod tests {
 
     #[test]
     fn test_parse_v5_quote() {
-        let quote_data = include_bytes!("../../../test_data/tdx_quote_5.dat");
-        let quote = parse_tdx_quote(quote_data).unwrap();
+        let quote = parse_tdx_quote(V5_QUOTE).unwrap();
         assert_eq!(quote.header.version, 5);
         assert!(matches!(
             quote.quote_version,
@@ -296,5 +298,282 @@ mod tests {
         // Set version to 99
         data[0] = 99;
         assert!(parse_tdx_quote(&data).is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // Tests using real TDX quote fixtures
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_v4_quote_fields() {
+        let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
+
+        // Header fields
+        assert_eq!(quote.header.version, 4);
+        assert_eq!(quote.header.att_key_type, 2); // ECDSA-256-with-P-256 curve
+        assert_eq!(quote.header.tee_type, 0x81); // TDX TEE type
+        assert_eq!(quote.quote_version, QuoteVersion::V4);
+
+        // Vendor ID should be populated (Intel QE vendor ID)
+        assert!(
+            quote.header.vendor_id.iter().any(|&b| b != 0),
+            "vendor_id should not be all zeroes"
+        );
+        // Check known vendor ID prefix
+        assert_eq!(quote.header.vendor_id[0], 0x93);
+
+        // mr_td should be non-zero (launch measurement)
+        assert!(
+            quote.body.mr_td.iter().any(|&b| b != 0),
+            "mr_td should not be all zeroes"
+        );
+
+        // Check known mr_td prefix bytes
+        assert_eq!(quote.body.mr_td[0], 0x70);
+        assert_eq!(quote.body.mr_td[1], 0x5e);
+
+        // report_data should be non-zero
+        assert!(
+            quote.body.report_data.iter().any(|&b| b != 0),
+            "report_data should not be all zeroes"
+        );
+        // Check known report_data prefix
+        assert_eq!(quote.body.report_data[0], 0x7c);
+        assert_eq!(quote.body.report_data[1], 0x71);
+
+        // tee_tcb_svn should be non-zero
+        assert!(
+            quote.body.tee_tcb_svn.iter().any(|&b| b != 0),
+            "tee_tcb_svn should not be all zeroes"
+        );
+        // Check known tee_tcb_svn values
+        assert_eq!(quote.body.tee_tcb_svn[0], 0x03);
+        assert_eq!(quote.body.tee_tcb_svn[2], 0x05);
+
+        // mr_config_id is all zeroes in this fixture
+        assert!(
+            quote.body.mr_config_id.iter().all(|&b| b == 0),
+            "mr_config_id should be all zeroes in this test fixture"
+        );
+
+        // RTMR 0 and 1 should be non-zero
+        assert!(
+            quote.body.rtmr_0.iter().any(|&b| b != 0),
+            "rtmr_0 should not be all zeroes"
+        );
+        assert!(
+            quote.body.rtmr_1.iter().any(|&b| b != 0),
+            "rtmr_1 should not be all zeroes"
+        );
+
+        // RTMR 2 and 3 are zeroes in this fixture
+        assert!(
+            quote.body.rtmr_2.iter().all(|&b| b == 0),
+            "rtmr_2 should be all zeroes in test fixture"
+        );
+        assert!(
+            quote.body.rtmr_3.iter().all(|&b| b == 0),
+            "rtmr_3 should be all zeroes in test fixture"
+        );
+    }
+
+    #[test]
+    fn test_v5_quote_fields() {
+        let quote = parse_tdx_quote(V5_QUOTE).expect("failed to parse v5 quote");
+
+        // Header fields
+        assert_eq!(quote.header.version, 5);
+        assert_eq!(quote.header.att_key_type, 2);
+        assert_eq!(quote.header.tee_type, 0x81);
+
+        // V5 with body type 3 => TDX 1.5
+        assert_eq!(quote.quote_version, QuoteVersion::V5Tdx15);
+
+        // mr_td should be non-zero
+        assert!(
+            quote.body.mr_td.iter().any(|&b| b != 0),
+            "mr_td should not be all zeroes"
+        );
+        // Check known mr_td prefix bytes for v5
+        assert_eq!(quote.body.mr_td[0], 0xdf);
+        assert_eq!(quote.body.mr_td[1], 0xba);
+
+        // report_data should be non-zero
+        assert!(
+            quote.body.report_data.iter().any(|&b| b != 0),
+            "report_data should not be all zeroes"
+        );
+        assert_eq!(quote.body.report_data[0], 0x6d);
+        assert_eq!(quote.body.report_data[1], 0x6a);
+
+        // tee_tcb_svn should be non-zero
+        assert!(
+            quote.body.tee_tcb_svn.iter().any(|&b| b != 0),
+            "tee_tcb_svn should not be all zeroes"
+        );
+        assert_eq!(quote.body.tee_tcb_svn[0], 0x05);
+        assert_eq!(quote.body.tee_tcb_svn[1], 0x01);
+        assert_eq!(quote.body.tee_tcb_svn[2], 0x02);
+    }
+
+    #[test]
+    fn test_v4_v5_format_consistency() {
+        // Both v4 and v5 should parse their report body successfully
+        // and produce structurally valid outputs
+        let v4 = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
+        let v5 = parse_tdx_quote(V5_QUOTE).expect("failed to parse v5 quote");
+
+        // Both should have TDX TEE type
+        assert_eq!(v4.header.tee_type, v5.header.tee_type);
+        assert_eq!(v4.header.tee_type, 0x81);
+
+        // Both should have same attestation key type
+        assert_eq!(v4.header.att_key_type, v5.header.att_key_type);
+
+        // Both should have non-zero mr_td
+        assert!(v4.body.mr_td.iter().any(|&b| b != 0));
+        assert!(v5.body.mr_td.iter().any(|&b| b != 0));
+
+        // But the measurements should be different (different TDs)
+        assert_ne!(v4.body.mr_td, v5.body.mr_td);
+
+        // Both should have non-zero report_data
+        assert!(v4.body.report_data.iter().any(|&b| b != 0));
+        assert!(v5.body.report_data.iter().any(|&b| b != 0));
+
+        // Report data should be different between the two quotes
+        assert_ne!(v4.body.report_data, v5.body.report_data);
+
+        // report body fields have consistent sizes
+        assert_eq!(v4.body.tee_tcb_svn.len(), 16);
+        assert_eq!(v5.body.tee_tcb_svn.len(), 16);
+        assert_eq!(v4.body.mr_seam.len(), 48);
+        assert_eq!(v5.body.mr_seam.len(), 48);
+        assert_eq!(v4.body.mr_td.len(), 48);
+        assert_eq!(v5.body.mr_td.len(), 48);
+        assert_eq!(v4.body.report_data.len(), 64);
+        assert_eq!(v5.body.report_data.len(), 64);
+    }
+
+    #[test]
+    fn test_quote_truncation_header_only() {
+        // A quote with only the header (48 bytes) but no body should fail
+        let truncated = &V4_QUOTE[..QUOTE_HEADER_SIZE];
+        let result = parse_tdx_quote(truncated);
+        assert!(result.is_err(), "truncated quote with header only should fail");
+    }
+
+    #[test]
+    fn test_quote_truncation_partial_body() {
+        // A quote with header + partial body should fail
+        let truncated = &V4_QUOTE[..QUOTE_HEADER_SIZE + 100];
+        let result = parse_tdx_quote(truncated);
+        assert!(
+            result.is_err(),
+            "truncated quote with partial body should fail"
+        );
+    }
+
+    #[test]
+    fn test_quote_truncation_one_byte_short() {
+        // V4: header (48) + body (584) = 632 minimum
+        // One byte short of a complete body
+        let min_size = QUOTE_HEADER_SIZE + REPORT_BODY_SIZE;
+        let truncated = &V4_QUOTE[..min_size - 1];
+        let result = parse_tdx_quote(truncated);
+        assert!(
+            result.is_err(),
+            "quote one byte short of minimum should fail"
+        );
+    }
+
+    #[test]
+    fn test_quote_truncation_exact_minimum_v4() {
+        // V4: exactly header + body should parse OK
+        let min_size = QUOTE_HEADER_SIZE + REPORT_BODY_SIZE;
+        let truncated = &V4_QUOTE[..min_size];
+        let result = parse_tdx_quote(truncated);
+        assert!(
+            result.is_ok(),
+            "exact minimum v4 quote should parse: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_quote_truncation_v5_no_type_size() {
+        // V5 needs header + type(2) + size(4) = 54 bytes minimum before body
+        // Truncate to just the header
+        let truncated = &V5_QUOTE[..QUOTE_HEADER_SIZE + 2]; // Has type but no size
+        let result = parse_tdx_quote(truncated);
+        assert!(
+            result.is_err(),
+            "v5 quote without size field should fail"
+        );
+    }
+
+    #[test]
+    fn test_quote_truncation_v5_no_body() {
+        // V5 header + type + size but no body
+        let truncated = &V5_QUOTE[..QUOTE_HEADER_SIZE + 6];
+        let result = parse_tdx_quote(truncated);
+        assert!(
+            result.is_err(),
+            "v5 quote without body should fail"
+        );
+    }
+
+    #[test]
+    fn test_quote_truncation_empty() {
+        let result = parse_tdx_quote(&[]);
+        assert!(result.is_err(), "empty quote should fail");
+    }
+
+    #[test]
+    fn test_quote_truncation_single_byte() {
+        let result = parse_tdx_quote(&[0x04]); // version=4 but nothing else
+        assert!(result.is_err(), "single byte quote should fail");
+    }
+
+    #[test]
+    fn test_v4_quote_header_user_data() {
+        let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
+        // user_data is 20 bytes from the header
+        assert_eq!(quote.header.user_data.len(), 20);
+    }
+
+    #[test]
+    fn test_v5_body_type_is_tdx15() {
+        // The v5 test fixture has body_type=3, which is TDX 1.5
+        let quote = parse_tdx_quote(V5_QUOTE).expect("failed to parse v5 quote");
+        assert_eq!(quote.quote_version, QuoteVersion::V5Tdx15);
+    }
+
+    #[test]
+    fn test_v5_invalid_body_type() {
+        // Create a v5 quote with an invalid body type
+        let mut data = V5_QUOTE.to_vec();
+        // body_type is at offset 48 (after header), set to invalid value 99
+        data[48] = 99;
+        data[49] = 0;
+        let result = parse_tdx_quote(&data);
+        assert!(
+            result.is_err(),
+            "v5 quote with invalid body type should fail"
+        );
+    }
+
+    #[test]
+    fn test_quote_header_from_bytes_too_short() {
+        let data = vec![0u8; 20]; // Less than 48 bytes
+        let result = QuoteHeader::from_bytes(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_report_body_from_bytes_too_short() {
+        let data = vec![0u8; 100]; // Less than 584 bytes
+        let result = TdxReportBody::from_bytes(&data);
+        assert!(result.is_err());
     }
 }

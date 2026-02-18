@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use der::Decode;
 
 use attestation::platforms::snp::certs::get_bundled_certs;
 use attestation::platforms::snp::claims::extract_claims as snp_extract_claims;
@@ -11,10 +12,6 @@ use attestation::types::ProcessorGeneration;
 static SNP_REPORT_BYTES: &[u8] = include_bytes!("../test_data/snp/test-report.bin");
 static TDX_QUOTE_V4: &[u8] = include_bytes!("../test_data/tdx_quote_4.dat");
 static TDX_QUOTE_V5: &[u8] = include_bytes!("../test_data/tdx_quote_5.dat");
-
-// Bundled AMD Milan ARK and ASK certs (DER-encoded).
-static MILAN_ARK: &[u8] = include_bytes!("../certs/amd/milan/ark.der");
-static MILAN_ASK: &[u8] = include_bytes!("../certs/amd/milan/ask.der");
 
 // ---------------------------------------------------------------------------
 // SNP benchmarks

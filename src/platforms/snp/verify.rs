@@ -505,6 +505,16 @@ fn parse_asn1_integer(data: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
 
+    // Load real test fixtures at compile time
+    const TEST_REPORT: &[u8] = include_bytes!("../../../test_data/snp/test-report.bin");
+    const TEST_VCEK: &[u8] = include_bytes!("../../../test_data/snp/test-vcek.der");
+    const TEST_VLEK: &[u8] = include_bytes!("../../../test_data/snp/test-vlek.der");
+    const TEST_VLEK_REPORT: &[u8] = include_bytes!("../../../test_data/snp/test-vlek-report.bin");
+    const TEST_VCEK_INVALID_LEGACY: &[u8] =
+        include_bytes!("../../../test_data/snp/test-vcek-invalid-legacy.der");
+    const TEST_VCEK_INVALID_NEW: &[u8] =
+        include_bytes!("../../../test_data/snp/test-vcek-invalid-new.der");
+
     #[test]
     fn test_processor_generation_detection() {
         // Milan
@@ -545,5 +555,383 @@ mod tests {
         // ASN.1 INTEGER encoding of value 256
         let data = [0x02, 0x02, 0x01, 0x00];
         assert_eq!(parse_asn1_integer(&data), Some(256));
+    }
+
+    // ---------------------------------------------------------------
+    // Tests using real SNP attestation report fixtures
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_parse_real_snp_report() {
+        // Parse the real 1184-byte SNP attestation report
+        let report = SnpReport::from_bytes(TEST_REPORT).expect("failed to parse real SNP report");
+
+        // Verify that key fields are populated (non-zero) for a valid report
+        assert!(report.version > 0, "version should be non-zero");
+        assert!(report.policy != 0, "policy should be non-zero");
+        assert!(report.signature_algo != 0, "signature_algo should be non-zero");
+        assert!(report.current_tcb != 0, "current_tcb should be non-zero");
+        assert!(report.reported_tcb != 0, "reported_tcb should be non-zero");
+        assert!(report.launch_tcb != 0, "launch_tcb should be non-zero");
+
+        // Measurement must not be all zeroes for a real report
+        assert!(
+            report.measurement.iter().any(|&b| b != 0),
+            "measurement should not be all zeroes"
+        );
+
+        // Report data has the first 32 bytes non-zero in the test fixture
+        assert!(
+            report.report_data.iter().any(|&b| b != 0),
+            "report_data should not be all zeroes"
+        );
+
+        // Chip ID should be populated
+        assert!(
+            report.chip_id.iter().any(|&b| b != 0),
+            "chip_id should not be all zeroes"
+        );
+
+        // Signature R and S components should be non-zero
+        assert!(
+            report.signature_r[..48].iter().any(|&b| b != 0),
+            "signature_r should not be all zeroes"
+        );
+        assert!(
+            report.signature_s[..48].iter().any(|&b| b != 0),
+            "signature_s should not be all zeroes"
+        );
+    }
+
+    #[test]
+    fn test_parse_real_snp_report_fields() {
+        // Parse and check specific field values from the test-report.bin fixture
+        let report = SnpReport::from_bytes(TEST_REPORT).expect("failed to parse real SNP report");
+
+        // Version 2 report
+        assert_eq!(report.version, 2);
+        assert_eq!(report.guest_svn, 4);
+        assert_eq!(report.policy, 0x000000000003001F);
+        assert_eq!(report.vmpl, 0);
+        assert_eq!(report.signature_algo, 1); // ECDSA P-384 with SHA-384
+
+        // Policy field parsing
+        assert_eq!(report.policy_abi_minor, 31);
+        assert_eq!(report.policy_abi_major, 0);
+        assert!(report.policy_smt_allowed);
+        assert!(!report.policy_migrate_ma);
+        assert!(!report.policy_debug_allowed);
+        assert!(!report.policy_single_socket);
+
+        // Platform info: SMT enabled
+        assert!(report.plat_smt_enabled);
+        assert!(!report.plat_tsme_enabled);
+
+        // Author key not enabled
+        assert_eq!(report.author_key_en, 0);
+
+        // TCB components from the reported_tcb field
+        assert_eq!(report.reported_tcb_bootloader, 3);
+        assert_eq!(report.reported_tcb_tee, 0);
+        assert_eq!(report.reported_tcb_snp, 0);
+        assert_eq!(report.reported_tcb_microcode, 115);
+
+        // family_id first byte is 1
+        assert_eq!(report.family_id[0], 1);
+        // image_id first byte is 2
+        assert_eq!(report.image_id[0], 2);
+
+        // Version 2 has no CPUID fields
+        assert_eq!(report.cpuid_fam_id, 0);
+        assert_eq!(report.cpuid_mod_id, 0);
+        assert_eq!(report.cpuid_stepping, 0);
+
+        // Verify report_data starts with known bytes
+        assert_eq!(report.report_data[0], 0xec);
+        assert_eq!(report.report_data[1], 0x6c);
+
+        // Verify measurement starts with known bytes
+        assert_eq!(report.measurement[0], 0xa1);
+        assert_eq!(report.measurement[1], 0xf3);
+
+        // Host data is all zeroes in this test fixture
+        assert!(report.host_data.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_parse_vlek_report() {
+        // Parse the VLEK report fixture (version 3, different from the VCEK report)
+        let report =
+            SnpReport::from_bytes(TEST_VLEK_REPORT).expect("failed to parse VLEK report");
+
+        assert_eq!(report.version, 3);
+        assert_eq!(report.guest_svn, 0);
+        assert_eq!(report.policy, 0x0000000000030000);
+        assert_eq!(report.vmpl, 1); // VLEK report has VMPL=1
+        assert_eq!(report.signature_algo, 1);
+        assert_eq!(report.author_key_en, 4); // Author key enabled for VLEK
+
+        // Measurement must not be all zeroes
+        assert!(report.measurement.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn test_snp_report_tamper_detection() {
+        // Verify that flipping a byte in the signed portion of the report
+        // causes signature verification to fail.
+        let mut tampered = TEST_REPORT.to_vec();
+
+        // Flip a byte in the measurement field (offset 0x90), which is
+        // inside the signed portion (0x00..0x2A0)
+        tampered[0x90] ^= 0xFF;
+
+        // The report should still parse (structure is valid)
+        let _report =
+            SnpReport::from_bytes(&tampered).expect("tampered report should still parse");
+
+        // But signature verification against the VCEK should fail
+        let result = verify_report_signature(&tampered, TEST_VCEK);
+        assert!(
+            result.is_err(),
+            "signature verification should fail on tampered report"
+        );
+    }
+
+    #[test]
+    fn test_snp_report_signature_tamper_detection() {
+        // Tamper with the signature itself (outside signed region but part of sig)
+        let mut tampered = TEST_REPORT.to_vec();
+
+        // Flip a byte in the R component of the signature (offset 0x2A0)
+        tampered[0x2A0] ^= 0xFF;
+
+        // Signature verification should fail
+        let result = verify_report_signature(&tampered, TEST_VCEK);
+        assert!(
+            result.is_err(),
+            "signature verification should fail when signature bytes are tampered"
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_validation_rejects_rsa_pss_certs() {
+        // The Milan ARK/ASK/VCEK use RSA-PSS signatures, but verify_cert_chain
+        // currently only handles ECDSA P-384. This test documents that RSA-PSS
+        // cert chains are correctly rejected rather than silently passing.
+        // When RSA-PSS support is added, this test should be updated to expect Ok.
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+
+        let result = verify_cert_chain(ark_der, ask_der, TEST_VCEK);
+        assert!(
+            result.is_err(),
+            "RSA-PSS cert chains are not yet supported by verify_cert_chain"
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_wrong_generation_fails() {
+        // Using Genoa certs to validate a Milan VCEK should fail
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Genoa);
+
+        let result = verify_cert_chain(ark_der, ask_der, TEST_VCEK);
+        assert!(
+            result.is_err(),
+            "cert chain validation should fail with wrong generation certs"
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_invalid_vcek_legacy() {
+        // The invalid-legacy VCEK should fail cert chain validation
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+
+        let result = verify_cert_chain(ark_der, ask_der, TEST_VCEK_INVALID_LEGACY);
+        assert!(
+            result.is_err(),
+            "cert chain validation should fail for invalid legacy VCEK"
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_invalid_vcek_new() {
+        // The invalid-new VCEK should fail cert chain validation
+        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+
+        let result = verify_cert_chain(ark_der, ask_der, TEST_VCEK_INVALID_NEW);
+        assert!(
+            result.is_err(),
+            "cert chain validation should fail for invalid new VCEK"
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_ark_self_signed_check() {
+        // The Milan ARK should be self-signed (issuer == subject)
+        let (ark_der, _ask_der) =
+            super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+        let ark_cert = x509_cert::Certificate::from_der(ark_der)
+            .expect("failed to parse ARK cert");
+        assert_eq!(
+            ark_cert.tbs_certificate.issuer,
+            ark_cert.tbs_certificate.subject,
+            "ARK should be self-signed"
+        );
+    }
+
+    #[test]
+    fn test_cert_chain_ask_issued_by_ark() {
+        // The ASK should be issued by the ARK
+        let (ark_der, ask_der) =
+            super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+        let ark_cert = x509_cert::Certificate::from_der(ark_der)
+            .expect("failed to parse ARK cert");
+        let ask_cert = x509_cert::Certificate::from_der(ask_der)
+            .expect("failed to parse ASK cert");
+        assert_eq!(
+            ask_cert.tbs_certificate.issuer,
+            ark_cert.tbs_certificate.subject,
+            "ASK issuer should match ARK subject"
+        );
+    }
+
+    #[test]
+    fn test_vcek_issued_by_ask() {
+        // The VCEK should be issued by the ASK (SEV-Milan)
+        let (_ark_der, ask_der) =
+            super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
+        let ask_cert = x509_cert::Certificate::from_der(ask_der)
+            .expect("failed to parse ASK cert");
+        let vcek_cert = x509_cert::Certificate::from_der(TEST_VCEK)
+            .expect("failed to parse VCEK cert");
+        assert_eq!(
+            vcek_cert.tbs_certificate.issuer,
+            ask_cert.tbs_certificate.subject,
+            "VCEK issuer should match ASK subject"
+        );
+    }
+
+    #[test]
+    fn test_report_signature_extraction() {
+        // Verify we can extract and parse the signature R and S components
+        // from a real report and construct a valid ECDSA P-384 signature.
+        let report = SnpReport::from_bytes(TEST_REPORT).expect("failed to parse real SNP report");
+
+        // R component: first 48 of the 72-byte field, little-endian
+        let sig_r = &report.signature_r[..48];
+        let sig_s = &report.signature_s[..48];
+
+        // Both R and S should be non-zero
+        assert!(sig_r.iter().any(|&b| b != 0), "R should not be all zeroes");
+        assert!(sig_s.iter().any(|&b| b != 0), "S should not be all zeroes");
+
+        // Convert to big-endian and construct a P-384 signature
+        let mut r_be = [0u8; 48];
+        let mut s_be = [0u8; 48];
+        for i in 0..48 {
+            r_be[i] = sig_r[47 - i];
+            s_be[i] = sig_s[47 - i];
+        }
+
+        let r_bytes: p384::FieldBytes = *p384::FieldBytes::from_slice(&r_be);
+        let s_bytes: p384::FieldBytes = *p384::FieldBytes::from_slice(&s_be);
+        let signature = p384::ecdsa::Signature::from_scalars(r_bytes, s_bytes);
+        assert!(
+            signature.is_ok(),
+            "should be able to construct P-384 signature from report: {:?}",
+            signature.err()
+        );
+    }
+
+    #[test]
+    fn test_report_signature_valid_against_vcek() {
+        // End-to-end: verify the real report signature against the real VCEK
+        let result = verify_report_signature(TEST_REPORT, TEST_VCEK);
+        assert!(
+            result.is_ok(),
+            "real report signature should verify against real VCEK: {:?}",
+            result.err()
+        );
+        assert!(result.unwrap(), "signature should be valid");
+    }
+
+    #[test]
+    fn test_vcek_cert_parses() {
+        // Verify the VCEK DER certificate can be parsed as X.509
+        let cert = x509_cert::Certificate::from_der(TEST_VCEK);
+        assert!(
+            cert.is_ok(),
+            "VCEK DER should parse as X.509: {:?}",
+            cert.err()
+        );
+
+        let cert = cert.unwrap();
+        // Issuer should reference AMD (issuer DN contains "Advanced Micro Devices")
+        let issuer = format!("{}", cert.tbs_certificate.issuer);
+        assert!(
+            issuer.contains("Advanced Micro Devices"),
+            "VCEK issuer should reference Advanced Micro Devices, got: {}",
+            issuer
+        );
+        // Subject should be SEV-VCEK
+        let subject = format!("{}", cert.tbs_certificate.subject);
+        assert!(
+            subject.contains("SEV-VCEK"),
+            "VCEK subject should contain SEV-VCEK, got: {}",
+            subject
+        );
+    }
+
+    #[test]
+    fn test_vlek_cert_parses() {
+        // Verify the VLEK DER certificate can be parsed as X.509
+        let cert = x509_cert::Certificate::from_der(TEST_VLEK);
+        assert!(
+            cert.is_ok(),
+            "VLEK DER should parse as X.509: {:?}",
+            cert.err()
+        );
+    }
+
+    #[test]
+    fn test_extract_vcek_tcb_from_real_cert() {
+        // Extract TCB values from the real VCEK certificate extensions
+        let tcb = extract_vcek_tcb(TEST_VCEK).expect("should extract TCB from VCEK");
+
+        // TCB components should be populated (at least some non-zero)
+        let has_nonzero = tcb.bootloader != 0
+            || tcb.tee != 0
+            || tcb.snp != 0
+            || tcb.microcode != 0;
+        assert!(
+            has_nonzero,
+            "at least one TCB component should be non-zero: {:?}",
+            tcb
+        );
+    }
+
+    #[test]
+    fn test_report_exact_size() {
+        // Verify the test report fixture is exactly 1184 bytes
+        assert_eq!(TEST_REPORT.len(), 1184);
+    }
+
+    #[test]
+    fn test_vlek_report_exact_size() {
+        assert_eq!(TEST_VLEK_REPORT.len(), 1184);
+    }
+
+    #[test]
+    fn test_parse_report_boundary_at_1184() {
+        // Exactly 1184 bytes should work
+        let data = vec![0u8; 1184];
+        assert!(SnpReport::from_bytes(&data).is_ok());
+
+        // 1183 bytes should fail
+        let data = vec![0u8; 1183];
+        assert!(SnpReport::from_bytes(&data).is_err());
+
+        // More than 1184 bytes should also work (extra bytes ignored)
+        let data = vec![0u8; 2000];
+        assert!(SnpReport::from_bytes(&data).is_ok());
     }
 }

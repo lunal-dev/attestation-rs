@@ -108,6 +108,173 @@ impl Default for DefaultCertProvider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vcek_url_construction_milan() {
+        let chip_id = [0xAA; 64];
+        let tcb = SnpTcb {
+            bootloader: 3,
+            tee: 0,
+            snp: 8,
+            microcode: 115,
+        };
+        let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Milan, &chip_id, &tcb);
+
+        assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Milan/"));
+        assert!(url.contains(&hex::encode(&chip_id)));
+        assert!(url.contains("blSPL=03"));
+        assert!(url.contains("teeSPL=00"));
+        assert!(url.contains("snpSPL=08"));
+        assert!(url.contains("ucodeSPL=115"));
+    }
+
+    #[test]
+    fn test_vcek_url_construction_genoa() {
+        let chip_id = [0xBB; 64];
+        let tcb = SnpTcb {
+            bootloader: 1,
+            tee: 2,
+            snp: 3,
+            microcode: 4,
+        };
+        let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Genoa, &chip_id, &tcb);
+
+        assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Genoa/"));
+        assert!(url.contains(&hex::encode(&chip_id)));
+        assert!(url.contains("blSPL=01"));
+        assert!(url.contains("teeSPL=02"));
+        assert!(url.contains("snpSPL=03"));
+        assert!(url.contains("ucodeSPL=04"));
+    }
+
+    #[test]
+    fn test_vcek_url_construction_turin() {
+        let chip_id = [0xCC; 64];
+        let tcb = SnpTcb {
+            bootloader: 0,
+            tee: 0,
+            snp: 0,
+            microcode: 0,
+        };
+        let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Turin, &chip_id, &tcb);
+
+        assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Turin/"));
+        assert!(url.contains(&hex::encode(&chip_id)));
+        assert!(url.contains("blSPL=00"));
+        assert!(url.contains("teeSPL=00"));
+        assert!(url.contains("snpSPL=00"));
+        assert!(url.contains("ucodeSPL=00"));
+    }
+
+    #[test]
+    fn test_vcek_url_contains_all_tcb_params() {
+        let chip_id = [0x00; 64];
+        let tcb = SnpTcb {
+            bootloader: 255,
+            tee: 128,
+            snp: 64,
+            microcode: 32,
+        };
+        let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Milan, &chip_id, &tcb);
+
+        // URL should contain all 4 TCB query parameters
+        assert!(url.contains("blSPL="), "missing blSPL param");
+        assert!(url.contains("teeSPL="), "missing teeSPL param");
+        assert!(url.contains("snpSPL="), "missing snpSPL param");
+        assert!(url.contains("ucodeSPL="), "missing ucodeSPL param");
+    }
+
+    #[test]
+    fn test_cert_chain_url_construction() {
+        let url = DefaultCertProvider::cert_chain_url(ProcessorGeneration::Milan);
+        assert_eq!(url, "https://kdsintf.amd.com/vcek/v1/Milan/cert_chain");
+
+        let url = DefaultCertProvider::cert_chain_url(ProcessorGeneration::Genoa);
+        assert_eq!(url, "https://kdsintf.amd.com/vcek/v1/Genoa/cert_chain");
+
+        let url = DefaultCertProvider::cert_chain_url(ProcessorGeneration::Turin);
+        assert_eq!(url, "https://kdsintf.amd.com/vcek/v1/Turin/cert_chain");
+    }
+
+    #[test]
+    fn test_cache_operations() {
+        let provider = DefaultCertProvider::new();
+
+        // Cache should be empty initially
+        assert!(provider.get_cached("test-key").is_none());
+
+        // Set a value
+        provider.set_cached("test-key".to_string(), vec![1, 2, 3]);
+
+        // Should retrieve the value
+        let cached = provider.get_cached("test-key");
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_cache_different_keys() {
+        let provider = DefaultCertProvider::new();
+
+        provider.set_cached("key-a".to_string(), vec![10, 20]);
+        provider.set_cached("key-b".to_string(), vec![30, 40]);
+
+        assert_eq!(provider.get_cached("key-a").unwrap(), vec![10, 20]);
+        assert_eq!(provider.get_cached("key-b").unwrap(), vec![30, 40]);
+        assert!(provider.get_cached("key-c").is_none());
+    }
+
+    #[test]
+    fn test_cache_overwrite() {
+        let provider = DefaultCertProvider::new();
+
+        provider.set_cached("key".to_string(), vec![1, 2, 3]);
+        assert_eq!(provider.get_cached("key").unwrap(), vec![1, 2, 3]);
+
+        // Overwrite with new value
+        provider.set_cached("key".to_string(), vec![4, 5, 6]);
+        assert_eq!(provider.get_cached("key").unwrap(), vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn test_cache_empty_value() {
+        let provider = DefaultCertProvider::new();
+
+        provider.set_cached("empty".to_string(), vec![]);
+        let cached = provider.get_cached("empty");
+        assert!(cached.is_some());
+        assert!(cached.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_cached_cert_is_expired() {
+        let cert = CachedCert {
+            data: vec![1, 2, 3],
+            fetched_at: std::time::Instant::now(),
+        };
+
+        // Should not be expired with a 1-hour TTL
+        assert!(!cert.is_expired(std::time::Duration::from_secs(3600)));
+
+        // Should be expired with a zero TTL
+        assert!(cert.is_expired(std::time::Duration::from_secs(0)));
+    }
+
+    #[test]
+    fn test_default_cert_provider_creation() {
+        // Ensure we can create a DefaultCertProvider via new() and Default
+        let p1 = DefaultCertProvider::new();
+        let p2 = DefaultCertProvider::default();
+
+        // Both should have empty caches
+        assert!(p1.get_cached("nonexistent").is_none());
+        assert!(p2.get_cached("nonexistent").is_none());
+    }
+}
+
 #[async_trait]
 impl CertProvider for DefaultCertProvider {
     async fn get_snp_vcek(
