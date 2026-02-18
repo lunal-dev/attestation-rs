@@ -57,6 +57,7 @@ dependencies = [
  "criterion",
  "der",
  "ecdsa",
+ "getrandom 0.2.17",
  "hex",
  "libc",
  "log",

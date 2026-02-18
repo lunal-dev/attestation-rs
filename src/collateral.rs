@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
+use base64::Engine;
 
 use crate::error::Result;
 use crate::types::{ProcessorGeneration, SnpTcb};
@@ -99,6 +101,150 @@ impl DefaultCertProvider {
             "https://kdsintf.amd.com/vcek/v1/{}/cert_chain",
             processor_gen.product_name()
         )
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DefaultCertProvider {
+    /// Fetch a certificate from AMD KDS, with cache lookup first.
+    async fn fetch_cert(&self, url: &str) -> Result<Vec<u8>> {
+        // Try cache first
+        if let Some(cached) = self.get_cached(url) {
+            return Ok(cached);
+        }
+
+        // Fetch from network
+        let bytes = self
+            .client
+            .get(url)
+            .header("Accept", "application/x-pem-file")
+            .send()
+            .await
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("HTTP request: {}", e))
+            })?
+            .error_for_status()
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
+            })?
+            .bytes()
+            .await
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
+            })?
+            .to_vec();
+
+        // Cache the result
+        self.set_cached(url.to_string(), bytes.clone());
+
+        Ok(bytes)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl CertProvider for DefaultCertProvider {
+    async fn get_snp_vcek(
+        &self,
+        processor_gen: ProcessorGeneration,
+        chip_id: &[u8; 64],
+        reported_tcb: &SnpTcb,
+    ) -> Result<Vec<u8>> {
+        let url = Self::vcek_url(processor_gen, chip_id, reported_tcb);
+        self.fetch_cert(&url).await
+    }
+
+    async fn get_snp_cert_chain(
+        &self,
+        processor_gen: ProcessorGeneration,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        let url = Self::cert_chain_url(processor_gen);
+        let pem_data = self.fetch_cert(&url).await?;
+
+        // The cert chain response is PEM with two certificates (ARK + ASK)
+        // Parse them into DER
+        let pem_str = String::from_utf8(pem_data).map_err(|e| {
+            crate::error::AttestationError::CertFetchError(format!("cert chain not UTF-8: {}", e))
+        })?;
+
+        let mut certs = Vec::new();
+        let mut current = String::new();
+        let mut in_cert = false;
+
+        for line in pem_str.lines() {
+            if line.contains("BEGIN CERTIFICATE") {
+                in_cert = true;
+                current.clear();
+            } else if line.contains("END CERTIFICATE") {
+                in_cert = false;
+                let der = base64::engine::general_purpose::STANDARD
+                    .decode(current.trim())
+                    .map_err(|e| {
+                        crate::error::AttestationError::CertFetchError(format!(
+                            "cert base64: {}",
+                            e
+                        ))
+                    })?;
+                certs.push(der);
+            } else if in_cert {
+                current.push_str(line.trim());
+            }
+        }
+
+        if certs.len() < 2 {
+            return Err(crate::error::AttestationError::CertFetchError(format!(
+                "expected 2 certs in chain, got {}",
+                certs.len()
+            )));
+        }
+
+        // First cert is typically VCEK/ASK, second is ARK
+        // The AMD KDS returns ASK first, ARK second
+        Ok((certs[1].clone(), certs[0].clone()))
+    }
+}
+
+/// WASM implementation: uses bundled certs for chain, no HTTP fetch for VCEK.
+/// In a browser environment, callers should provide their own CertProvider
+/// implementation that uses fetch() or similar for VCEK resolution.
+#[cfg(target_arch = "wasm32")]
+#[async_trait]
+impl CertProvider for DefaultCertProvider {
+    async fn get_snp_vcek(
+        &self,
+        processor_gen: ProcessorGeneration,
+        chip_id: &[u8; 64],
+        reported_tcb: &SnpTcb,
+    ) -> Result<Vec<u8>> {
+        // Check cache first
+        let url = Self::vcek_url(processor_gen, chip_id, reported_tcb);
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+
+        Err(crate::error::AttestationError::CertFetchError(
+            "VCEK fetch requires a custom CertProvider implementation in WASM".to_string(),
+        ))
+    }
+
+    async fn get_snp_cert_chain(
+        &self,
+        processor_gen: ProcessorGeneration,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        // Use bundled certs
+        #[cfg(feature = "snp")]
+        {
+            let (ark, ask) = crate::platforms::snp::certs::get_bundled_certs(processor_gen);
+            Ok((ark.to_vec(), ask.to_vec()))
+        }
+
+        #[cfg(not(feature = "snp"))]
+        {
+            let _ = processor_gen;
+            Err(crate::error::AttestationError::PlatformNotEnabled(
+                "snp".to_string(),
+            ))
+        }
     }
 }
 
@@ -272,77 +418,5 @@ mod tests {
         // Both should have empty caches
         assert!(p1.get_cached("nonexistent").is_none());
         assert!(p2.get_cached("nonexistent").is_none());
-    }
-}
-
-#[async_trait]
-impl CertProvider for DefaultCertProvider {
-    async fn get_snp_vcek(
-        &self,
-        processor_gen: ProcessorGeneration,
-        chip_id: &[u8; 64],
-        reported_tcb: &SnpTcb,
-    ) -> Result<Vec<u8>> {
-        let url = Self::vcek_url(processor_gen, chip_id, reported_tcb);
-
-        // Check cache
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-
-        // Fetch from AMD KDS
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let response = self
-                .client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| crate::error::AttestationError::CertFetchError(e.to_string()))?;
-
-            if !response.status().is_success() {
-                return Err(crate::error::AttestationError::CertFetchError(format!(
-                    "AMD KDS returned status {}",
-                    response.status()
-                )));
-            }
-
-            let data = response
-                .bytes()
-                .await
-                .map_err(|e| crate::error::AttestationError::CertFetchError(e.to_string()))?
-                .to_vec();
-
-            self.set_cached(url, data.clone());
-            Ok(data)
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            Err(crate::error::AttestationError::CertFetchError(
-                "WASM cert fetching not yet implemented".to_string(),
-            ))
-        }
-    }
-
-    async fn get_snp_cert_chain(
-        &self,
-        processor_gen: ProcessorGeneration,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
-        // For now, return the bundled certs
-        #[cfg(feature = "snp")]
-        {
-            let (ark, ask) =
-                crate::platforms::snp::certs::get_bundled_certs(processor_gen);
-            Ok((ark.to_vec(), ask.to_vec()))
-        }
-
-        #[cfg(not(feature = "snp"))]
-        {
-            let _ = processor_gen;
-            Err(crate::error::AttestationError::PlatformNotEnabled(
-                "snp".to_string(),
-            ))
-        }
     }
 }
