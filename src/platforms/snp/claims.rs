@@ -18,7 +18,7 @@ pub fn extract_claims(report: &SnpReport) -> Claims {
             "smt_enabled": report.plat_smt_enabled,
         },
         "vmpl": report.vmpl,
-        "chip_id": hex::encode(&report.chip_id),
+        "chip_id": hex::encode(report.chip_id),
         "current_build": report.current_build,
         "current_minor": report.current_minor,
         "current_major": report.current_major,
@@ -30,7 +30,7 @@ pub fn extract_claims(report: &SnpReport) -> Claims {
     });
 
     Claims {
-        launch_digest: hex::encode(&report.measurement),
+        launch_digest: hex::encode(report.measurement),
         report_data: report.report_data.to_vec(),
         init_data: report.host_data.to_vec(),
         tcb: TcbInfo::Snp {
@@ -56,7 +56,7 @@ mod tests {
         let claims = extract_claims(&report);
 
         // launch_digest should be the hex encoding of the measurement
-        assert_eq!(claims.launch_digest, hex::encode(&report.measurement));
+        assert_eq!(claims.launch_digest, hex::encode(report.measurement));
         assert!(!claims.launch_digest.is_empty());
         // The measurement starts with 0xa1, 0xf3 => "a1f3..."
         assert!(
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(claims.platform_data["guest_svn"], 0);
 
         // launch_digest should match the VLEK report measurement
-        assert_eq!(claims.launch_digest, hex::encode(&report.measurement));
+        assert_eq!(claims.launch_digest, hex::encode(report.measurement));
         assert!(claims.launch_digest.starts_with("8922"));
     }
 

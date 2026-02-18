@@ -271,7 +271,7 @@ mod tests {
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Milan, &chip_id, &tcb);
 
         assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Milan/"));
-        assert!(url.contains(&hex::encode(&chip_id)));
+        assert!(url.contains(&hex::encode(chip_id)));
         assert!(url.contains("blSPL=03"));
         assert!(url.contains("teeSPL=00"));
         assert!(url.contains("snpSPL=08"));
@@ -290,7 +290,7 @@ mod tests {
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Genoa, &chip_id, &tcb);
 
         assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Genoa/"));
-        assert!(url.contains(&hex::encode(&chip_id)));
+        assert!(url.contains(&hex::encode(chip_id)));
         assert!(url.contains("blSPL=01"));
         assert!(url.contains("teeSPL=02"));
         assert!(url.contains("snpSPL=03"));
@@ -309,7 +309,7 @@ mod tests {
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Turin, &chip_id, &tcb);
 
         assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Turin/"));
-        assert!(url.contains(&hex::encode(&chip_id)));
+        assert!(url.contains(&hex::encode(chip_id)));
         assert!(url.contains("blSPL=00"));
         assert!(url.contains("teeSPL=00"));
         assert!(url.contains("snpSPL=00"));

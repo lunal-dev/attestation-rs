@@ -201,7 +201,7 @@ mod tests {
             version: 1,
             tpm_quote: build_dummy_tpm_quote(),
             hcl_report: BASE64URL.encode(&short_hcl),
-            vcek: BASE64URL.encode(&[0u8; 100]),
+            vcek: BASE64URL.encode([0u8; 100]),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -234,7 +234,7 @@ mod tests {
             version: 1,
             tpm_quote: build_dummy_tpm_quote(),
             hcl_report: "!!!invalid_base64!!!".to_string(),
-            vcek: BASE64URL.encode(&[0u8; 100]),
+            vcek: BASE64URL.encode([0u8; 100]),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AttestationError, Result};
 
+/// Decoded TPM quote components: (signature, message, pcr_values).
+pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
+
 // --- HCL report parsing ---
 
 /// HCL report header magic: "HCLA".
@@ -536,7 +539,7 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
 }
 
 /// Parse TPM quote from evidence, returning decoded (sig, msg, pcrs).
-pub fn decode_tpm_quote(quote: &TpmQuote) -> Result<(Vec<u8>, Vec<u8>, Vec<Vec<u8>>)> {
+pub fn decode_tpm_quote(quote: &TpmQuote) -> Result<DecodedTpmQuote> {
     let sig = hex::decode(&quote.signature)
         .map_err(|e| AttestationError::EvidenceDeserialize(format!("TPM sig hex: {}", e)))?;
     let msg = hex::decode(&quote.message)
@@ -685,8 +688,8 @@ mod tests {
 
         // Select PCRs 0-7 (first byte = 0xFF)
         let mut pcr_concat = Vec::new();
-        for i in 0..8 {
-            pcr_concat.extend_from_slice(&pcrs[i]);
+        for pcr in pcrs.iter().take(8) {
+            pcr_concat.extend_from_slice(pcr);
         }
         let expected_digest = crate::utils::sha256(&pcr_concat);
 

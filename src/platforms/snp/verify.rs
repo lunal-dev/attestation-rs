@@ -387,9 +387,9 @@ fn verify_cert_signature(
         der::oid::ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 
     if *algorithm_oid == RSA_OID {
-        verify_cert_signature_rsa_pss(&issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
+        verify_cert_signature_rsa_pss(issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
     } else if *algorithm_oid == EC_OID {
-        verify_cert_signature_ecdsa_p384(&issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
+        verify_cert_signature_ecdsa_p384(issuer_spki.subject_public_key.raw_bytes(), &tbs_bytes, sig_bytes)
     } else {
         Err(AttestationError::CertChainError(format!(
             "unsupported issuer key algorithm OID: {}",

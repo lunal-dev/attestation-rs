@@ -138,7 +138,7 @@ mod tests {
             version: 1,
             tpm_quote: build_dummy_tpm_quote(),
             hcl_report: "!!!invalid!!!".to_string(),
-            td_quote: BASE64URL.encode(&[0u8; 100]),
+            td_quote: BASE64URL.encode([0u8; 100]),
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();

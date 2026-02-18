@@ -387,7 +387,7 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let back: VerificationResult = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(back.signature_valid, true);
+        assert!(back.signature_valid);
         assert_eq!(back.platform, PlatformType::Snp);
         assert_eq!(back.report_data_match, Some(true));
         assert_eq!(back.init_data_match, Some(false));
@@ -413,7 +413,7 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let back: VerificationResult = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(back.signature_valid, false);
+        assert!(!back.signature_valid);
         assert_eq!(back.report_data_match, None);
         assert_eq!(back.init_data_match, None);
     }
