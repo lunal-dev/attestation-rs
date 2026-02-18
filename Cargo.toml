@@ -72,8 +72,25 @@ async-trait = "0.1"
 tempfile = "3"
 
 [[bench]]
-name = "verification"
+name = "snp"
 harness = false
+
+[[bench]]
+name = "tdx"
+harness = false
+
+[[bench]]
+name = "az_snp"
+harness = false
+
+[[bench]]
+name = "az_tdx"
+harness = false
+
+[[bench]]
+name = "az_snp_attest"
+harness = false
+required-features = ["attest", "all-platforms"]
 
 [[example]]
 name = "attest"
