@@ -17,16 +17,24 @@ pub fn is_available() -> bool {
 }
 
 fn check_tsm_provider() -> bool {
-    if !Path::new(TSM_REPORT_PATH).exists() {
+    let tsm_path = Path::new(TSM_REPORT_PATH);
+    if !tsm_path.exists() {
         return false;
     }
-    // Try to create a temp dir and check provider
-    if let Ok(entries) = std::fs::read_dir(TSM_REPORT_PATH) {
-        // If path exists but we can create entries, the TSM subsystem is available
-        let _ = entries;
-        return true;
-    }
-    false
+    // Create a temporary entry to read the actual provider name.
+    // The TSM subsystem is shared across platforms (SNP, TDX, etc.),
+    // so we must verify the provider is tdx_guest.
+    let temp_dir = match tempfile::tempdir_in(tsm_path) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let provider = std::fs::read_to_string(temp_dir.path().join("provider"))
+        .unwrap_or_default();
+    let is_tdx = provider.trim().contains("tdx_guest");
+    // ConfigFS dirs need rmdir, not recursive delete
+    let path = temp_dir.keep();
+    let _ = std::fs::remove_dir(&path);
+    is_tdx
 }
 
 /// Generate TDX attestation evidence.
