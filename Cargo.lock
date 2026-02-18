@@ -2180,11 +2180,15 @@ dependencies = [
  "iocuddle",
  "lazy_static",
  "libc",
+ "p384",
+ "rsa",
  "serde",
  "serde-big-array",
  "serde_bytes",
+ "sha2",
  "static_assertions",
  "uuid",
+ "x509-cert",
 ]
 
 [[package]]
