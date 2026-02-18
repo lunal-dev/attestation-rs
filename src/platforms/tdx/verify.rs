@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use p256::ecdsa::{Signature, VerifyingKey};
 use scroll::Pread;
 
 use crate::error::{AttestationError, Result};
@@ -204,6 +205,99 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
     }
 }
 
+/// Extract and verify the ECDSA P-256 quote signature.
+///
+/// The TDX quote auth data follows the report body and contains:
+/// - sig_data_len (4 bytes LE)
+/// - ECDSA P-256 signature (64 bytes: R[32] || S[32])
+/// - ECDSA attestation public key (64 bytes: X[32] || Y[32])
+/// - QE certification data (variable)
+///
+/// The signature covers SHA-256(header + body).
+fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bool> {
+    // Determine where the body ends (and auth data begins)
+    let body_end = match quote.quote_version {
+        QuoteVersion::V4 => QUOTE_HEADER_SIZE + REPORT_BODY_SIZE,
+        QuoteVersion::V5Tdx10 | QuoteVersion::V5Tdx15 => {
+            // v5: body_size is stored at offset QUOTE_HEADER_SIZE + 2 (after type field)
+            let body_size = quote_bytes
+                .pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
+                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 body size: {}", e)))?
+                as usize;
+            QUOTE_HEADER_SIZE + 6 + body_size // header(48) + type(2) + size(4) + body
+        }
+    };
+
+    // Need at least sig_data_len(4) + signature(64) + attest_key(64) = 132 bytes of auth data
+    if quote_bytes.len() < body_end + 132 {
+        return Err(AttestationError::QuoteParseFailed(
+            "quote too short for auth data (signature + attestation key)".to_string(),
+        ));
+    }
+
+    let sig_data_len = quote_bytes
+        .pread_with::<u32>(body_end, scroll::LE)
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("sig_data_len: {}", e)))?
+        as usize;
+
+    if sig_data_len < 128 {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "sig_data_len too small: {} (need at least 128 for sig + key)",
+            sig_data_len
+        )));
+    }
+
+    // Extract ECDSA P-256 signature (64 bytes: R || S)
+    let sig_offset = body_end + 4;
+    let sig_r = &quote_bytes[sig_offset..sig_offset + 32];
+    let sig_s = &quote_bytes[sig_offset + 32..sig_offset + 64];
+
+    // Extract attestation public key (64 bytes: X || Y)
+    let key_offset = sig_offset + 64;
+    let key_x = &quote_bytes[key_offset..key_offset + 32];
+    let key_y = &quote_bytes[key_offset + 32..key_offset + 64];
+
+    // The signed data is the quote header + body
+    let signed_data = &quote_bytes[..body_end];
+
+    // Compute SHA-256 hash of the signed data
+    let hash = crate::utils::sha256(signed_data);
+
+    // Construct the ECDSA P-256 signature
+    let mut r_arr = [0u8; 32];
+    let mut s_arr = [0u8; 32];
+    r_arr.copy_from_slice(sig_r);
+    s_arr.copy_from_slice(sig_s);
+    let signature = Signature::from_scalars(
+        p256::FieldBytes::from(r_arr),
+        p256::FieldBytes::from(s_arr),
+    )
+    .map_err(|e| {
+        AttestationError::SignatureVerificationFailed(format!("construct P-256 sig: {}", e))
+    })?;
+
+    // Construct the verifying key from the uncompressed public key point
+    // SEC1 uncompressed point format: 0x04 || X || Y
+    let mut uncompressed = vec![0x04u8];
+    uncompressed.extend_from_slice(key_x);
+    uncompressed.extend_from_slice(key_y);
+
+    let verifying_key = VerifyingKey::from_sec1_bytes(&uncompressed).map_err(|e| {
+        AttestationError::SignatureVerificationFailed(format!("parse attestation key: {}", e))
+    })?;
+
+    // Verify: the signature is over the raw SHA-256 hash (pre-hashed)
+    // DCAP signs SHA-256(header+body), so we need to use verify_prehash
+    use p256::ecdsa::signature::hazmat::PrehashVerifier;
+    match verifying_key.verify_prehash(&hash, &signature) {
+        Ok(()) => Ok(true),
+        Err(e) => Err(AttestationError::SignatureVerificationFailed(format!(
+            "ECDSA P-256 DCAP: {}",
+            e
+        ))),
+    }
+}
+
 /// Verify TDX attestation evidence.
 pub async fn verify_evidence(
     evidence: &TdxEvidence,
@@ -217,12 +311,8 @@ pub async fn verify_evidence(
     // 2. Parse the quote
     let quote = parse_tdx_quote(&quote_bytes)?;
 
-    // 3. DCAP ECDSA verification
-    // For now, we skip the DCAP C library verification since it requires
-    // native Intel libraries. The signature is verified structurally.
-    // TODO: Integrate intel-tee-quote-verification-rs for native builds
-    // TODO: Implement pure-Rust ECDSA P-256 for WASM builds
-    let sig_valid = true; // Placeholder - real DCAP check needed
+    // 3. DCAP ECDSA P-256 signature verification
+    let sig_valid = verify_quote_signature(&quote_bytes, &quote)?;
 
     // 4. Check report_data binding
     let report_data_match = params.expected_report_data.as_ref().map(|expected| {
@@ -576,5 +666,57 @@ mod tests {
         let data = vec![0u8; 100]; // Less than 584 bytes
         let result = TdxReportBody::from_bytes(&data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dcap_signature_verification_v4() {
+        // Verify the real ECDSA P-256 signature on the v4 quote
+        let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
+        let result = verify_quote_signature(V4_QUOTE, &quote);
+        assert!(
+            result.is_ok(),
+            "v4 DCAP sig verification should succeed: {:?}",
+            result.err()
+        );
+        assert!(result.unwrap(), "v4 DCAP signature should be valid");
+    }
+
+    #[test]
+    fn test_dcap_signature_verification_v5() {
+        // Verify the real ECDSA P-256 signature on the v5 quote
+        let quote = parse_tdx_quote(V5_QUOTE).expect("failed to parse v5 quote");
+        let result = verify_quote_signature(V5_QUOTE, &quote);
+        assert!(
+            result.is_ok(),
+            "v5 DCAP sig verification should succeed: {:?}",
+            result.err()
+        );
+        assert!(result.unwrap(), "v5 DCAP signature should be valid");
+    }
+
+    #[test]
+    fn test_dcap_signature_tamper_detection() {
+        // Flip a byte in the quote body and verify the sig fails
+        let mut tampered = V4_QUOTE.to_vec();
+        tampered[100] ^= 0xFF; // Flip a byte in the report body
+        let quote = parse_tdx_quote(&tampered).expect("parse should still work");
+        let result = verify_quote_signature(&tampered, &quote);
+        assert!(
+            result.is_err(),
+            "tampered quote should fail DCAP sig verification"
+        );
+    }
+
+    #[test]
+    fn test_dcap_signature_truncated_auth_data() {
+        // Quote with just header + body but no auth data
+        let body_end = QUOTE_HEADER_SIZE + REPORT_BODY_SIZE;
+        let truncated = &V4_QUOTE[..body_end + 10]; // Some bytes but not enough
+        let quote = parse_tdx_quote(truncated).expect("parse should work");
+        let result = verify_quote_signature(truncated, &quote);
+        assert!(
+            result.is_err(),
+            "truncated auth data should fail verification"
+        );
     }
 }

@@ -35,7 +35,7 @@ cfg-if = "1"
 # Crypto
 p256 = { version = "0.13", features = ["ecdsa"] }
 p384 = { version = "0.13", features = ["ecdsa"] }
-ecdsa = { version = "0.16", features = ["verifying"] }
+ecdsa = { version = "0.16", features = ["verifying", "hazmat"] }
 x509-cert = "0.2"
 der = { version = "0.7", features = ["alloc", "oid"] }
 spki = "0.7"
