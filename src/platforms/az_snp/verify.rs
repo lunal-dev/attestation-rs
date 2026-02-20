@@ -33,7 +33,7 @@ pub async fn verify_evidence(
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
 
     // 5. Extract SNP report from HCL TEE report
-    let snp_report = crate::platforms::snp::verify::SnpReport::from_bytes(&hcl.tee_report)?;
+    let snp_report = crate::platforms::snp::verify::parse_report(&hcl.tee_report)?;
 
     // 6. TPM signature verification (AK pub key extracted from var_data JWK JSON)
     let tpm_sig_valid = tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
@@ -63,8 +63,8 @@ pub async fn verify_evidence(
     // Azure CVMs may have zeroed CPUID fields in the SNP report.
     // Try CPUID first, then try each processor generation's cert chain.
     let processor_gen = crate::types::ProcessorGeneration::from_cpuid(
-        snp_report.cpuid_fam_id,
-        snp_report.cpuid_mod_id,
+        snp_report.cpuid_fam_id.unwrap_or(0),
+        snp_report.cpuid_mod_id.unwrap_or(0),
     );
 
     let cert_chain_result = if let Some(gen) = processor_gen {
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_coco_hcl_snp_report_parses() {
         let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
-        let report = crate::platforms::snp::verify::SnpReport::from_bytes(&parsed.tee_report);
+        let report = crate::platforms::snp::verify::parse_report(&parsed.tee_report);
         assert!(
             report.is_ok(),
             "SNP report from CoCo HCL should parse: {:?}",
@@ -357,7 +357,7 @@ mod tests {
     fn test_coco_hcl_var_data_binding() {
         let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
         let snp_report =
-            crate::platforms::snp::verify::SnpReport::from_bytes(&parsed.tee_report).unwrap();
+            crate::platforms::snp::verify::parse_report(&parsed.tee_report).unwrap();
 
         let var_data_hash = crate::utils::sha256(&parsed.var_data);
 

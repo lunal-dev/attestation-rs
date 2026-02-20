@@ -47,6 +47,10 @@ struct ReportDataGroup {
 
 #[derive(clap::Args)]
 struct AttestArgs {
+    /// Platform to attest with. Auto-detects if not specified.
+    #[arg(short, long)]
+    platform: Option<PlatformArg>,
+
     #[command(flatten)]
     data: ReportDataGroup,
 
@@ -153,11 +157,15 @@ async fn cmd_attest(args: AttestArgs) {
         }
     };
 
-    let platform = match attestation::detect() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            process::exit(1);
+    let platform: Box<dyn ErasedPlatform> = if let Some(ref p) = args.platform {
+        p.to_platform()
+    } else {
+        match attestation::detect() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            }
         }
     };
 
