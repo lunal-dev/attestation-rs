@@ -1,4 +1,6 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
+#[cfg(feature = "attest")]
+use std::io::Write;
 use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
@@ -21,14 +23,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate attestation evidence from TEE hardware.
+    /// Generate attestation evidence from TEE hardware (Linux only).
+    #[cfg(feature = "attest")]
     Attest(AttestArgs),
     /// Verify attestation evidence.
     Verify(VerifyArgs),
-    /// Detect the current TEE platform.
+    /// Detect the current TEE platform (Linux only).
+    #[cfg(feature = "attest")]
     Detect,
 }
 
+#[cfg(feature = "attest")]
 #[derive(clap::Args)]
 #[group(multiple = false)]
 struct ReportDataGroup {
@@ -45,6 +50,7 @@ struct ReportDataGroup {
     report_data_file: Option<PathBuf>,
 }
 
+#[cfg(feature = "attest")]
 #[derive(clap::Args)]
 struct AttestArgs {
     /// Platform to attest with. Auto-detects if not specified.
@@ -101,6 +107,7 @@ impl PlatformArg {
     }
 }
 
+#[cfg(feature = "attest")]
 fn resolve_report_data(group: &ReportDataGroup) -> Result<Vec<u8>, String> {
     if let Some(ref s) = group.report_data {
         Ok(s.as_bytes().to_vec())
@@ -130,12 +137,15 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        #[cfg(feature = "attest")]
         Commands::Detect => cmd_detect(),
+        #[cfg(feature = "attest")]
         Commands::Attest(args) => cmd_attest(args).await,
         Commands::Verify(args) => cmd_verify(args).await,
     }
 }
 
+#[cfg(feature = "attest")]
 fn cmd_detect() {
     match attestation::detect() {
         Ok(platform) => {
@@ -148,6 +158,7 @@ fn cmd_detect() {
     }
 }
 
+#[cfg(feature = "attest")]
 async fn cmd_attest(args: AttestArgs) {
     let report_data = match resolve_report_data(&args.data) {
         Ok(d) => d,

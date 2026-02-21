@@ -1,7 +1,7 @@
 pub mod evidence;
 pub mod verify;
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 pub mod attest;
 
 use async_trait::async_trait;
@@ -34,7 +34,7 @@ impl Platform for AzTdx {
         PlatformType::AzTdx
     }
 
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     async fn attest(&self, report_data: &[u8]) -> Result<AzTdxEvidence> {
         attest::generate_evidence(report_data).await
     }

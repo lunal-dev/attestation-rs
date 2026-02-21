@@ -9,7 +9,9 @@ license = "Apache-2.0"
 default = []
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
-attest = ["libc", "tempfile", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:pem-rfc7468"]
+# The az-*-vtpm crates are pulled in via [target.'cfg(linux)'.dependencies] below,
+# activated when this feature is enabled.
+attest = ["libc", "tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm"]
 
 # Per-platform features
 tdx = []
@@ -20,8 +22,9 @@ az-snp = ["snp"]
 # Convenience
 all-platforms = ["tdx", "snp", "az-tdx", "az-snp"]
 
-# CLI binary
-cli = ["attest", "all-platforms", "dep:clap"]
+# CLI binary (verify works everywhere; attest only on Linux)
+cli = ["all-platforms", "dep:clap"]
+cli-full = ["cli", "attest"]
 
 [dependencies]
 async-trait = "0.1"
@@ -48,22 +51,22 @@ signature = "2"
 # Binary parsing
 scroll = "0.12"
 
-# Attest-side dependencies (Linux only)
+# Attest-side dependencies (cross-platform parts)
 libc = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
 sev = { version = "6", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
-az-snp-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
-az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
 clap = { version = "4", features = ["derive"], optional = true }
 
-# HTTP client for cert fetching (native)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
-tokio = { version = "1", features = ["rt", "macros", "sync", "time"], optional = true }
-
-[target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
+# Native (non-WASM) dependencies — needed for cert fetching on any OS
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+
+# Guest-side attestation crates — Linux-only (require TEE hardware / vTPM)
+[target.'cfg(target_os = "linux")'.dependencies]
+az-snp-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
+az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
