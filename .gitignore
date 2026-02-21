@@ -1,1 +1,3 @@
 /target
+/wasm-test/pkg
+/wasm-test/target
