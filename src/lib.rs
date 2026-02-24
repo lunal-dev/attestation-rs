@@ -6,8 +6,8 @@
 //!
 //! # Platform Support
 //!
-//! Verification for all platforms (SNP, TDX, Azure SNP, Azure TDX) is always
-//! available with no feature flags required — including in WASM builds.
+//! Each platform can be individually enabled via cargo features:
+//! `snp`, `tdx`, `az-snp`, `az-tdx` (all on by default).
 //! Evidence generation requires the `attest` feature and Linux with TEE hardware.
 //!
 //! # Quick Start
@@ -41,18 +41,22 @@ pub use collateral::{CertProvider, DefaultCertProvider};
 /// then bare-metal variants.
 #[cfg(all(feature = "attest", target_os = "linux"))]
 pub fn detect() -> Result<PlatformType> {
+    #[cfg(feature = "az-tdx")]
     if platforms::az_tdx::attest::is_available() {
         return Ok(PlatformType::AzTdx);
     }
 
+    #[cfg(feature = "az-snp")]
     if platforms::az_snp::attest::is_available() {
         return Ok(PlatformType::AzSnp);
     }
 
+    #[cfg(feature = "tdx")]
     if platforms::tdx::attest::is_available() {
         return Ok(PlatformType::Tdx);
     }
 
+    #[cfg(feature = "snp")]
     if platforms::snp::attest::is_available() {
         return Ok(PlatformType::Snp);
     }
@@ -66,26 +70,35 @@ pub fn detect() -> Result<PlatformType> {
 /// the platform tag and platform-specific evidence payload.
 #[cfg(all(feature = "attest", target_os = "linux"))]
 pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8>> {
+    #[allow(unreachable_patterns)]
     let evidence_value = match platform {
+        #[cfg(feature = "snp")]
         PlatformType::Snp => {
             let evidence = platforms::snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
+        #[cfg(feature = "tdx")]
         PlatformType::Tdx => {
             let evidence = platforms::tdx::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
+        #[cfg(feature = "az-snp")]
         PlatformType::AzSnp => {
             let evidence = platforms::az_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
+        #[cfg(feature = "az-tdx")]
         PlatformType::AzTdx => {
             let evidence = platforms::az_tdx::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+        _other => {
+            let _ = report_data;
+            return Err(AttestationError::PlatformNotEnabled(_other.to_string()));
         }
     };
 
@@ -107,7 +120,9 @@ pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<Verif
     let envelope: AttestationEvidence = serde_json::from_slice(evidence_json)
         .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
 
+    #[allow(unreachable_patterns)]
     match envelope.platform {
+        #[cfg(feature = "snp")]
         PlatformType::Snp => {
             let evidence: platforms::snp::evidence::SnpEvidence =
                 serde_json::from_value(envelope.evidence)
@@ -115,12 +130,14 @@ pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<Verif
             let provider = DefaultCertProvider::new();
             platforms::snp::verify::verify_evidence(&evidence, params, &provider).await
         }
+        #[cfg(feature = "tdx")]
         PlatformType::Tdx => {
             let evidence: platforms::tdx::evidence::TdxEvidence =
                 serde_json::from_value(envelope.evidence)
                     .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
             platforms::tdx::verify::verify_evidence(&evidence, params).await
         }
+        #[cfg(feature = "az-snp")]
         PlatformType::AzSnp => {
             let evidence: platforms::az_snp::evidence::AzSnpEvidence =
                 serde_json::from_value(envelope.evidence)
@@ -128,11 +145,16 @@ pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<Verif
             let provider = DefaultCertProvider::new();
             platforms::az_snp::verify::verify_evidence(&evidence, params, &provider).await
         }
+        #[cfg(feature = "az-tdx")]
         PlatformType::AzTdx => {
             let evidence: platforms::az_tdx::evidence::AzTdxEvidence =
                 serde_json::from_value(envelope.evidence)
                     .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
             platforms::az_tdx::verify::verify_evidence(&evidence, params).await
+        }
+        _other => {
+            let _ = params;
+            Err(AttestationError::PlatformNotEnabled(_other.to_string()))
         }
     }
 }
