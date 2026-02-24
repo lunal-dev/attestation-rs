@@ -403,7 +403,8 @@ mod tests {
     fn test_coco_tpm_signature_verification() {
         // Use evidence-v1.json which has matching TPM quote + HCL report
         let json = include_str!("../../../test_data/az_snp/evidence-v1.json");
-        let evidence: AzSnpEvidence = serde_json::from_str(json).unwrap();
+        let envelope: crate::types::AttestationEvidence = serde_json::from_str(json).unwrap();
+        let evidence: AzSnpEvidence = serde_json::from_value(envelope.evidence).unwrap();
 
         let hcl_bytes = decode_base64url(&evidence.hcl_report).unwrap();
         let parsed = tpm_common::parse_hcl_report(&hcl_bytes).unwrap();
@@ -423,7 +424,8 @@ mod tests {
     #[test]
     fn test_coco_tpm_message_has_valid_magic() {
         let json = include_str!("../../../test_data/az_snp/evidence-v1.json");
-        let evidence: AzSnpEvidence = serde_json::from_str(json).unwrap();
+        let envelope: crate::types::AttestationEvidence = serde_json::from_str(json).unwrap();
+        let evidence: AzSnpEvidence = serde_json::from_value(envelope.evidence).unwrap();
         let msg = hex::decode(&evidence.tpm_quote.message).unwrap();
 
         assert!(msg.len() >= 4, "TPM message too short");
@@ -438,7 +440,10 @@ mod tests {
     #[test]
     fn test_coco_evidence_v1_deserializes() {
         let json = include_str!("../../../test_data/az_snp/evidence-v1.json");
-        let evidence: std::result::Result<AzSnpEvidence, _> = serde_json::from_str(json);
+        let envelope: crate::types::AttestationEvidence = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.platform, crate::types::PlatformType::AzSnp);
+        let evidence: std::result::Result<AzSnpEvidence, _> =
+            serde_json::from_value(envelope.evidence);
         assert!(
             evidence.is_ok(),
             "CoCo evidence-v1.json should deserialize: {:?}",

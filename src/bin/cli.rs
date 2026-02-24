@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
+#[cfg(all(feature = "attest", target_os = "linux"))]
+use clap::ValueEnum;
 
-use attestation::platforms::ErasedPlatform;
 use attestation::types::VerifyParams;
 
 #[derive(Parser)]
@@ -71,10 +72,6 @@ struct VerifyArgs {
     #[arg(short, long)]
     evidence: Option<PathBuf>,
 
-    /// Platform type of the evidence.
-    #[arg(short, long)]
-    platform: PlatformArg,
-
     /// Expected report data (hex-encoded) for nonce binding verification.
     #[arg(long)]
     expected_report_data: Option<String>,
@@ -84,6 +81,7 @@ struct VerifyArgs {
     expected_init_data: Option<String>,
 }
 
+#[cfg(all(feature = "attest", target_os = "linux"))]
 #[derive(Clone, ValueEnum)]
 enum PlatformArg {
     Snp,
@@ -92,17 +90,14 @@ enum PlatformArg {
     AzTdx,
 }
 
+#[cfg(all(feature = "attest", target_os = "linux"))]
 impl PlatformArg {
-    fn to_platform(&self) -> Box<dyn ErasedPlatform> {
+    fn to_platform_type(&self) -> attestation::PlatformType {
         match self {
-            PlatformArg::Snp => {
-                Box::new(attestation::platforms::snp::Snp::with_default_provider())
-            }
-            PlatformArg::Tdx => Box::new(attestation::platforms::tdx::Tdx::new()),
-            PlatformArg::AzSnp => {
-                Box::new(attestation::platforms::az_snp::AzSnp::with_default_provider())
-            }
-            PlatformArg::AzTdx => Box::new(attestation::platforms::az_tdx::AzTdx::new()),
+            PlatformArg::Snp => attestation::PlatformType::Snp,
+            PlatformArg::Tdx => attestation::PlatformType::Tdx,
+            PlatformArg::AzSnp => attestation::PlatformType::AzSnp,
+            PlatformArg::AzTdx => attestation::PlatformType::AzTdx,
         }
     }
 }
@@ -149,7 +144,7 @@ async fn main() {
 fn cmd_detect() {
     match attestation::detect() {
         Ok(platform) => {
-            println!("{}", platform.platform_type());
+            println!("{}", platform);
         }
         Err(_) => {
             eprintln!("No TEE platform detected.");
@@ -168,8 +163,8 @@ async fn cmd_attest(args: AttestArgs) {
         }
     };
 
-    let platform: Box<dyn ErasedPlatform> = if let Some(ref p) = args.platform {
-        p.to_platform()
+    let platform = if let Some(ref p) = args.platform {
+        p.to_platform_type()
     } else {
         match attestation::detect() {
             Ok(p) => p,
@@ -180,7 +175,7 @@ async fn cmd_attest(args: AttestArgs) {
         }
     };
 
-    eprintln!("Platform: {}", platform.platform_type());
+    eprintln!("Platform: {}", platform);
     if report_data.is_empty() {
         eprintln!("Report data: (empty)");
     } else {
@@ -188,7 +183,7 @@ async fn cmd_attest(args: AttestArgs) {
     }
 
     let t0 = Instant::now();
-    let evidence_json = match platform.attest_json(&report_data).await {
+    let evidence_json = match attestation::attest(platform, &report_data).await {
         Ok(json) => json,
         Err(e) => {
             eprintln!("Attestation failed: {e}");
@@ -245,12 +240,10 @@ async fn cmd_verify(args: VerifyArgs) {
         }
     }
 
-    let platform = args.platform.to_platform();
-
-    eprintln!("Verifying {} evidence...", platform.platform_type());
+    eprintln!("Verifying evidence...");
 
     let t0 = Instant::now();
-    let result = match platform.verify_json(&evidence_json, &params).await {
+    let result = match attestation::verify(&evidence_json, &params).await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Verification failed: {e}");
