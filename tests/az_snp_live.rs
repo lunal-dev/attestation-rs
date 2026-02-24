@@ -6,17 +6,14 @@
 //! - Access to Azure IMDS
 //! - Sufficient permissions for TPM access (root or tss group)
 //!
-//! Run with: cargo test --test az_snp_live --features "all-platforms,attest" -- --ignored
+//! Run with: cargo test --test az_snp_live --features "attest" -- --ignored
 //!
 //! Tests are #[ignore] by default — run with --ignored to execute on real hardware.
 
-// The entire file requires the attest feature since it uses Platform::attest().
 #![cfg(feature = "attest")]
 
 use base64::Engine;
 
-use attestation::platforms::az_snp::AzSnp;
-use attestation::platforms::Platform;
 use attestation::types::VerifyParams;
 
 /// Helper: check if we're running on an Azure SNP CVM with the required tools.
@@ -58,9 +55,8 @@ async fn test_az_snp_detect_platform() {
         "detect() should succeed on Azure SNP CVM: {:?}",
         platform.err()
     );
-    let platform = platform.unwrap();
     assert_eq!(
-        platform.platform_type(),
+        platform.unwrap(),
         attestation::PlatformType::AzSnp,
         "should detect AzSnp platform"
     );
@@ -74,14 +70,12 @@ async fn test_az_snp_attest_generates_valid_evidence() {
         return;
     }
 
-    let az_snp = AzSnp::with_default_provider();
-
     // Generate evidence with a test nonce
     let nonce = b"integration-test-nonce-12345678";
-    let evidence = az_snp.attest(nonce).await;
+    let evidence = attestation::platforms::az_snp::attest::generate_evidence(nonce).await;
     assert!(
         evidence.is_ok(),
-        "attest() should succeed: {:?}",
+        "generate_evidence() should succeed: {:?}",
         evidence.err()
     );
 
@@ -130,18 +124,21 @@ async fn test_az_snp_attest_then_verify_roundtrip() {
         return;
     }
 
-    let az_snp = AzSnp::with_default_provider();
-
     // Generate evidence
     let nonce = b"roundtrip-test-nonce-abcdef1234";
-    let evidence = az_snp
-        .attest(nonce)
+    let evidence = attestation::platforms::az_snp::attest::generate_evidence(nonce)
         .await
-        .expect("attest() should succeed");
+        .expect("generate_evidence() should succeed");
 
     // Verify without expected values (just check structure)
     let params = VerifyParams::default();
-    let result = az_snp.verify(&evidence, &params).await;
+    let provider = attestation::collateral::DefaultCertProvider::new();
+    let result = attestation::platforms::az_snp::verify::verify_evidence(
+        &evidence,
+        &params,
+        &provider,
+    )
+    .await;
 
     assert!(
         result.is_ok(),
@@ -184,13 +181,10 @@ async fn test_az_snp_verify_with_expected_nonce() {
         return;
     }
 
-    let az_snp = AzSnp::with_default_provider();
-
     let nonce = b"nonce-verification-test";
-    let evidence = az_snp
-        .attest(nonce)
+    let evidence = attestation::platforms::az_snp::attest::generate_evidence(nonce)
         .await
-        .expect("attest() should succeed");
+        .expect("generate_evidence() should succeed");
 
     // Verify with correct nonce
     let mut padded_nonce = vec![0u8; 64];
@@ -201,10 +195,14 @@ async fn test_az_snp_verify_with_expected_nonce() {
         expected_init_data_hash: None,
     };
 
-    let result = az_snp
-        .verify(&evidence, &params)
-        .await
-        .expect("verify should succeed");
+    let provider = attestation::collateral::DefaultCertProvider::new();
+    let result = attestation::platforms::az_snp::verify::verify_evidence(
+        &evidence,
+        &params,
+        &provider,
+    )
+    .await
+    .expect("verify should succeed");
 
     assert!(result.signature_valid);
 }
@@ -217,11 +215,9 @@ async fn test_az_snp_hcl_report_contains_snp_report() {
         return;
     }
 
-    let az_snp = AzSnp::with_default_provider();
-    let evidence = az_snp
-        .attest(b"hcl-test")
+    let evidence = attestation::platforms::az_snp::attest::generate_evidence(b"hcl-test")
         .await
-        .expect("attest() should succeed");
+        .expect("generate_evidence() should succeed");
 
     // Parse HCL report
     let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -270,11 +266,9 @@ async fn test_az_snp_cross_process_serialization() {
         return;
     }
 
-    let az_snp = AzSnp::with_default_provider();
-    let evidence = az_snp
-        .attest(b"cross-process")
+    let evidence = attestation::platforms::az_snp::attest::generate_evidence(b"cross-process")
         .await
-        .expect("attest() should succeed");
+        .expect("generate_evidence() should succeed");
 
     // Serialize to JSON file
     let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -288,7 +282,13 @@ async fn test_az_snp_cross_process_serialization() {
 
     // Verify the deserialized evidence
     let params = VerifyParams::default();
-    let result = az_snp.verify(&evidence_back, &params).await;
+    let provider = attestation::collateral::DefaultCertProvider::new();
+    let result = attestation::platforms::az_snp::verify::verify_evidence(
+        &evidence_back,
+        &params,
+        &provider,
+    )
+    .await;
 
     assert!(
         result.is_ok(),

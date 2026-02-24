@@ -19,16 +19,20 @@ fn bench_hcl_report_parse(c: &mut Criterion) {
 fn bench_evidence_deserialize(c: &mut Criterion) {
     c.bench_function("az_tdx/evidence_deserialize", |b| {
         b.iter(|| {
-            let e: attestation::platforms::az_tdx::evidence::AzTdxEvidence =
+            let envelope: attestation::types::AttestationEvidence =
                 serde_json::from_str(black_box(AZ_TDX_EVIDENCE_JSON)).unwrap();
+            let e: attestation::platforms::az_tdx::evidence::AzTdxEvidence =
+                serde_json::from_value(envelope.evidence).unwrap();
             black_box(&e);
         });
     });
 }
 
 fn bench_full_pipeline(c: &mut Criterion) {
-    let evidence: attestation::platforms::az_tdx::evidence::AzTdxEvidence =
+    let envelope: attestation::types::AttestationEvidence =
         serde_json::from_str(AZ_TDX_EVIDENCE_JSON).unwrap();
+    let evidence: attestation::platforms::az_tdx::evidence::AzTdxEvidence =
+        serde_json::from_value(envelope.evidence).unwrap();
     let params = VerifyParams::default();
     let rt = tokio::runtime::Runtime::new().unwrap();
 

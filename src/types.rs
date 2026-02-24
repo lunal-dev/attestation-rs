@@ -3,10 +3,26 @@ use serde::{Deserialize, Serialize};
 /// Platform identifier enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PlatformType {
+    #[serde(rename = "tdx")]
     Tdx,
+    #[serde(rename = "snp")]
     Snp,
+    #[serde(rename = "az-tdx")]
     AzTdx,
+    #[serde(rename = "az-snp")]
     AzSnp,
+}
+
+/// Self-describing attestation evidence envelope.
+///
+/// Wraps platform-specific evidence with a platform identifier so that
+/// verifiers can auto-detect which platform produced the evidence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationEvidence {
+    /// Which platform produced this evidence.
+    pub platform: PlatformType,
+    /// Platform-specific evidence payload.
+    pub evidence: serde_json::Value,
 }
 
 impl std::fmt::Display for PlatformType {
@@ -338,7 +354,10 @@ mod tests {
             report_data: vec![0xCC; 64],
             init_data: vec![0x00; 48],
             tcb: TcbInfo::Tdx {
-                tcb_svn: vec![0x03, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                tcb_svn: vec![
+                    0x03, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00,
+                ],
             },
             platform_data: serde_json::json!({
                 "quote_version": "V4",

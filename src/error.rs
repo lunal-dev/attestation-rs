@@ -6,6 +6,9 @@ pub enum AttestationError {
     #[error("no supported TEE platform detected")]
     NoPlatformDetected,
 
+    #[error("platform {0} is not enabled (enable the corresponding cargo feature)")]
+    PlatformNotEnabled(String),
+
     #[error("report_data exceeds maximum size ({max} bytes)")]
     ReportDataTooLarge { max: usize },
 

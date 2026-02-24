@@ -297,7 +297,10 @@ mod tests {
     #[test]
     fn test_coco_tdx_evidence_v1_deserializes() {
         let json = include_str!("../../../test_data/az_tdx/evidence-v1.json");
-        let evidence: std::result::Result<AzTdxEvidence, _> = serde_json::from_str(json);
+        let envelope: crate::types::AttestationEvidence = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.platform, crate::types::PlatformType::AzTdx);
+        let evidence: std::result::Result<AzTdxEvidence, _> =
+            serde_json::from_value(envelope.evidence);
         assert!(
             evidence.is_ok(),
             "TDX evidence-v1.json should deserialize: {:?}",
