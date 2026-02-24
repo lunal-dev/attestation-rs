@@ -3,7 +3,7 @@ pub mod verify;
 pub mod claims;
 pub mod certs;
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 pub mod attest;
 
 use async_trait::async_trait;
@@ -38,7 +38,7 @@ impl Platform for Snp {
         PlatformType::Snp
     }
 
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     async fn attest(&self, report_data: &[u8]) -> Result<SnpEvidence> {
         attest::generate_evidence(report_data).await
     }

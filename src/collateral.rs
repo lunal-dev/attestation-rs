@@ -231,20 +231,8 @@ impl CertProvider for DefaultCertProvider {
         &self,
         processor_gen: ProcessorGeneration,
     ) -> Result<(Vec<u8>, Vec<u8>)> {
-        // Use bundled certs
-        #[cfg(feature = "snp")]
-        {
-            let (ark, ask) = crate::platforms::snp::certs::get_bundled_certs(processor_gen);
-            Ok((ark.to_vec(), ask.to_vec()))
-        }
-
-        #[cfg(not(feature = "snp"))]
-        {
-            let _ = processor_gen;
-            Err(crate::error::AttestationError::PlatformNotEnabled(
-                "snp".to_string(),
-            ))
-        }
+        let (ark, ask) = crate::platforms::snp::certs::get_bundled_certs(processor_gen);
+        Ok((ark.to_vec(), ask.to_vec()))
     }
 }
 

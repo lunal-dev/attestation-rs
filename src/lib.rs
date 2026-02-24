@@ -6,9 +6,9 @@
 //!
 //! # Platform Support
 //!
-//! Each platform is enabled via feature flags (`snp`, `tdx`, `az-snp`, `az-tdx`).
-//! Verification is always available when a platform feature is enabled.
-//! Evidence generation requires the `attest` feature and appropriate hardware.
+//! Verification for all platforms (SNP, TDX, Azure SNP, Azure TDX) is always
+//! available with no feature flags required — including in WASM builds.
+//! Evidence generation requires the `attest` feature and Linux with TEE hardware.
 //!
 //! # Quick Start
 //!
@@ -42,39 +42,26 @@ pub use collateral::{CertProvider, DefaultCertProvider};
 /// Detect the current TEE platform and return a boxed Platform impl.
 /// Checks Azure variants first (they also have bare-metal device paths),
 /// then bare-metal variants.
-/// Only checks platforms whose features are enabled.
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 pub fn detect() -> Result<Box<dyn ErasedPlatform>> {
     // 1. Check Azure TDX
-    #[cfg(feature = "az-tdx")]
-    {
-        if platforms::az_tdx::attest::is_available() {
-            return Ok(Box::new(platforms::az_tdx::AzTdx::new()));
-        }
+    if platforms::az_tdx::attest::is_available() {
+        return Ok(Box::new(platforms::az_tdx::AzTdx::new()));
     }
 
     // 2. Check Azure SNP
-    #[cfg(feature = "az-snp")]
-    {
-        if platforms::az_snp::attest::is_available() {
-            return Ok(Box::new(platforms::az_snp::AzSnp::with_default_provider()));
-        }
+    if platforms::az_snp::attest::is_available() {
+        return Ok(Box::new(platforms::az_snp::AzSnp::with_default_provider()));
     }
 
     // 3. Check bare-metal TDX
-    #[cfg(feature = "tdx")]
-    {
-        if platforms::tdx::attest::is_available() {
-            return Ok(Box::new(platforms::tdx::Tdx::new()));
-        }
+    if platforms::tdx::attest::is_available() {
+        return Ok(Box::new(platforms::tdx::Tdx::new()));
     }
 
     // 4. Check bare-metal SNP
-    #[cfg(feature = "snp")]
-    {
-        if platforms::snp::attest::is_available() {
-            return Ok(Box::new(platforms::snp::Snp::with_default_provider()));
-        }
+    if platforms::snp::attest::is_available() {
+        return Ok(Box::new(platforms::snp::Snp::with_default_provider()));
     }
 
     Err(AttestationError::NoPlatformDetected)

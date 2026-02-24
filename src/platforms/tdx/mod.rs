@@ -2,7 +2,7 @@ pub mod evidence;
 pub mod verify;
 pub mod claims;
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 pub mod attest;
 
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ impl Platform for Tdx {
         PlatformType::Tdx
     }
 
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     async fn attest(&self, report_data: &[u8]) -> Result<TdxEvidence> {
         attest::generate_evidence(report_data).await
     }

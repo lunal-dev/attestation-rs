@@ -1,5 +1,5 @@
 use std::io::{self, Read};
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 use std::io::Write;
 use std::path::PathBuf;
 use std::process;
@@ -24,16 +24,16 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Generate attestation evidence from TEE hardware (Linux only).
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     Attest(AttestArgs),
     /// Verify attestation evidence.
     Verify(VerifyArgs),
     /// Detect the current TEE platform (Linux only).
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     Detect,
 }
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 #[derive(clap::Args)]
 #[group(multiple = false)]
 struct ReportDataGroup {
@@ -50,7 +50,7 @@ struct ReportDataGroup {
     report_data_file: Option<PathBuf>,
 }
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 #[derive(clap::Args)]
 struct AttestArgs {
     /// Platform to attest with. Auto-detects if not specified.
@@ -107,7 +107,7 @@ impl PlatformArg {
     }
 }
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 fn resolve_report_data(group: &ReportDataGroup) -> Result<Vec<u8>, String> {
     if let Some(ref s) = group.report_data {
         Ok(s.as_bytes().to_vec())
@@ -137,15 +137,15 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        #[cfg(feature = "attest")]
+        #[cfg(all(feature = "attest", target_os = "linux"))]
         Commands::Detect => cmd_detect(),
-        #[cfg(feature = "attest")]
+        #[cfg(all(feature = "attest", target_os = "linux"))]
         Commands::Attest(args) => cmd_attest(args).await,
         Commands::Verify(args) => cmd_verify(args).await,
     }
 }
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 fn cmd_detect() {
     match attestation::detect() {
         Ok(platform) => {
@@ -158,7 +158,7 @@ fn cmd_detect() {
     }
 }
 
-#[cfg(feature = "attest")]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 async fn cmd_attest(args: AttestArgs) {
     let report_data = match resolve_report_data(&args.data) {
         Ok(d) => d,
