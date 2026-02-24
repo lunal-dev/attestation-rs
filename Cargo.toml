@@ -6,7 +6,13 @@ description = "Unified TEE attestation evidence generation and verification"
 license = "Apache-2.0"
 
 [features]
-default = []
+default = ["snp", "tdx", "az-snp", "az-tdx"]
+
+# Platform features — gate which TEE platforms are compiled in
+snp = ["dep:sev"]
+tdx = []
+az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
+az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
 attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm"]
@@ -42,7 +48,7 @@ scroll = "0.12"
 # Attest-side dependencies (cross-platform parts)
 libc = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
-sev = { version = "6", default-features = false, features = ["snp", "crypto_nossl"] }
+sev = { version = "6", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
 clap = { version = "4", features = ["derive"], optional = true }
 
@@ -69,23 +75,27 @@ tempfile = "3"
 [[bench]]
 name = "snp"
 harness = false
+required-features = ["snp"]
 
 [[bench]]
 name = "tdx"
 harness = false
+required-features = ["tdx"]
 
 [[bench]]
 name = "az_snp"
 harness = false
+required-features = ["az-snp"]
 
 [[bench]]
 name = "az_tdx"
 harness = false
+required-features = ["az-tdx"]
 
 [[bench]]
 name = "az_snp_attest"
 harness = false
-required-features = ["attest"]
+required-features = ["az-snp", "attest"]
 
 [[example]]
 name = "attest"
