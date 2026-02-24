@@ -15,7 +15,7 @@ pub trait Platform: Send + Sync {
 
     /// Generate attestation evidence from inside the TEE.
     /// `report_data`: caller-supplied nonce (up to 64 bytes) baked into the HW quote.
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     async fn attest(&self, report_data: &[u8]) -> Result<Self::Evidence>;
 
     /// Verify attestation evidence.
@@ -30,7 +30,7 @@ pub trait Platform: Send + Sync {
 #[async_trait]
 pub trait ErasedPlatform: Send + Sync {
     /// Generate evidence as serialized JSON bytes.
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     async fn attest_json(&self, report_data: &[u8]) -> Result<Vec<u8>>;
 
     /// Verify evidence from serialized JSON bytes.
@@ -51,7 +51,7 @@ where
     T: Platform + Send + Sync,
     T::Evidence: 'static,
 {
-    #[cfg(feature = "attest")]
+    #[cfg(all(feature = "attest", target_os = "linux"))]
     async fn attest_json(&self, report_data: &[u8]) -> Result<Vec<u8>> {
         let evidence = self.attest(report_data).await?;
         serde_json::to_vec(&evidence)
@@ -73,18 +73,8 @@ where
     }
 }
 
-#[cfg(feature = "tdx")]
 pub mod tdx;
-
-#[cfg(feature = "snp")]
 pub mod snp;
-
-// Shared TPM types and verification for Azure platforms
-#[cfg(any(feature = "az-tdx", feature = "az-snp"))]
 pub mod tpm_common;
-
-#[cfg(feature = "az-tdx")]
 pub mod az_tdx;
-
-#[cfg(feature = "az-snp")]
 pub mod az_snp;
