@@ -107,8 +107,10 @@ fn bench_tpm_quote_decode(c: &mut Criterion) {
 }
 
 fn bench_tpm_signature_verify(c: &mut Criterion) {
-    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+    let envelope: attestation::types::AttestationEvidence =
         serde_json::from_str(AZ_SNP_EVIDENCE_JSON).unwrap();
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_value(envelope.evidence).unwrap();
     let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(evidence.hcl_report.trim_end_matches('='))
         .unwrap();
@@ -132,16 +134,20 @@ fn bench_tpm_signature_verify(c: &mut Criterion) {
 fn bench_evidence_deserialize(c: &mut Criterion) {
     c.bench_function("az_snp/evidence_deserialize", |b| {
         b.iter(|| {
-            let e: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+            let envelope: attestation::types::AttestationEvidence =
                 serde_json::from_str(black_box(AZ_SNP_EVIDENCE_JSON)).unwrap();
+            let e: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+                serde_json::from_value(envelope.evidence).unwrap();
             black_box(&e);
         });
     });
 }
 
 fn bench_full_pipeline(c: &mut Criterion) {
-    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+    let envelope: attestation::types::AttestationEvidence =
         serde_json::from_str(AZ_SNP_EVIDENCE_JSON).unwrap();
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_value(envelope.evidence).unwrap();
     let params = VerifyParams::default();
     let provider = BenchCertProvider;
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -161,8 +167,10 @@ fn bench_full_pipeline(c: &mut Criterion) {
 }
 
 fn bench_full_pipeline_live(c: &mut Criterion) {
-    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+    let envelope: attestation::types::AttestationEvidence =
         serde_json::from_str(AZ_SNP_LIVE_EVIDENCE_JSON).unwrap();
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_value(envelope.evidence).unwrap();
     let params = VerifyParams::default();
     let provider = BenchCertProvider;
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -182,8 +190,10 @@ fn bench_full_pipeline_live(c: &mut Criterion) {
 }
 
 fn bench_tpm_checks_only(c: &mut Criterion) {
-    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+    let envelope: attestation::types::AttestationEvidence =
         serde_json::from_str(AZ_SNP_EVIDENCE_JSON).unwrap();
+    let evidence: attestation::platforms::az_snp::evidence::AzSnpEvidence =
+        serde_json::from_value(envelope.evidence).unwrap();
     let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(evidence.hcl_report.trim_end_matches('='))
         .unwrap();
