@@ -14,18 +14,16 @@
 //!
 //! **Verifier** (any machine, including WASM):
 //! ```rust,ignore
-//! use attestation::platforms::snp::Snp;
-//! use attestation::platforms::Platform;
+//! use attestation::types::VerifyParams;
 //!
-//! let snp = Snp::with_default_provider();
-//! let result = snp.verify(&evidence, &params).await?;
+//! let result = attestation::verify(&evidence_json, &VerifyParams::default()).await?;
 //! assert!(result.signature_valid);
 //! ```
 //!
 //! **Attester** (inside TEE, with `attest` feature):
 //! ```rust,ignore
 //! let platform = attestation::detect()?;
-//! let evidence_json = platform.attest_json(b"nonce").await?;
+//! let evidence_json = attestation::attest(platform, b"nonce").await?;
 //! ```
 
 pub mod error;
@@ -36,33 +34,105 @@ pub mod utils;
 
 pub use error::{AttestationError, Result};
 pub use types::*;
-pub use platforms::{Platform, ErasedPlatform};
 pub use collateral::{CertProvider, DefaultCertProvider};
 
-/// Detect the current TEE platform and return a boxed Platform impl.
+/// Detect the current TEE platform.
 /// Checks Azure variants first (they also have bare-metal device paths),
 /// then bare-metal variants.
 #[cfg(all(feature = "attest", target_os = "linux"))]
-pub fn detect() -> Result<Box<dyn ErasedPlatform>> {
-    // 1. Check Azure TDX
+pub fn detect() -> Result<PlatformType> {
     if platforms::az_tdx::attest::is_available() {
-        return Ok(Box::new(platforms::az_tdx::AzTdx::new()));
+        return Ok(PlatformType::AzTdx);
     }
 
-    // 2. Check Azure SNP
     if platforms::az_snp::attest::is_available() {
-        return Ok(Box::new(platforms::az_snp::AzSnp::with_default_provider()));
+        return Ok(PlatformType::AzSnp);
     }
 
-    // 3. Check bare-metal TDX
     if platforms::tdx::attest::is_available() {
-        return Ok(Box::new(platforms::tdx::Tdx::new()));
+        return Ok(PlatformType::Tdx);
     }
 
-    // 4. Check bare-metal SNP
     if platforms::snp::attest::is_available() {
-        return Ok(Box::new(platforms::snp::Snp::with_default_provider()));
+        return Ok(PlatformType::Snp);
     }
 
     Err(AttestationError::NoPlatformDetected)
+}
+
+/// Generate attestation evidence and wrap it in a self-describing envelope.
+///
+/// Returns JSON bytes containing an [`AttestationEvidence`] envelope with
+/// the platform tag and platform-specific evidence payload.
+#[cfg(all(feature = "attest", target_os = "linux"))]
+pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8>> {
+    let evidence_value = match platform {
+        PlatformType::Snp => {
+            let evidence = platforms::snp::attest::generate_evidence(report_data).await?;
+            serde_json::to_value(&evidence)
+                .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+        PlatformType::Tdx => {
+            let evidence = platforms::tdx::attest::generate_evidence(report_data).await?;
+            serde_json::to_value(&evidence)
+                .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+        PlatformType::AzSnp => {
+            let evidence = platforms::az_snp::attest::generate_evidence(report_data).await?;
+            serde_json::to_value(&evidence)
+                .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+        PlatformType::AzTdx => {
+            let evidence = platforms::az_tdx::attest::generate_evidence(report_data).await?;
+            serde_json::to_value(&evidence)
+                .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+    };
+
+    let envelope = AttestationEvidence {
+        platform,
+        evidence: evidence_value,
+    };
+
+    serde_json::to_vec(&envelope)
+        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))
+}
+
+/// Verify attestation evidence from a self-describing JSON envelope.
+///
+/// The evidence JSON must be an [`AttestationEvidence`] envelope containing
+/// a `platform` field and an `evidence` payload. The platform is auto-detected
+/// from the envelope and the correct verifier is dispatched automatically.
+pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<VerificationResult> {
+    let envelope: AttestationEvidence = serde_json::from_slice(evidence_json)
+        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+
+    match envelope.platform {
+        PlatformType::Snp => {
+            let evidence: platforms::snp::evidence::SnpEvidence =
+                serde_json::from_value(envelope.evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+            let provider = DefaultCertProvider::new();
+            platforms::snp::verify::verify_evidence(&evidence, params, &provider).await
+        }
+        PlatformType::Tdx => {
+            let evidence: platforms::tdx::evidence::TdxEvidence =
+                serde_json::from_value(envelope.evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+            platforms::tdx::verify::verify_evidence(&evidence, params).await
+        }
+        PlatformType::AzSnp => {
+            let evidence: platforms::az_snp::evidence::AzSnpEvidence =
+                serde_json::from_value(envelope.evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+            let provider = DefaultCertProvider::new();
+            platforms::az_snp::verify::verify_evidence(&evidence, params, &provider).await
+        }
+        PlatformType::AzTdx => {
+            let evidence: platforms::az_tdx::evidence::AzTdxEvidence =
+                serde_json::from_value(envelope.evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+            platforms::az_tdx::verify::verify_evidence(&evidence, params).await
+        }
+    }
 }
