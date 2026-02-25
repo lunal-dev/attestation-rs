@@ -158,7 +158,7 @@ const TDX_TEE_TYPE: u32 = 0x81;
 pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
     let header = QuoteHeader::from_bytes(data)?;
 
-    // H3: Validate TEE type is TDX (0x81)
+    // Validate TEE type is TDX (0x81)
     if header.tee_type != TDX_TEE_TYPE {
         return Err(AttestationError::QuoteParseFailed(format!(
             "invalid TEE type: expected 0x{:02X} (TDX), got 0x{:02X}",
@@ -190,7 +190,7 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
                 .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 size: {}", e)))?
                 as usize;
 
-            // M6: Validate body_size matches expected size for the body type
+            // Validate body_size matches expected size for the body type
             let expected_body_size = match body_type {
                 2 => REPORT_BODY_SIZE,       // TDX 1.0: 584 bytes
                 3 => REPORT_BODY_SIZE + 64,  // TDX 1.5: 648 bytes (584 + 64 for TEE_TCB_SVN2)
@@ -347,7 +347,7 @@ pub async fn verify_evidence(
     // 3. DCAP ECDSA P-256 signature verification
     let sig_valid = verify_quote_signature(&quote_bytes, &quote)?;
 
-    // 4. Check report_data binding (H2: enforce match, H5: propagate error)
+    // 4. Check report_data binding
     let report_data_match = if let Some(expected) = &params.expected_report_data {
         let padded = crate::utils::pad_report_data(expected, 64)?;
         if !crate::utils::constant_time_eq(&quote.body.report_data, &padded) {
@@ -358,7 +358,7 @@ pub async fn verify_evidence(
         None
     };
 
-    // 5. Check MRCONFIGID binding (H2: enforce match)
+    // 5. Check MRCONFIGID binding
     let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
         let mut padded = vec![0u8; 48];
         let len = expected.len().min(48);
@@ -377,7 +377,7 @@ pub async fn verify_evidence(
             .decode(eventlog_b64)
             .map_err(|e| AttestationError::EvidenceDeserialize(format!("eventlog base64: {}", e)))?;
 
-        // M7: Eventlog replay is not yet implemented. Warn the user so they
+        // Eventlog replay is not yet implemented. Warn the user so they
         // know RTMR integrity against the eventlog is NOT verified.
         log::warn!(
             "TDX eventlog present but replay verification is not implemented; \

@@ -33,7 +33,7 @@ pub async fn verify_evidence(
     // 5. TPM signature verification (AK pub key extracted from var_data JWK JSON)
     let tpm_sig_valid = tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
 
-    // 6. TPM nonce check (H2: enforce match)
+    // 6. TPM nonce check
     let tpm_nonce_match = if let Some(expected) = &params.expected_report_data {
         let matched = tpm_common::verify_tpm_nonce(&tpm_msg, expected)?;
         if !matched {
@@ -50,11 +50,10 @@ pub async fn verify_evidence(
     // 8. TDX DCAP quote verification
     let tdx_quote = crate::platforms::tdx::verify::parse_tdx_quote(&td_quote_bytes)?;
 
-    // 8b. C2: Verify TDX quote ECDSA P-256 signature
+    // 8b. Verify TDX quote ECDSA P-256 signature
     crate::platforms::tdx::verify::verify_quote_signature(&td_quote_bytes, &tdx_quote)?;
 
     // 9. HCL var_data binding: td_quote.report_data[..32] == SHA-256(null-trimmed var_data)
-    // M1: Fix error message — this uses SHA-256, not SHA-384
     let var_data_hash = crate::utils::sha256(&hcl.var_data);
     let hcl_binding_valid =
         crate::utils::constant_time_eq(&tdx_quote.body.report_data[..32], &var_data_hash);
@@ -65,7 +64,7 @@ pub async fn verify_evidence(
         ));
     }
 
-    // 10. Init data check: expected_init_data_hash vs PCR[8] (H2: enforce match)
+    // 10. Init data check: expected_init_data_hash vs PCR[8]
     let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
         if tpm_pcrs.len() > 8 {
             let mut padded = vec![0u8; 32];

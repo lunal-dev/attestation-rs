@@ -412,7 +412,6 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
     let nonce = &message[offset..offset + nonce_size];
 
     // Azure vTPM puts raw report_data as the TPM nonce (qualifyingData).
-    // Reference: Trustee az_snp_vtpm verify_tpm_nonce does direct comparison.
     if nonce.len() != expected.len() {
         return Ok(false);
     }

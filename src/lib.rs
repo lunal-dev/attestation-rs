@@ -120,7 +120,7 @@ pub const MAX_EVIDENCE_SIZE: usize = 10 * 1024 * 1024;
 /// a `platform` field and an `evidence` payload. The platform is auto-detected
 /// from the envelope and the correct verifier is dispatched automatically.
 pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<VerificationResult> {
-    // M8: Bounded deserialization — reject oversized evidence before parsing
+    // Bounded deserialization — reject oversized evidence before parsing
     if evidence_json.len() > MAX_EVIDENCE_SIZE {
         return Err(AttestationError::EvidenceTooLarge {
             size: evidence_json.len(),

@@ -66,15 +66,15 @@ pub async fn verify_evidence(
         return Err(AttestationError::VmplCheckFailed(report.vmpl));
     }
 
-    // 8b. M3: Debug policy enforcement
+    // 8b. Debug policy enforcement
     if report.policy.debug_allowed() && !params.allow_debug {
         return Err(AttestationError::DebugPolicyViolation);
     }
 
-    // 8c. M2: VCEK OID cross-validation (chip_id + TCB SPLs)
+    // 8c. VCEK OID cross-validation (chip_id + TCB SPLs)
     verify_vcek_tcb(&report, &vcek_der)?;
 
-    // 8d. M4: Minimum TCB enforcement
+    // 8d. Minimum TCB enforcement
     if let Some(ref min_tcb) = params.min_tcb {
         let tcb = &report.reported_tcb;
         if tcb.bootloader < min_tcb.bootloader
@@ -90,7 +90,7 @@ pub async fn verify_evidence(
         }
     }
 
-    // 9. Check report_data binding (H2: enforce match, H5: propagate error)
+    // 9. Check report_data binding
     let report_data_match = if let Some(expected) = &params.expected_report_data {
         let padded = crate::utils::pad_report_data(expected, 64)?;
         if !crate::utils::constant_time_eq(&report.report_data[..], &padded) {
@@ -101,7 +101,7 @@ pub async fn verify_evidence(
         None
     };
 
-    // 10. Check init_data binding (host_data, 32 bytes) (H2: enforce match)
+    // 10. Check init_data binding (host_data, 32 bytes)
     let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
         let mut padded = vec![0u8; 32];
         let len = expected.len().min(32);
@@ -184,8 +184,8 @@ pub fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<(
     Ok(())
 }
 
-// --- M2: VCEK OID cross-validation ---
-// OID constants from AMD SEV-SNP ABI specification (matches Trustee snp/mod.rs)
+// --- VCEK OID cross-validation ---
+// OID constants from AMD SEV-SNP ABI specification
 const HW_ID_OID: &str = "1.3.6.1.4.1.3704.1.4";
 const UCODE_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.8";
 const SNP_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.3";
@@ -222,7 +222,6 @@ fn get_oid_octets(ext_value: &[u8]) -> Option<&[u8]> {
 
 /// Verify VCEK certificate TCB extensions match the SNP attestation report.
 ///
-/// Reference: Trustee `verify_report_tcb` in `snp/mod.rs:546-595`.
 /// - For "VCEK" certificates: validates chip_id and TCB SPL exact equality.
 /// - For "VLEK" certificates: skips chip_id check, only validates TCB SPLs.
 fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
@@ -260,7 +259,7 @@ fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
         }
     }
 
-    // Validate TCB SPL values (exact equality, matching Trustee)
+    // Validate TCB SPL values (exact equality)
     let checks: &[(&str, u8, &str)] = &[
         (LOADER_SPL_OID, report.reported_tcb.bootloader, "bootloader"),
         (TEE_SPL_OID, report.reported_tcb.tee, "tee"),
