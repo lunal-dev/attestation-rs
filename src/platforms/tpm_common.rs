@@ -70,7 +70,11 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
 
     // Parse var_data header (all fields are little-endian u32)
     let header = &hcl_report[tee_report_end..content_start];
-    let report_type = u32::from_le_bytes(header[8..12].try_into().unwrap());
+    let report_type = u32::from_le_bytes(
+        header[8..12]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("HCL header slice".to_string()))?,
+    );
 
     // Extract content and trim trailing nulls
     let content = &hcl_report[content_start..];
@@ -205,11 +209,19 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     let mut offset = 0;
 
     // TPM2B_PUBLIC.size
-    let _pub_size = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap());
+    let _pub_size = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("TPM2B_PUBLIC size".to_string()))?,
+    );
     offset += 2;
 
     // TPMT_PUBLIC.type
-    let alg_type = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap());
+    let alg_type = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("TPM2B_PUBLIC type".to_string()))?,
+    );
     offset += 2;
 
     if alg_type != 0x0001 {
@@ -221,7 +233,11 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     }
 
     // TPMT_PUBLIC.nameAlg
-    let _name_alg = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap());
+    let _name_alg = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("TPM2B_PUBLIC nameAlg".to_string()))?,
+    );
     offset += 2;
 
     // objectAttributes
@@ -233,7 +249,11 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
             "var_data truncated at authPolicy".to_string(),
         ));
     }
-    let auth_size = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap()) as usize;
+    let auth_size = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("authPolicy size".to_string()))?,
+    ) as usize;
     offset += 2 + auth_size;
 
     // TPMS_RSA_PARMS
@@ -244,7 +264,11 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     }
 
     // symmetric (TPM_ALG_ID)
-    let sym_alg = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap());
+    let sym_alg = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("symmetric alg".to_string()))?,
+    );
     offset += 2;
 
     // If symmetric is not NULL, skip the symmetric definition
@@ -255,7 +279,11 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     }
 
     // scheme (TPMT_RSA_SCHEME): algorithm (2 bytes) + optional hash (2 bytes)
-    let scheme_alg = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap());
+    let scheme_alg = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("scheme alg".to_string()))?,
+    );
     offset += 2;
     if scheme_alg != 0x0010 {
         // Not TPM_ALG_NULL, skip hash algorithm
@@ -268,11 +296,19 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
             "var_data truncated at keyBits".to_string(),
         ));
     }
-    let _key_bits = u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap());
+    let _key_bits = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("keyBits".to_string()))?,
+    );
     offset += 2;
 
     // exponent (4 bytes, 0 means default 65537)
-    let exp_val = u32::from_be_bytes(var_data[offset..offset + 4].try_into().unwrap());
+    let exp_val = u32::from_be_bytes(
+        var_data[offset..offset + 4]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("exponent".to_string()))?,
+    );
     offset += 4;
 
     let exponent = if exp_val == 0 {
@@ -287,8 +323,11 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
             "var_data truncated at unique".to_string(),
         ));
     }
-    let mod_size =
-        u16::from_be_bytes(var_data[offset..offset + 2].try_into().unwrap()) as usize;
+    let mod_size = u16::from_be_bytes(
+        var_data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("modulus size".to_string()))?,
+    ) as usize;
     offset += 2;
 
     if offset + mod_size > var_data.len() {
@@ -323,7 +362,11 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
     }
 
     // Check magic
-    let magic = u32::from_be_bytes(message[0..4].try_into().unwrap());
+    let magic = u32::from_be_bytes(
+        message[0..4]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("TPM magic slice".to_string()))?,
+    );
     if magic != 0xFF544347 {
         return Err(AttestationError::QuoteParseFailed(format!(
             "invalid TPM Attest magic: 0x{:08X}",
@@ -340,8 +383,11 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
             "TPM Attest truncated at qualifiedSigner".to_string(),
         ));
     }
-    let signer_size =
-        u16::from_be_bytes(message[offset..offset + 2].try_into().unwrap()) as usize;
+    let signer_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("qualifiedSigner size".to_string()))?,
+    ) as usize;
     offset += 2 + signer_size;
 
     // extraData: 2-byte size + data (this is the nonce)
@@ -350,8 +396,11 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
             "TPM Attest truncated at extraData".to_string(),
         ));
     }
-    let nonce_size =
-        u16::from_be_bytes(message[offset..offset + 2].try_into().unwrap()) as usize;
+    let nonce_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("extraData size".to_string()))?,
+    ) as usize;
     offset += 2;
 
     if message.len() < offset + nonce_size {
@@ -362,17 +411,12 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
 
     let nonce = &message[offset..offset + nonce_size];
 
-    // Compare nonce with expected report_data (hash comparison)
-    // The nonce is typically the SHA-256 of the report_data
-    let expected_hash = crate::utils::sha256(expected);
-
-    if nonce.len() == expected_hash.len() {
-        Ok(crate::utils::constant_time_eq(nonce, &expected_hash))
-    } else if nonce.len() == expected.len() {
-        Ok(crate::utils::constant_time_eq(nonce, expected))
-    } else {
-        Ok(false)
+    // Azure vTPM puts raw report_data as the TPM nonce (qualifyingData).
+    // Reference: Trustee az_snp_vtpm verify_tpm_nonce does direct comparison.
+    if nonce.len() != expected.len() {
+        return Ok(false);
     }
+    Ok(crate::utils::constant_time_eq(nonce, expected))
 }
 
 /// Verify TPM PCR digest integrity.
@@ -453,8 +497,11 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
             "truncated at qualifiedSigner".to_string(),
         ));
     }
-    let signer_size =
-        u16::from_be_bytes(message[offset..offset + 2].try_into().unwrap()) as usize;
+    let signer_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("qualifiedSigner size".to_string()))?,
+    ) as usize;
     offset += 2 + signer_size;
 
     // extraData (TPM2B_DATA): size(2) + data
@@ -463,8 +510,11 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
             "truncated at extraData".to_string(),
         ));
     }
-    let extra_size =
-        u16::from_be_bytes(message[offset..offset + 2].try_into().unwrap()) as usize;
+    let extra_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("extraData size".to_string()))?,
+    ) as usize;
     offset += 2 + extra_size;
 
     // clockInfo (TPMS_CLOCK_INFO): clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17
@@ -480,8 +530,11 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
             "truncated at PCR selection count".to_string(),
         ));
     }
-    let pcr_selection_count =
-        u32::from_be_bytes(message[offset..offset + 4].try_into().unwrap()) as usize;
+    let pcr_selection_count = u32::from_be_bytes(
+        message[offset..offset + 4]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("PCR selection count".to_string()))?,
+    ) as usize;
     offset += 4;
 
     let mut selected_pcrs = Vec::new();
@@ -493,7 +546,11 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
                 "truncated at PCR selection entry".to_string(),
             ));
         }
-        let _hash_alg = u16::from_be_bytes(message[offset..offset + 2].try_into().unwrap());
+        let _hash_alg = u16::from_be_bytes(
+            message[offset..offset + 2]
+                .try_into()
+                .map_err(|_| AttestationError::QuoteParseFailed("hash alg".to_string()))?,
+        );
         offset += 2;
 
         let select_size = message[offset] as usize;
@@ -523,8 +580,11 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
             "truncated at PCR digest".to_string(),
         ));
     }
-    let digest_size =
-        u16::from_be_bytes(message[offset..offset + 2].try_into().unwrap()) as usize;
+    let digest_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("PCR digest size".to_string()))?,
+    ) as usize;
     offset += 2;
 
     if offset + digest_size > message.len() {
@@ -634,34 +694,33 @@ mod tests {
     }
 
     #[test]
-    fn test_tpm_nonce_valid_sha256_match() {
-        let report_data = b"hello world";
-        let expected_nonce = crate::utils::sha256(report_data);
+    fn test_tpm_nonce_direct_match() {
+        // Azure vTPM puts raw report_data as the TPM nonce (qualifyingData).
+        // Verification uses direct byte comparison.
+        let report_data = b"hello world test nonce";
         let pcr_digest = [0u8; 32];
-        // sizeofSelect=3, select all 24 PCRs (0xFF, 0xFF, 0xFF)
-        let msg = build_tpms_attest(&expected_nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+        let msg = build_tpms_attest(report_data, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
         let result = verify_tpm_nonce(&msg, report_data).unwrap();
-        assert!(result, "nonce should match SHA-256 of report_data");
+        assert!(result, "nonce should match via direct comparison");
     }
 
     #[test]
     fn test_tpm_nonce_mismatch() {
-        let nonce = crate::utils::sha256(b"correct data");
+        let nonce = b"correct data nonce value";
         let pcr_digest = [0u8; 32];
-        let msg = build_tpms_attest(&nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+        let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
         let result = verify_tpm_nonce(&msg, b"wrong data").unwrap();
         assert!(!result, "nonce should not match for different data");
     }
 
     #[test]
-    fn test_tpm_nonce_direct_match() {
-        // When nonce length != 32 (SHA-256 output) but matches expected length,
-        // do direct byte comparison instead of SHA-256 comparison.
-        let nonce = b"short_nonce"; // 11 bytes, not 32
+    fn test_tpm_nonce_length_mismatch() {
+        // When nonce and expected have different lengths, should return false
+        let nonce = b"short";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, nonce.as_slice()).unwrap();
-        assert!(result, "nonce should match via direct comparison");
+        let result = verify_tpm_nonce(&msg, b"much longer expected data").unwrap();
+        assert!(!result, "different length nonce should not match");
     }
 
     #[test]
