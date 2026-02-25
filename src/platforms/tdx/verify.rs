@@ -152,8 +152,19 @@ impl TdxReportBody {
 }
 
 /// Parse a TDX quote from raw bytes. Supports v4 and v5 formats.
+/// Expected TDX TEE type value in the quote header.
+const TDX_TEE_TYPE: u32 = 0x81;
+
 pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
     let header = QuoteHeader::from_bytes(data)?;
+
+    // H3: Validate TEE type is TDX (0x81)
+    if header.tee_type != TDX_TEE_TYPE {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "invalid TEE type: expected 0x{:02X} (TDX), got 0x{:02X}",
+            TDX_TEE_TYPE, header.tee_type
+        )));
+    }
 
     match header.version {
         4 => {
@@ -175,11 +186,33 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
 
             let body_type = data.pread_with::<u16>(QUOTE_HEADER_SIZE, scroll::LE)
                 .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 type: {}", e)))?;
-            let _body_size = data.pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
-                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 size: {}", e)))?;
+            let body_size = data.pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
+                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 size: {}", e)))?
+                as usize;
+
+            // M6: Validate body_size matches expected size for the body type
+            let expected_body_size = match body_type {
+                2 => REPORT_BODY_SIZE,       // TDX 1.0: 584 bytes
+                3 => REPORT_BODY_SIZE + 64,  // TDX 1.5: 648 bytes (584 + 64 for TEE_TCB_SVN2)
+                _ => 0, // will be caught below
+            };
+            if expected_body_size > 0 && body_size != expected_body_size {
+                return Err(AttestationError::QuoteParseFailed(format!(
+                    "v5 body_size {} does not match expected {} for type {}",
+                    body_size, expected_body_size, body_type
+                )));
+            }
 
             let body_offset = QUOTE_HEADER_SIZE + 6;
-            let body = TdxReportBody::from_bytes(&data[body_offset..])?;
+            if data.len() < body_offset + body_size {
+                return Err(AttestationError::QuoteParseFailed(format!(
+                    "v5 quote too short: need {} bytes, have {}",
+                    body_offset + body_size,
+                    data.len()
+                )));
+            }
+
+            let body = TdxReportBody::from_bytes(&data[body_offset..body_offset + body_size])?;
 
             let quote_version = match body_type {
                 2 => QuoteVersion::V5Tdx10,  // TDX 1.0
@@ -214,7 +247,7 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
 /// - QE certification data (variable)
 ///
 /// The signature covers SHA-256(header + body).
-fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bool> {
+pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bool> {
     // Determine where the body ends (and auth data begins)
     let body_end = match quote.quote_version {
         QuoteVersion::V4 => QUOTE_HEADER_SIZE + REPORT_BODY_SIZE,
@@ -314,19 +347,29 @@ pub async fn verify_evidence(
     // 3. DCAP ECDSA P-256 signature verification
     let sig_valid = verify_quote_signature(&quote_bytes, &quote)?;
 
-    // 4. Check report_data binding
-    let report_data_match = params.expected_report_data.as_ref().map(|expected| {
-        let padded = crate::utils::pad_report_data(expected, 64).unwrap_or_default();
-        crate::utils::constant_time_eq(&quote.body.report_data, &padded)
-    });
+    // 4. Check report_data binding (H2: enforce match, H5: propagate error)
+    let report_data_match = if let Some(expected) = &params.expected_report_data {
+        let padded = crate::utils::pad_report_data(expected, 64)?;
+        if !crate::utils::constant_time_eq(&quote.body.report_data, &padded) {
+            return Err(AttestationError::ReportDataMismatch);
+        }
+        Some(true)
+    } else {
+        None
+    };
 
-    // 5. Check MRCONFIGID binding
-    let init_data_match = params.expected_init_data_hash.as_ref().map(|expected| {
+    // 5. Check MRCONFIGID binding (H2: enforce match)
+    let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
         let mut padded = vec![0u8; 48];
         let len = expected.len().min(48);
         padded[..len].copy_from_slice(&expected[..len]);
-        crate::utils::constant_time_eq(&quote.body.mr_config_id, &padded)
-    });
+        if !crate::utils::constant_time_eq(&quote.body.mr_config_id, &padded) {
+            return Err(AttestationError::InitDataMismatch);
+        }
+        Some(true)
+    } else {
+        None
+    };
 
     // 6. Eventlog integrity check (if present)
     if let Some(eventlog_b64) = &evidence.cc_eventlog {
@@ -334,8 +377,12 @@ pub async fn verify_evidence(
             .decode(eventlog_b64)
             .map_err(|e| AttestationError::EvidenceDeserialize(format!("eventlog base64: {}", e)))?;
 
-        // TODO: Replay CCEL events and verify RTMRs match quote
-        // This requires a full TCG eventlog parser
+        // M7: Eventlog replay is not yet implemented. Warn the user so they
+        // know RTMR integrity against the eventlog is NOT verified.
+        log::warn!(
+            "TDX eventlog present but replay verification is not implemented; \
+             RTMR values are NOT verified against the eventlog"
+        );
     }
 
     // 7. Extract claims
