@@ -66,19 +66,53 @@ pub async fn verify_evidence(
         return Err(AttestationError::VmplCheckFailed(report.vmpl));
     }
 
-    // 9. Check report_data binding
-    let report_data_match = params.expected_report_data.as_ref().map(|expected| {
-        let padded = crate::utils::pad_report_data(expected, 64).unwrap_or_default();
-        crate::utils::constant_time_eq(&report.report_data[..], &padded)
-    });
+    // 8b. M3: Debug policy enforcement
+    if report.policy.debug_allowed() && !params.allow_debug {
+        return Err(AttestationError::DebugPolicyViolation);
+    }
 
-    // 10. Check init_data binding (host_data, 32 bytes)
-    let init_data_match = params.expected_init_data_hash.as_ref().map(|expected| {
+    // 8c. M2: VCEK OID cross-validation (chip_id + TCB SPLs)
+    verify_vcek_tcb(&report, &vcek_der)?;
+
+    // 8d. M4: Minimum TCB enforcement
+    if let Some(ref min_tcb) = params.min_tcb {
+        let tcb = &report.reported_tcb;
+        if tcb.bootloader < min_tcb.bootloader
+            || tcb.tee < min_tcb.tee
+            || tcb.snp < min_tcb.snp
+            || tcb.microcode < min_tcb.microcode
+        {
+            return Err(AttestationError::TcbMismatch(format!(
+                "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
+                tcb.bootloader, tcb.tee, tcb.snp, tcb.microcode,
+                min_tcb.bootloader, min_tcb.tee, min_tcb.snp, min_tcb.microcode,
+            )));
+        }
+    }
+
+    // 9. Check report_data binding (H2: enforce match, H5: propagate error)
+    let report_data_match = if let Some(expected) = &params.expected_report_data {
+        let padded = crate::utils::pad_report_data(expected, 64)?;
+        if !crate::utils::constant_time_eq(&report.report_data[..], &padded) {
+            return Err(AttestationError::ReportDataMismatch);
+        }
+        Some(true)
+    } else {
+        None
+    };
+
+    // 10. Check init_data binding (host_data, 32 bytes) (H2: enforce match)
+    let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
         let mut padded = vec![0u8; 32];
         let len = expected.len().min(32);
         padded[..len].copy_from_slice(&expected[..len]);
-        crate::utils::constant_time_eq(&report.host_data[..], &padded)
-    });
+        if !crate::utils::constant_time_eq(&report.host_data[..], &padded) {
+            return Err(AttestationError::InitDataMismatch);
+        }
+        Some(true)
+    } else {
+        None
+    };
 
     // 11. Extract claims
     let claims = extract_claims(&report);
@@ -147,6 +181,110 @@ pub fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<(
     (&vek, &report)
         .verify()
         .map_err(|e| AttestationError::SignatureVerificationFailed(format!("{}", e)))?;
+    Ok(())
+}
+
+// --- M2: VCEK OID cross-validation ---
+// OID constants from AMD SEV-SNP ABI specification (matches Trustee snp/mod.rs)
+const HW_ID_OID: &str = "1.3.6.1.4.1.3704.1.4";
+const UCODE_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.8";
+const SNP_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.3";
+const TEE_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.2";
+const LOADER_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.1";
+
+/// Extract an integer value from a DER-encoded extension value.
+/// AMD VCEK TCB extensions encode SPL values as DER INTEGERs.
+fn get_oid_int(ext_value: &[u8]) -> Option<u8> {
+    // DER INTEGER: tag(0x02) + length(1) + value(1)
+    if ext_value.len() >= 3 && ext_value[0] == 0x02 && ext_value[1] == 0x01 {
+        Some(ext_value[2])
+    } else if ext_value.len() >= 2 && ext_value[0] == 0x02 && ext_value[1] == 0x00 {
+        // Zero-length integer
+        Some(0)
+    } else {
+        None
+    }
+}
+
+/// Extract an octet string value from a DER-encoded extension value.
+/// AMD VCEK HW_ID extension encodes chip_id as a DER OCTET STRING.
+fn get_oid_octets(ext_value: &[u8]) -> Option<&[u8]> {
+    // DER OCTET STRING: tag(0x04) + length + data
+    if ext_value.len() < 2 || ext_value[0] != 0x04 {
+        return None;
+    }
+    let len = ext_value[1] as usize;
+    if ext_value.len() < 2 + len {
+        return None;
+    }
+    Some(&ext_value[2..2 + len])
+}
+
+/// Verify VCEK certificate TCB extensions match the SNP attestation report.
+///
+/// Reference: Trustee `verify_report_tcb` in `snp/mod.rs:546-595`.
+/// - For "VCEK" certificates: validates chip_id and TCB SPL exact equality.
+/// - For "VLEK" certificates: skips chip_id check, only validates TCB SPLs.
+fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
+    use x509_parser::prelude::*;
+
+    let (_, cert) = X509Certificate::from_der(vcek_der)
+        .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse: {}", e)))?;
+
+    // Check common name to determine if this is VCEK or VLEK
+    let cn = cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .unwrap_or("");
+
+    let is_vcek = cn.contains("VCEK");
+
+    // Validate chip_id only for VCEK (not VLEK)
+    if is_vcek {
+        if let Some(ext) = cert
+            .extensions()
+            .iter()
+            .find(|e| e.oid.to_string() == HW_ID_OID)
+        {
+            if let Some(chip_id_bytes) = get_oid_octets(ext.value) {
+                if chip_id_bytes.len() != report.chip_id[..].len()
+                    || !crate::utils::constant_time_eq(chip_id_bytes, &report.chip_id[..])
+                {
+                    return Err(AttestationError::TcbMismatch(
+                        "VCEK chip_id does not match report chip_id".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Validate TCB SPL values (exact equality, matching Trustee)
+    let checks: &[(&str, u8, &str)] = &[
+        (LOADER_SPL_OID, report.reported_tcb.bootloader, "bootloader"),
+        (TEE_SPL_OID, report.reported_tcb.tee, "tee"),
+        (SNP_SPL_OID, report.reported_tcb.snp, "snp"),
+        (UCODE_SPL_OID, report.reported_tcb.microcode, "microcode"),
+    ];
+
+    for &(oid_str, expected, name) in checks {
+        if let Some(ext) = cert
+            .extensions()
+            .iter()
+            .find(|e| e.oid.to_string() == oid_str)
+        {
+            if let Some(cert_val) = get_oid_int(ext.value) {
+                if cert_val != expected {
+                    return Err(AttestationError::TcbMismatch(format!(
+                        "VCEK {} SPL {} does not match report {}",
+                        name, cert_val, expected
+                    )));
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -38,9 +38,13 @@ pub async fn verify_evidence(
     // 6. TPM signature verification (AK pub key extracted from var_data JWK JSON)
     let tpm_sig_valid = tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
 
-    // 7. TPM nonce check
+    // 7. TPM nonce check (H2: enforce match)
     let tpm_nonce_match = if let Some(expected) = &params.expected_report_data {
-        Some(tpm_common::verify_tpm_nonce(&tpm_msg, expected)?)
+        let matched = tpm_common::verify_tpm_nonce(&tpm_msg, expected)?;
+        if !matched {
+            return Err(AttestationError::ReportDataMismatch);
+        }
+        Some(true)
     } else {
         None
     };
@@ -98,22 +102,30 @@ pub async fn verify_evidence(
     };
     cert_chain_result?;
 
+    // 10b. H1: Verify SNP report signature against VCEK
+    crate::platforms::snp::verify::verify_report_signature(&hcl.tee_report, &vcek_der)?;
+
     // 11. VMPL check
     if snp_report.vmpl != 0 {
         return Err(AttestationError::VmplCheckFailed(snp_report.vmpl));
     }
 
-    // 12. Init data check: expected_init_data_hash vs PCR[8]
-    let init_data_match = params.expected_init_data_hash.as_ref().map(|expected| {
+    // 12. Init data check: expected_init_data_hash vs PCR[8] (H2: enforce match)
+    let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
         if tpm_pcrs.len() > 8 {
             let mut padded = vec![0u8; 32];
             let len = expected.len().min(32);
             padded[..len].copy_from_slice(&expected[..len]);
-            crate::utils::constant_time_eq(&tpm_pcrs[8], &padded)
+            if !crate::utils::constant_time_eq(&tpm_pcrs[8], &padded) {
+                return Err(AttestationError::InitDataMismatch);
+            }
+            Some(true)
         } else {
-            false
+            return Err(AttestationError::InitDataMismatch);
         }
-    });
+    } else {
+        None
+    };
 
     // 13. Extract claims
     let snp_claims = crate::platforms::snp::claims::extract_claims(&snp_report);
