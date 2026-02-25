@@ -43,6 +43,10 @@ pub struct VerifyParams {
     pub expected_report_data: Option<Vec<u8>>,
     /// If set, verifier checks init_data / host_data / MRCONFIGID binding.
     pub expected_init_data_hash: Option<Vec<u8>>,
+    /// If true, allow guests launched with debug policy. Default: false.
+    pub allow_debug: bool,
+    /// If set, enforce minimum TCB version for SNP (each component must be >=).
+    pub min_tcb: Option<SnpTcb>,
 }
 
 /// Result of verification — the caller decides pass/fail based on this.
@@ -192,7 +196,7 @@ mod tests {
     fn test_verify_params_with_report_data() {
         let params = VerifyParams {
             expected_report_data: Some(vec![0xAA; 32]),
-            expected_init_data_hash: None,
+            ..Default::default()
         };
         assert!(params.expected_report_data.is_some());
         assert_eq!(params.expected_report_data.unwrap().len(), 32);
@@ -203,6 +207,7 @@ mod tests {
         let params = VerifyParams {
             expected_report_data: Some(vec![0xAA; 64]),
             expected_init_data_hash: Some(vec![0xBB; 32]),
+            ..Default::default()
         };
         assert!(params.expected_report_data.is_some());
         assert!(params.expected_init_data_hash.is_some());

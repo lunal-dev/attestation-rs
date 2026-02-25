@@ -42,6 +42,18 @@ pub enum AttestationError {
     #[error("TCB version mismatch: {0}")]
     TcbMismatch(String),
 
+    #[error("report_data mismatch")]
+    ReportDataMismatch,
+
+    #[error("init_data / host_data mismatch")]
+    InitDataMismatch,
+
+    #[error("guest launched with debug policy enabled")]
+    DebugPolicyViolation,
+
+    #[error("evidence too large: {size} bytes exceeds maximum {max} bytes")]
+    EvidenceTooLarge { size: usize, max: usize },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

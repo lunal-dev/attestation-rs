@@ -9,7 +9,7 @@ license = "Apache-2.0"
 default = ["snp", "tdx", "az-snp", "az-tdx"]
 
 # Platform features — gate which TEE platforms are compiled in
-snp = ["dep:sev"]
+snp = ["dep:sev", "dep:x509-parser"]
 tdx = []
 az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
 az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
@@ -35,9 +35,12 @@ cfg-if = "1"
 # Crypto
 p256 = { version = "0.13", features = ["ecdsa"] }
 p384 = { version = "0.13", features = ["ecdsa"] }
+# hazmat feature needed internally for PrehashVerifier in TDX DCAP signature verification;
+# no hazmat types are re-exported in the public API.
 ecdsa = { version = "0.16", features = ["verifying", "hazmat"] }
 rsa = { version = "0.9", features = ["sha2"] }
 x509-cert = "0.2"
+x509-parser = { version = "0.16", optional = true }
 der = { version = "0.7", features = ["alloc", "oid"] }
 spki = "0.7"
 signature = "2"
