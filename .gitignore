@@ -1,3 +1,5 @@
 /target
 /wasm-test/pkg
 /wasm-test/target
+.claude/
+security-review.md
