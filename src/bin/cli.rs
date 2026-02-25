@@ -116,13 +116,32 @@ fn resolve_report_data(group: &ReportDataGroup) -> Result<Vec<u8>, String> {
 }
 
 fn read_evidence(args: &VerifyArgs) -> Result<Vec<u8>, String> {
+    let max_size = attestation::MAX_EVIDENCE_SIZE;
+
     if let Some(ref path) = args.evidence {
+        let meta = std::fs::metadata(path)
+            .map_err(|e| format!("failed to stat {}: {e}", path.display()))?;
+        if meta.len() > max_size as u64 {
+            return Err(format!(
+                "evidence file too large: {} bytes (max {} bytes)",
+                meta.len(),
+                max_size
+            ));
+        }
         std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))
     } else {
         let mut buf = Vec::new();
         io::stdin()
+            .take(max_size as u64 + 1)
             .read_to_end(&mut buf)
             .map_err(|e| format!("failed to read stdin: {e}"))?;
+        if buf.len() > max_size {
+            return Err(format!(
+                "evidence from stdin too large: {} bytes (max {} bytes)",
+                buf.len(),
+                max_size
+            ));
+        }
         Ok(buf)
     }
 }

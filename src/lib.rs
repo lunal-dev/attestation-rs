@@ -111,12 +111,23 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))
 }
 
+/// Maximum accepted evidence size (10 MiB).
+pub const MAX_EVIDENCE_SIZE: usize = 10 * 1024 * 1024;
+
 /// Verify attestation evidence from a self-describing JSON envelope.
 ///
 /// The evidence JSON must be an [`AttestationEvidence`] envelope containing
 /// a `platform` field and an `evidence` payload. The platform is auto-detected
 /// from the envelope and the correct verifier is dispatched automatically.
 pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<VerificationResult> {
+    // M8: Bounded deserialization — reject oversized evidence before parsing
+    if evidence_json.len() > MAX_EVIDENCE_SIZE {
+        return Err(AttestationError::EvidenceTooLarge {
+            size: evidence_json.len(),
+            max: MAX_EVIDENCE_SIZE,
+        });
+    }
+
     let envelope: AttestationEvidence = serde_json::from_slice(evidence_json)
         .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
 
