@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use p256::ecdsa::signature::hazmat::PrehashVerifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 use scroll::Pread;
 
@@ -54,8 +55,8 @@ pub enum QuoteVersion {
     V5Tdx15,
 }
 
-const QUOTE_HEADER_SIZE: usize = 48;
-const REPORT_BODY_SIZE: usize = 584;
+pub(crate) const QUOTE_HEADER_SIZE: usize = 48;
+pub(crate) const REPORT_BODY_SIZE: usize = 584;
 
 impl QuoteHeader {
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
@@ -249,17 +250,7 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
 /// The signature covers SHA-256(header + body).
 pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bool> {
     // Determine where the body ends (and auth data begins)
-    let body_end = match quote.quote_version {
-        QuoteVersion::V4 => QUOTE_HEADER_SIZE + REPORT_BODY_SIZE,
-        QuoteVersion::V5Tdx10 | QuoteVersion::V5Tdx15 => {
-            // v5: body_size is stored at offset QUOTE_HEADER_SIZE + 2 (after type field)
-            let body_size = quote_bytes
-                .pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
-                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 body size: {}", e)))?
-                as usize;
-            QUOTE_HEADER_SIZE + 6 + body_size // header(48) + type(2) + size(4) + body
-        }
-    };
+    let body_end = super::dcap::compute_body_end(quote_bytes, quote.quote_version)?;
 
     // Need at least sig_data_len(4) + signature(64) + attest_key(64) = 132 bytes of auth data
     if quote_bytes.len() < body_end + 132 {
@@ -321,7 +312,6 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
 
     // Verify: the signature is over the raw SHA-256 hash (pre-hashed)
     // DCAP signs SHA-256(header+body), so we need to use verify_prehash
-    use p256::ecdsa::signature::hazmat::PrehashVerifier;
     match verifying_key.verify_prehash(&hash, &signature) {
         Ok(()) => Ok(true),
         Err(e) => Err(AttestationError::SignatureVerificationFailed(format!(
@@ -346,6 +336,9 @@ pub async fn verify_evidence(
 
     // 3. DCAP ECDSA P-256 signature verification
     let sig_valid = verify_quote_signature(&quote_bytes, &quote)?;
+
+    // 3b. Full DCAP chain verification: PCK cert chain → QE report sig → QE binding
+    super::dcap::verify_dcap_chain(&quote_bytes, quote.quote_version)?;
 
     // 4. Check report_data binding
     let report_data_match = if let Some(expected) = &params.expected_report_data {
@@ -765,5 +758,122 @@ mod tests {
             result.is_err(),
             "truncated auth data should fail verification"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // verify_evidence report_data tests (bare TDX path)
+    // ---------------------------------------------------------------
+
+    fn make_tdx_evidence(quote_bytes: &[u8]) -> TdxEvidence {
+        TdxEvidence {
+            quote: BASE64.encode(quote_bytes),
+            cc_eventlog: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_v4_no_expected_report_data() {
+        let evidence = make_tdx_evidence(V4_QUOTE);
+        let params = VerifyParams::default();
+        let result = verify_evidence(&evidence, &params).await;
+        assert!(result.is_ok(), "verify should succeed: {:?}", result.err());
+        let result = result.unwrap();
+        assert!(result.signature_valid);
+        assert!(result.report_data_match.is_none(), "should be None when no expected value");
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_v4_matching_report_data() {
+        // Extract the actual report_data from the v4 quote fixture
+        let quote = parse_tdx_quote(V4_QUOTE).unwrap();
+        let evidence = make_tdx_evidence(V4_QUOTE);
+
+        // Pass the exact report_data from the quote — should match
+        let params = VerifyParams {
+            expected_report_data: Some(quote.body.report_data.to_vec()),
+            ..Default::default()
+        };
+        let result = verify_evidence(&evidence, &params).await;
+        assert!(result.is_ok(), "verify with matching report_data should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap().report_data_match, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_v4_wrong_report_data_fails() {
+        let evidence = make_tdx_evidence(V4_QUOTE);
+
+        // Pass wrong report_data — should fail with ReportDataMismatch
+        let params = VerifyParams {
+            expected_report_data: Some(vec![0xFF; 64]),
+            ..Default::default()
+        };
+        let result = verify_evidence(&evidence, &params).await;
+        assert!(result.is_err(), "verify with wrong report_data should fail");
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("ReportDataMismatch"), "error should be ReportDataMismatch, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_v4_partial_report_data_padded() {
+        // For bare TDX, report_data is padded to 64 bytes. If the fixture has a
+        // specific pattern, passing just the non-zero prefix should still match
+        // (only if the rest of report_data in the quote is zero-padded).
+        let quote = parse_tdx_quote(V4_QUOTE).unwrap();
+
+        // Find where the non-zero data ends
+        let last_nonzero = quote.body.report_data.iter().rposition(|&b| b != 0);
+        if let Some(end) = last_nonzero {
+            // If the rest after end+1 is all zeros, passing just the prefix should match
+            let suffix_is_zeros = quote.body.report_data[end + 1..].iter().all(|&b| b == 0);
+            if suffix_is_zeros && end < 63 {
+                let prefix = &quote.body.report_data[..=end];
+                let evidence = make_tdx_evidence(V4_QUOTE);
+                let params = VerifyParams {
+                    expected_report_data: Some(prefix.to_vec()),
+                    ..Default::default()
+                };
+                let result = verify_evidence(&evidence, &params).await;
+                assert!(result.is_ok(), "padded partial report_data should match: {:?}", result.err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_v5_matching_report_data() {
+        let quote = parse_tdx_quote(V5_QUOTE).unwrap();
+        let evidence = make_tdx_evidence(V5_QUOTE);
+
+        let params = VerifyParams {
+            expected_report_data: Some(quote.body.report_data.to_vec()),
+            ..Default::default()
+        };
+        let result = verify_evidence(&evidence, &params).await;
+        assert!(result.is_ok(), "v5 verify with matching report_data should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap().report_data_match, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_v5_wrong_report_data_fails() {
+        let evidence = make_tdx_evidence(V5_QUOTE);
+
+        let params = VerifyParams {
+            expected_report_data: Some(vec![0x00; 64]),
+            ..Default::default()
+        };
+        let result = verify_evidence(&evidence, &params).await;
+        assert!(result.is_err(), "v5 verify with wrong report_data should fail");
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_report_data_too_large() {
+        let evidence = make_tdx_evidence(V4_QUOTE);
+
+        // 65 bytes exceeds the 64-byte limit
+        let params = VerifyParams {
+            expected_report_data: Some(vec![0xAA; 65]),
+            ..Default::default()
+        };
+        let result = verify_evidence(&evidence, &params).await;
+        assert!(result.is_err(), "65-byte report_data should be rejected");
     }
 }

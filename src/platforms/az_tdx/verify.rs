@@ -1,8 +1,9 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
 use crate::error::{AttestationError, Result};
+use crate::platforms::tdx::{claims::extract_claims, dcap, verify as tdx_verify};
 use crate::platforms::tpm_common;
-use crate::types::{PlatformType, VerificationResult, VerifyParams};
+use crate::types::{Claims, PlatformType, VerificationResult, VerifyParams};
 
 use super::evidence::AzTdxEvidence;
 
@@ -48,10 +49,13 @@ pub async fn verify_evidence(
     tpm_common::verify_tpm_pcrs(&tpm_msg, &tpm_pcrs)?;
 
     // 8. TDX DCAP quote verification
-    let tdx_quote = crate::platforms::tdx::verify::parse_tdx_quote(&td_quote_bytes)?;
+    let tdx_quote = tdx_verify::parse_tdx_quote(&td_quote_bytes)?;
 
     // 8b. Verify TDX quote ECDSA P-256 signature
-    crate::platforms::tdx::verify::verify_quote_signature(&td_quote_bytes, &tdx_quote)?;
+    tdx_verify::verify_quote_signature(&td_quote_bytes, &tdx_quote)?;
+
+    // 8c. Full DCAP chain verification: PCK cert chain → QE report sig → QE binding
+    dcap::verify_dcap_chain(&td_quote_bytes, tdx_quote.quote_version)?;
 
     // 9. HCL var_data binding: td_quote.report_data[..32] == SHA-256(null-trimmed var_data)
     let var_data_hash = crate::utils::sha256(&hcl.var_data);
@@ -82,7 +86,7 @@ pub async fn verify_evidence(
     };
 
     // 11. Extract TDX claims + TPM PCR values
-    let tdx_claims = crate::platforms::tdx::claims::extract_claims(&tdx_quote);
+    let tdx_claims = extract_claims(&tdx_quote);
     let mut platform_data = tdx_claims.platform_data.clone();
 
     // Add TPM PCR values
@@ -99,7 +103,7 @@ pub async fn verify_evidence(
         .into();
     platform_data["tpm"] = pcr_map;
 
-    let claims = crate::types::Claims {
+    let claims = Claims {
         platform_data,
         ..tdx_claims
     };
