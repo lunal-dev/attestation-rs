@@ -9,6 +9,37 @@ use crate::error::{AttestationError, Result};
 /// Decoded TPM quote components: (signature, message, pcr_values).
 pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
 
+// --- TPM algorithm constants ---
+
+/// TPM_ALG_RSA
+const TPM_ALG_RSA: u16 = 0x0001;
+
+/// TPM_ALG_NULL (used for symmetric and scheme fields)
+const TPM_ALG_NULL: u16 = 0x0010;
+
+/// TPMS_ATTEST magic value: 0xFF544347 ("TCG\xFF")
+const TPM_ATTEST_MAGIC: u32 = 0xFF544347;
+
+/// Default RSA public exponent (65537 = 0x010001).
+/// A zero exponent in TPM2B_PUBLIC means this default value.
+const RSA_DEFAULT_EXPONENT: [u8; 3] = [0x01, 0x00, 0x01];
+
+/// Read a big-endian u16 from a byte slice at the given offset.
+fn read_be_u16(data: &[u8], offset: usize, field: &str) -> Result<u16> {
+    data.get(offset..offset + 2)
+        .and_then(|s| s.try_into().ok())
+        .map(u16::from_be_bytes)
+        .ok_or_else(|| AttestationError::QuoteParseFailed(format!("truncated at {}", field)))
+}
+
+/// Read a big-endian u32 from a byte slice at the given offset.
+fn read_be_u32(data: &[u8], offset: usize, field: &str) -> Result<u32> {
+    data.get(offset..offset + 4)
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_be_bytes)
+        .ok_or_else(|| AttestationError::QuoteParseFailed(format!("truncated at {}", field)))
+}
+
 // --- HCL report parsing ---
 
 /// HCL report header magic: "HCLA".
@@ -209,51 +240,29 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     let mut offset = 0;
 
     // TPM2B_PUBLIC.size
-    let _pub_size = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("TPM2B_PUBLIC size".to_string()))?,
-    );
+    let _pub_size = read_be_u16(var_data, offset, "TPM2B_PUBLIC size")?;
     offset += 2;
 
     // TPMT_PUBLIC.type
-    let alg_type = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("TPM2B_PUBLIC type".to_string()))?,
-    );
+    let alg_type = read_be_u16(var_data, offset, "TPM2B_PUBLIC type")?;
     offset += 2;
 
-    if alg_type != 0x0001 {
-        // TPM_ALG_RSA = 0x0001
+    if alg_type != TPM_ALG_RSA {
         return Err(AttestationError::SignatureVerificationFailed(format!(
-            "AK key type 0x{:04x} is not RSA (expected 0x0001)",
-            alg_type
+            "AK key type 0x{:04x} is not RSA (expected 0x{:04x})",
+            alg_type, TPM_ALG_RSA
         )));
     }
 
     // TPMT_PUBLIC.nameAlg
-    let _name_alg = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("TPM2B_PUBLIC nameAlg".to_string()))?,
-    );
+    let _name_alg = read_be_u16(var_data, offset, "nameAlg")?;
     offset += 2;
 
     // objectAttributes
     offset += 4;
 
     // authPolicy (TPM2B_DIGEST): 2-byte size + data
-    if offset + 2 > var_data.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "var_data truncated at authPolicy".to_string(),
-        ));
-    }
-    let auth_size = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("authPolicy size".to_string()))?,
-    ) as usize;
+    let auth_size = read_be_u16(var_data, offset, "authPolicy size")? as usize;
     offset += 2 + auth_size;
 
     // TPMS_RSA_PARMS
@@ -264,30 +273,20 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     }
 
     // symmetric (TPM_ALG_ID)
-    let sym_alg = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("symmetric alg".to_string()))?,
-    );
+    let sym_alg = read_be_u16(var_data, offset, "symmetric alg")?;
     offset += 2;
 
     // If symmetric is not NULL, skip the symmetric definition
-    if sym_alg != 0x0010 {
-        // TPM_ALG_NULL
+    if sym_alg != TPM_ALG_NULL {
         // Skip symmetric algorithm, key bits, and mode (2 + 2 + 2 = 6 bytes)
         offset += 6;
     }
 
     // scheme (TPMT_RSA_SCHEME): algorithm (2 bytes) + optional hash (2 bytes)
-    let scheme_alg = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("scheme alg".to_string()))?,
-    );
+    let scheme_alg = read_be_u16(var_data, offset, "scheme alg")?;
     offset += 2;
-    if scheme_alg != 0x0010 {
-        // Not TPM_ALG_NULL, skip hash algorithm
-        offset += 2;
+    if scheme_alg != TPM_ALG_NULL {
+        offset += 2; // skip hash algorithm
     }
 
     // keyBits
@@ -296,46 +295,27 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
             "var_data truncated at keyBits".to_string(),
         ));
     }
-    let _key_bits = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("keyBits".to_string()))?,
-    );
+    let _key_bits = read_be_u16(var_data, offset, "keyBits")?;
     offset += 2;
 
     // exponent (4 bytes, 0 means default 65537)
-    let exp_val = u32::from_be_bytes(
-        var_data[offset..offset + 4]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("exponent".to_string()))?,
-    );
+    let exp_val = read_be_u32(var_data, offset, "exponent")?;
     offset += 4;
 
     let exponent = if exp_val == 0 {
-        vec![0x01, 0x00, 0x01] // 65537
+        RSA_DEFAULT_EXPONENT.to_vec()
     } else {
         exp_val.to_be_bytes().to_vec()
     };
 
     // TPM2B_PUBLIC_KEY_RSA (unique): 2-byte size + modulus
-    if offset + 2 > var_data.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "var_data truncated at unique".to_string(),
-        ));
-    }
-    let mod_size = u16::from_be_bytes(
-        var_data[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("modulus size".to_string()))?,
-    ) as usize;
+    let mod_size = read_be_u16(var_data, offset, "modulus size")? as usize;
     offset += 2;
 
     if offset + mod_size > var_data.len() {
         return Err(AttestationError::QuoteParseFailed(format!(
             "var_data truncated at modulus: need {} bytes at offset {}, have {}",
-            mod_size,
-            offset,
-            var_data.len()
+            mod_size, offset, var_data.len()
         )));
     }
 
@@ -346,15 +326,6 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
 
 /// Verify TPM nonce matches expected report_data.
 pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
-    // TPM Attest structure (TPMS_ATTEST):
-    // - magic (4 bytes): 0xFF544347 ("TCG\xFF")
-    // - type (2 bytes): TPM_ST_ATTEST_QUOTE
-    // - qualifiedSigner (variable)
-    // - extraData (variable) <-- this contains the nonce
-    // - clockInfo (17 bytes)
-    // - firmwareVersion (8 bytes)
-    // - attested (variable)
-
     if message.len() < 10 {
         return Err(AttestationError::QuoteParseFailed(
             "TPM Attest message too short".to_string(),
@@ -362,45 +333,23 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
     }
 
     // Check magic
-    let magic = u32::from_be_bytes(
-        message[0..4]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("TPM magic slice".to_string()))?,
-    );
-    if magic != 0xFF544347 {
+    let magic = read_be_u32(message, 0, "TPM magic")?;
+    if magic != TPM_ATTEST_MAGIC {
         return Err(AttestationError::QuoteParseFailed(format!(
             "invalid TPM Attest magic: 0x{:08X}",
             magic
         )));
     }
 
-    // Skip type (2 bytes), then parse qualifiedSigner (TPM2B_NAME)
+    // Skip magic(4) + type(2), then parse qualifiedSigner (TPM2B_NAME)
     let mut offset = 6;
 
     // qualifiedSigner: 2-byte size + data
-    if message.len() < offset + 2 {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM Attest truncated at qualifiedSigner".to_string(),
-        ));
-    }
-    let signer_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("qualifiedSigner size".to_string()))?,
-    ) as usize;
+    let signer_size = read_be_u16(message, offset, "qualifiedSigner size")? as usize;
     offset += 2 + signer_size;
 
     // extraData: 2-byte size + data (this is the nonce)
-    if message.len() < offset + 2 {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM Attest truncated at extraData".to_string(),
-        ));
-    }
-    let nonce_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("extraData size".to_string()))?,
-    ) as usize;
+    let nonce_size = read_be_u16(message, offset, "extraData size")? as usize;
     offset += 2;
 
     if message.len() < offset + nonce_size {
@@ -491,29 +440,11 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
     let mut offset = 6;
 
     // qualifiedSigner (TPM2B_NAME): size(2) + data
-    if offset + 2 > message.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "truncated at qualifiedSigner".to_string(),
-        ));
-    }
-    let signer_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("qualifiedSigner size".to_string()))?,
-    ) as usize;
+    let signer_size = read_be_u16(message, offset, "qualifiedSigner size")? as usize;
     offset += 2 + signer_size;
 
     // extraData (TPM2B_DATA): size(2) + data
-    if offset + 2 > message.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "truncated at extraData".to_string(),
-        ));
-    }
-    let extra_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("extraData size".to_string()))?,
-    ) as usize;
+    let extra_size = read_be_u16(message, offset, "extraData size")? as usize;
     offset += 2 + extra_size;
 
     // clockInfo (TPMS_CLOCK_INFO): clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17
@@ -524,34 +455,21 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
 
     // Now we're at the TPMS_QUOTE_INFO (attested data)
     // TPML_PCR_SELECTION: count(4) + selections
-    if offset + 4 > message.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "truncated at PCR selection count".to_string(),
-        ));
-    }
-    let pcr_selection_count = u32::from_be_bytes(
-        message[offset..offset + 4]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("PCR selection count".to_string()))?,
-    ) as usize;
+    let pcr_selection_count = read_be_u32(message, offset, "PCR selection count")? as usize;
     offset += 4;
 
     let mut selected_pcrs = Vec::new();
 
     for _ in 0..pcr_selection_count {
         // TPMS_PCR_SELECTION: hash(2) + sizeofSelect(1) + pcrSelect(sizeofSelect)
-        if offset + 3 > message.len() {
-            return Err(AttestationError::QuoteParseFailed(
-                "truncated at PCR selection entry".to_string(),
-            ));
-        }
-        let _hash_alg = u16::from_be_bytes(
-            message[offset..offset + 2]
-                .try_into()
-                .map_err(|_| AttestationError::QuoteParseFailed("hash alg".to_string()))?,
-        );
+        let _hash_alg = read_be_u16(message, offset, "PCR hash alg")?;
         offset += 2;
 
+        if offset >= message.len() {
+            return Err(AttestationError::QuoteParseFailed(
+                "truncated at PCR selection size".to_string(),
+            ));
+        }
         let select_size = message[offset] as usize;
         offset += 1;
 
@@ -574,16 +492,7 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
     }
 
     // TPM2B_DIGEST (pcrDigest): size(2) + data
-    if offset + 2 > message.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "truncated at PCR digest".to_string(),
-        ));
-    }
-    let digest_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("PCR digest size".to_string()))?,
-    ) as usize;
+    let digest_size = read_be_u16(message, offset, "PCR digest size")? as usize;
     offset += 2;
 
     if offset + digest_size > message.len() {
