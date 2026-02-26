@@ -242,6 +242,196 @@ impl Default for DefaultCertProvider {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TDX DCAP collateral provider (Intel PCS v4)
+// ---------------------------------------------------------------------------
+
+/// Trait for fetching Intel TDX DCAP collateral (TCB Info, QE Identity, CRLs).
+///
+/// The library ships a default impl that fetches from Intel PCS v4.
+/// Users can plug in their own (offline bundles, caching proxies, etc.).
+#[async_trait]
+pub trait TdxCollateralProvider: Send + Sync {
+    /// Fetch TDX TCB Info JSON for a given FMSPC.
+    async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>>;
+
+    /// Fetch the QE Identity JSON.
+    async fn get_qe_identity(&self) -> Result<Vec<u8>>;
+
+    /// Fetch the Intel SGX Root CA CRL (DER-encoded).
+    async fn get_root_ca_crl(&self) -> Result<Vec<u8>>;
+
+    /// Fetch the PCK CRL for a given CA type ("platform" or "processor").
+    async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>>;
+}
+
+/// Default TDX collateral provider: fetches from Intel PCS v4 with caching.
+pub struct DefaultTdxCollateralProvider {
+    #[cfg(not(target_arch = "wasm32"))]
+    client: reqwest::Client,
+    cache: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, CachedCert>>>,
+}
+
+impl DefaultTdxCollateralProvider {
+    pub fn new() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            client: reqwest::Client::new(),
+            cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    fn get_cached(&self, key: &str) -> Option<Vec<u8>> {
+        let cache = self.cache.read().ok()?;
+        let entry = cache.get(key)?;
+        if entry.is_expired(CACHE_TTL) {
+            None
+        } else {
+            Some(entry.data.clone())
+        }
+    }
+
+    #[allow(dead_code)]
+    fn set_cached(&self, key: String, data: Vec<u8>) {
+        if let Ok(mut cache) = self.cache.write() {
+            cache.insert(
+                key,
+                CachedCert {
+                    data,
+                    fetched_at: std::time::Instant::now(),
+                },
+            );
+        }
+    }
+
+    /// Intel PCS v4 TDX TCB Info URL.
+    pub fn tcb_info_url(fmspc: &str) -> String {
+        format!(
+            "https://api.trustedservices.intel.com/sgx/certification/v4/tcb?fmspc={}",
+            fmspc
+        )
+    }
+
+    /// Intel PCS v4 QE Identity URL.
+    pub fn qe_identity_url() -> String {
+        "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity".to_string()
+    }
+
+    /// Intel SGX Root CA CRL URL (DER format).
+    pub fn root_ca_crl_url() -> String {
+        "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der".to_string()
+    }
+
+    /// Intel PCS v4 PCK CRL URL.
+    pub fn pck_crl_url(ca: &str) -> String {
+        format!(
+            "https://api.trustedservices.intel.com/sgx/certification/v4/pckcrl?ca={}",
+            ca
+        )
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DefaultTdxCollateralProvider {
+    async fn fetch(&self, url: &str) -> Result<Vec<u8>> {
+        if let Some(cached) = self.get_cached(url) {
+            return Ok(cached);
+        }
+
+        let bytes = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("HTTP request: {}", e))
+            })?
+            .error_for_status()
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
+            })?
+            .bytes()
+            .await
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
+            })?
+            .to_vec();
+
+        self.set_cached(url.to_string(), bytes.clone());
+        Ok(bytes)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl TdxCollateralProvider for DefaultTdxCollateralProvider {
+    async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>> {
+        self.fetch(&Self::tcb_info_url(fmspc)).await
+    }
+
+    async fn get_qe_identity(&self) -> Result<Vec<u8>> {
+        self.fetch(&Self::qe_identity_url()).await
+    }
+
+    async fn get_root_ca_crl(&self) -> Result<Vec<u8>> {
+        self.fetch(&Self::root_ca_crl_url()).await
+    }
+
+    async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>> {
+        self.fetch(&Self::pck_crl_url(ca)).await
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait]
+impl TdxCollateralProvider for DefaultTdxCollateralProvider {
+    async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>> {
+        let url = Self::tcb_info_url(fmspc);
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+        Err(crate::error::AttestationError::CertFetchError(
+            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
+        ))
+    }
+
+    async fn get_qe_identity(&self) -> Result<Vec<u8>> {
+        let url = Self::qe_identity_url();
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+        Err(crate::error::AttestationError::CertFetchError(
+            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
+        ))
+    }
+
+    async fn get_root_ca_crl(&self) -> Result<Vec<u8>> {
+        let url = Self::root_ca_crl_url();
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+        Err(crate::error::AttestationError::CertFetchError(
+            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
+        ))
+    }
+
+    async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>> {
+        let url = Self::pck_crl_url(ca);
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+        Err(crate::error::AttestationError::CertFetchError(
+            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
+        ))
+    }
+}
+
+impl Default for DefaultTdxCollateralProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +596,69 @@ mod tests {
         // Both should have empty caches
         assert!(p1.get_cached("nonexistent").is_none());
         assert!(p2.get_cached("nonexistent").is_none());
+    }
+
+    // --- TDX collateral provider tests ---
+
+    #[test]
+    fn test_tdx_tcb_info_url() {
+        let url = DefaultTdxCollateralProvider::tcb_info_url("00906ED50000");
+        assert_eq!(
+            url,
+            "https://api.trustedservices.intel.com/sgx/certification/v4/tcb?fmspc=00906ED50000"
+        );
+    }
+
+    #[test]
+    fn test_tdx_qe_identity_url() {
+        let url = DefaultTdxCollateralProvider::qe_identity_url();
+        assert_eq!(
+            url,
+            "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity"
+        );
+    }
+
+    #[test]
+    fn test_tdx_root_ca_crl_url() {
+        let url = DefaultTdxCollateralProvider::root_ca_crl_url();
+        assert_eq!(
+            url,
+            "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der"
+        );
+    }
+
+    #[test]
+    fn test_tdx_pck_crl_url() {
+        let url = DefaultTdxCollateralProvider::pck_crl_url("platform");
+        assert_eq!(
+            url,
+            "https://api.trustedservices.intel.com/sgx/certification/v4/pckcrl?ca=platform"
+        );
+
+        let url = DefaultTdxCollateralProvider::pck_crl_url("processor");
+        assert_eq!(
+            url,
+            "https://api.trustedservices.intel.com/sgx/certification/v4/pckcrl?ca=processor"
+        );
+    }
+
+    #[test]
+    fn test_tdx_collateral_provider_creation() {
+        let p1 = DefaultTdxCollateralProvider::new();
+        let p2 = DefaultTdxCollateralProvider::default();
+
+        assert!(p1.get_cached("nonexistent").is_none());
+        assert!(p2.get_cached("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_tdx_collateral_provider_cache() {
+        let provider = DefaultTdxCollateralProvider::new();
+
+        provider.set_cached("tcb-info".to_string(), vec![1, 2, 3]);
+        assert_eq!(provider.get_cached("tcb-info").unwrap(), vec![1, 2, 3]);
+
+        // Different key should miss
+        assert!(provider.get_cached("other").is_none());
     }
 }
