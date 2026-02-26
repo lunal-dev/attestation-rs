@@ -1,12 +1,61 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
-use az_tdx_vtpm::{hcl, imds, is_tdx_cvm, tdx, vtpm};
+use az_tdx_vtpm::{hcl, is_tdx_cvm, tdx, vtpm};
+use zerocopy::IntoBytes;
 
 use crate::error::{AttestationError, Result};
 use crate::platforms::tpm_common::TpmQuote;
 use crate::utils::pad_report_data;
 
 use super::evidence::AzTdxEvidence;
+
+const IMDS_QUOTE_URL: &str = "http://169.254.169.254/acc/tdquote";
+
+/// Fetch TD quote from Azure IMDS, working around the ureq v3 Content-Type issue
+/// where `application/json; charset=utf-8` is rejected by IMDS (requires exactly
+/// `application/json`).
+async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
+    let report_b64 = BASE64URL.encode(td_report.as_bytes());
+    let body = serde_json::json!({ "report": report_b64 });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(IMDS_QUOTE_URL)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            AttestationError::HardwareAccessFailed(format!("IMDS POST failed: {}", e))
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "IMDS returned {}: {}",
+            status, body_text
+        )));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct QuoteResponse {
+        quote: String,
+    }
+
+    let quote_resp: QuoteResponse = response.json().await.map_err(|e| {
+        AttestationError::HardwareAccessFailed(format!("IMDS response parse failed: {}", e))
+    })?;
+
+    BASE64URL
+        .decode(quote_resp.quote.trim_end_matches('='))
+        .map_err(|e| {
+            AttestationError::HardwareAccessFailed(format!(
+                "IMDS quote base64 decode failed: {}",
+                e
+            ))
+        })
+}
 
 /// Check if Azure TDX platform is available.
 pub fn is_available() -> bool {
@@ -53,9 +102,7 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
     })?;
 
     // 3. Get TD quote from Azure IMDS (signed by Intel QE)
-    let td_quote_bytes = imds::get_td_quote(&td_report).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("imds::get_td_quote failed: {}", e))
-    })?;
+    let td_quote_bytes = get_td_quote_from_imds(&td_report).await?;
 
     // 4. Generate TPM quote with report_data as nonce
     let quote = vtpm::get_quote(report_data).map_err(|e| {

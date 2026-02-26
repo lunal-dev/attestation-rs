@@ -10,12 +10,12 @@ default = ["snp", "tdx", "az-snp", "az-tdx"]
 
 # Platform features — gate which TEE platforms are compiled in
 snp = ["dep:sev", "dep:x509-parser"]
-tdx = []
+tdx = ["dep:x509-parser"]
 az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
 az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm"]
+attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
 cli = ["dep:clap"]
@@ -53,6 +53,7 @@ libc = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
 sev = { version = "6", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
+zerocopy = { version = "0.8", optional = true, features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
 
 # Native (non-WASM) dependencies — needed for cert fetching on any OS
