@@ -145,6 +145,11 @@ pub async fn verify_evidence(
         .into();
     platform_data["tpm"] = pcr_map;
 
+    // Add TPM nonce (user's custom report_data) to output
+    if let Ok(nonce) = tpm_common::extract_tpm_nonce(&tpm_msg) {
+        platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+    }
+
     let claims = crate::types::Claims {
         platform_data,
         ..snp_claims

@@ -367,6 +367,67 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
     Ok(crate::utils::constant_time_eq(nonce, expected))
 }
 
+/// Extract the TPM nonce (extraData / qualifyingData) from a TPMS_ATTEST message.
+///
+/// On Azure vTPM platforms the user's custom report_data is embedded as
+/// the TPM nonce. This function returns the raw nonce bytes so callers
+/// can surface it in verification output.
+pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
+    if message.len() < 10 {
+        return Err(AttestationError::QuoteParseFailed(
+            "TPM Attest message too short".to_string(),
+        ));
+    }
+
+    let magic = u32::from_be_bytes(
+        message[0..4]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("TPM magic slice".to_string()))?,
+    );
+    if magic != 0xFF544347 {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "invalid TPM Attest magic: 0x{:08X}",
+            magic
+        )));
+    }
+
+    // Skip type (2 bytes), then parse qualifiedSigner (TPM2B_NAME)
+    let mut offset = 6;
+
+    if message.len() < offset + 2 {
+        return Err(AttestationError::QuoteParseFailed(
+            "TPM Attest truncated at qualifiedSigner".to_string(),
+        ));
+    }
+    let signer_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("qualifiedSigner size".to_string()))?,
+    ) as usize;
+    offset += 2 + signer_size;
+
+    // extraData: 2-byte size + data (this is the nonce)
+    if message.len() < offset + 2 {
+        return Err(AttestationError::QuoteParseFailed(
+            "TPM Attest truncated at extraData".to_string(),
+        ));
+    }
+    let nonce_size = u16::from_be_bytes(
+        message[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("extraData size".to_string()))?,
+    ) as usize;
+    offset += 2;
+
+    if message.len() < offset + nonce_size {
+        return Err(AttestationError::QuoteParseFailed(
+            "TPM Attest truncated at nonce data".to_string(),
+        ));
+    }
+
+    Ok(message[offset..offset + nonce_size].to_vec())
+}
+
 /// Verify TPM PCR digest integrity.
 ///
 /// Parses the PCR selection and digest from the TPMS_ATTEST message,
