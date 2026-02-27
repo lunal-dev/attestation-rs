@@ -109,10 +109,7 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
 
     // Extract content and trim trailing nulls
     let content = &hcl_report[content_start..];
-    let trimmed_len = content
-        .iter()
-        .rposition(|&b| b != 0)
-        .map_or(0, |i| i + 1);
+    let trimmed_len = content.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
 
     Ok(HclReportData {
         tee_report,
@@ -179,11 +176,7 @@ pub struct TpmQuote {
 /// its Attestation Key (AK). The AK public key is embedded in the HCL
 /// report's variable data, either as JWK JSON (real Azure format) or
 /// as a TPM2B_PUBLIC structure (synthetic test data).
-pub fn verify_tpm_signature(
-    signature: &[u8],
-    message: &[u8],
-    var_data: &[u8],
-) -> Result<bool> {
+pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -> Result<bool> {
     // Extract the RSA public key: try JWK JSON first, fall back to TPM2B_PUBLIC
     let (modulus, exponent) = extract_ak_pub_from_jwk_json(var_data)
         .or_else(|_| extract_ak_pub_from_var_data(var_data))?;
@@ -315,7 +308,9 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     if offset + mod_size > var_data.len() {
         return Err(AttestationError::QuoteParseFailed(format!(
             "var_data truncated at modulus: need {} bytes at offset {}, have {}",
-            mod_size, offset, var_data.len()
+            mod_size,
+            offset,
+            var_data.len()
         )));
     }
 
@@ -324,15 +319,19 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     Ok((modulus, exponent))
 }
 
-/// Verify TPM nonce matches expected report_data.
-pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
+/// Extract the TPM nonce (extraData / qualifyingData) from a TPMS_ATTEST message.
+///
+/// Parses the TPMS_ATTEST structure to reach the extraData field:
+///   magic (4) + type (2) + qualifiedSigner (TPM2B) + extraData (TPM2B) + ...
+///
+/// On Azure vTPM platforms the user's custom report_data is embedded here.
+pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
     if message.len() < 10 {
         return Err(AttestationError::QuoteParseFailed(
             "TPM Attest message too short".to_string(),
         ));
     }
 
-    // Check magic
     let magic = read_be_u32(message, 0, "TPM magic")?;
     if magic != TPM_ATTEST_MAGIC {
         return Err(AttestationError::QuoteParseFailed(format!(
@@ -341,14 +340,12 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
         )));
     }
 
-    // Skip magic(4) + type(2), then parse qualifiedSigner (TPM2B_NAME)
+    // Skip magic(4) + type(2), then skip qualifiedSigner (TPM2B_NAME)
     let mut offset = 6;
-
-    // qualifiedSigner: 2-byte size + data
     let signer_size = read_be_u16(message, offset, "qualifiedSigner size")? as usize;
     offset += 2 + signer_size;
 
-    // extraData: 2-byte size + data (this is the nonce)
+    // extraData (TPM2B): 2-byte size + nonce bytes
     let nonce_size = read_be_u16(message, offset, "extraData size")? as usize;
     offset += 2;
 
@@ -358,74 +355,16 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
         ));
     }
 
-    let nonce = &message[offset..offset + nonce_size];
+    Ok(message[offset..offset + nonce_size].to_vec())
+}
 
-    // Azure vTPM puts raw report_data as the TPM nonce (qualifyingData).
+/// Verify TPM nonce matches expected report_data.
+pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
+    let nonce = extract_tpm_nonce(message)?;
     if nonce.len() != expected.len() {
         return Ok(false);
     }
-    Ok(crate::utils::constant_time_eq(nonce, expected))
-}
-
-/// Extract the TPM nonce (extraData / qualifyingData) from a TPMS_ATTEST message.
-///
-/// On Azure vTPM platforms the user's custom report_data is embedded as
-/// the TPM nonce. This function returns the raw nonce bytes so callers
-/// can surface it in verification output.
-pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
-    if message.len() < 10 {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM Attest message too short".to_string(),
-        ));
-    }
-
-    let magic = u32::from_be_bytes(
-        message[0..4]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("TPM magic slice".to_string()))?,
-    );
-    if magic != 0xFF544347 {
-        return Err(AttestationError::QuoteParseFailed(format!(
-            "invalid TPM Attest magic: 0x{:08X}",
-            magic
-        )));
-    }
-
-    // Skip type (2 bytes), then parse qualifiedSigner (TPM2B_NAME)
-    let mut offset = 6;
-
-    if message.len() < offset + 2 {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM Attest truncated at qualifiedSigner".to_string(),
-        ));
-    }
-    let signer_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("qualifiedSigner size".to_string()))?,
-    ) as usize;
-    offset += 2 + signer_size;
-
-    // extraData: 2-byte size + data (this is the nonce)
-    if message.len() < offset + 2 {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM Attest truncated at extraData".to_string(),
-        ));
-    }
-    let nonce_size = u16::from_be_bytes(
-        message[offset..offset + 2]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("extraData size".to_string()))?,
-    ) as usize;
-    offset += 2;
-
-    if message.len() < offset + nonce_size {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM Attest truncated at nonce data".to_string(),
-        ));
-    }
-
-    Ok(message[offset..offset + nonce_size].to_vec())
+    Ok(crate::utils::constant_time_eq(&nonce, expected))
 }
 
 /// Verify TPM PCR digest integrity.
@@ -650,9 +589,7 @@ mod tests {
 
     #[test]
     fn test_tpm_nonce_parse_bad_magic() {
-        let msg = vec![
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
+        let msg = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         assert!(verify_tpm_nonce(&msg, b"test").is_err());
     }
 
@@ -703,7 +640,6 @@ mod tests {
     fn test_tpm_nonce_truncated_at_extra_data() {
         let mut msg = vec![0xFF, 0x54, 0x43, 0x47, 0x80, 0x18];
         msg.extend_from_slice(&[0x00, 0x00]); // qualifiedSigner size=0
-        // No extraData follows
         assert!(verify_tpm_nonce(&msg, b"test").is_err());
     }
 
@@ -726,7 +662,11 @@ mod tests {
         let msg = build_tpms_attest(&nonce, &[3, 0xFF, 0x00, 0x00], &expected_digest);
 
         let result = verify_tpm_pcrs(&msg, &pcrs);
-        assert!(result.is_ok(), "valid PCR digest should pass: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "valid PCR digest should pass: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -790,7 +730,11 @@ mod tests {
 
         let (extracted_mod, extracted_exp) = extract_ak_pub_from_var_data(&var_data).unwrap();
         assert_eq!(extracted_mod, modulus, "modulus should match");
-        assert_eq!(extracted_exp, vec![0x01, 0x00, 0x01], "exponent should be 65537");
+        assert_eq!(
+            extracted_exp,
+            vec![0x01, 0x00, 0x01],
+            "exponent should be 65537"
+        );
     }
 
     #[test]
@@ -840,7 +784,11 @@ mod tests {
         let result = extract_ak_pub_from_var_data(&var_data);
         assert!(result.is_err(), "non-RSA key type should be rejected");
         let err_msg = format!("{:?}", result.err().unwrap());
-        assert!(err_msg.contains("not RSA"), "error should mention RSA: {}", err_msg);
+        assert!(
+            err_msg.contains("not RSA"),
+            "error should mention RSA: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -850,7 +798,7 @@ mod tests {
         content.extend_from_slice(&[0x00, 0x01]); // RSA
         content.extend_from_slice(&[0x00, 0x0B]); // SHA-256
         content.extend_from_slice(&[0x00; 4]); // objectAttributes
-        // No authPolicy follows
+                                               // No authPolicy follows
 
         var_data.extend_from_slice(&(content.len() as u16).to_be_bytes());
         var_data.extend_from_slice(&content);
@@ -911,10 +859,7 @@ mod tests {
         let quote = TpmQuote {
             signature: "deadbeef".to_string(),
             message: "cafebabe".to_string(),
-            pcrs: vec![
-                "00".repeat(32),
-                "ff".repeat(32),
-            ],
+            pcrs: vec!["00".repeat(32), "ff".repeat(32)],
         };
 
         let (sig, msg, pcrs) = decode_tpm_quote(&quote).unwrap();
