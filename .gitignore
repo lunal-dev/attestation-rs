@@ -3,3 +3,4 @@
 /wasm-test/target
 .claude/
 security-review.md
+patches/

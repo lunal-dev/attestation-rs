@@ -164,6 +164,7 @@ dependencies = [
  "tokio",
  "x509-cert",
  "x509-parser",
+ "zerocopy",
 ]
 
 [[package]]

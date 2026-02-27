@@ -98,6 +98,47 @@ pub enum TcbInfo {
     },
 }
 
+/// TDX TCB status from Intel DCAP collateral evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TdxTcbStatus {
+    UpToDate,
+    SWHardeningNeeded,
+    ConfigurationNeeded,
+    ConfigurationAndSWHardeningNeeded,
+    OutOfDate,
+    OutOfDateConfigurationNeeded,
+    Revoked,
+}
+
+impl std::fmt::Display for TdxTcbStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TdxTcbStatus::UpToDate => write!(f, "UpToDate"),
+            TdxTcbStatus::SWHardeningNeeded => write!(f, "SWHardeningNeeded"),
+            TdxTcbStatus::ConfigurationNeeded => write!(f, "ConfigurationNeeded"),
+            TdxTcbStatus::ConfigurationAndSWHardeningNeeded => {
+                write!(f, "ConfigurationAndSWHardeningNeeded")
+            }
+            TdxTcbStatus::OutOfDate => write!(f, "OutOfDate"),
+            TdxTcbStatus::OutOfDateConfigurationNeeded => {
+                write!(f, "OutOfDateConfigurationNeeded")
+            }
+            TdxTcbStatus::Revoked => write!(f, "Revoked"),
+        }
+    }
+}
+
+/// DCAP verification status from Intel collateral evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DcapVerificationStatus {
+    /// TCB status determined by matching against Intel TCB Info.
+    pub tcb_status: TdxTcbStatus,
+    /// FMSPC (Family-Model-Stepping-Platform-CustomSKU) extracted from PCK cert.
+    pub fmspc: String,
+    /// Security advisory IDs affecting this TCB level.
+    pub advisory_ids: Vec<String>,
+}
+
 /// AMD processor generation for SNP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ProcessorGeneration {

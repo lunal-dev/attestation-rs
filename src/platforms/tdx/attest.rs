@@ -1,5 +1,8 @@
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use std::fs;
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use crate::error::{AttestationError, Result};
 use crate::utils::pad_report_data;
@@ -60,8 +63,6 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
 
 /// Generate quote via Linux ConfigFS TSM reports.
 fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
-    use std::fs;
-
     let tsm_path = Path::new(TSM_REPORT_PATH);
     if !tsm_path.exists() {
         return Err(AttestationError::HardwareAccessFailed(
@@ -125,10 +126,7 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
 
 /// Generate quote via /dev/tdx_guest ioctl (fallback).
 fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
-    use std::fs::OpenOptions;
-    use std::os::unix::io::AsRawFd;
-
-    let dev = OpenOptions::new()
+    let dev = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(TDX_GUEST_DEV)
