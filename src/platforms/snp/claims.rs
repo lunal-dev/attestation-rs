@@ -32,6 +32,7 @@ pub fn extract_claims(report: &AttestationReport) -> Claims {
     Claims {
         launch_digest: hex::encode(&report.measurement[..]),
         report_data: report.report_data[..].to_vec(),
+        signed_data: report.report_data[..].to_vec(),
         init_data: report.host_data[..].to_vec(),
         tcb: TcbInfo::Snp {
             bootloader: report.reported_tcb.bootloader,

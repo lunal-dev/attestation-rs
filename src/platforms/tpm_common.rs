@@ -602,9 +602,11 @@ pub fn build_tpm_verification_result(
         .into();
     platform_data["tpm"] = pcr_map;
 
+    let mut signed_data = base_claims.signed_data.clone();
     match extract_tpm_nonce(tpm_msg) {
         Ok(nonce) => {
             platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+            signed_data = nonce;
         }
         Err(e) => {
             log::warn!("failed to extract TPM nonce for claims output: {}", e);
@@ -612,6 +614,7 @@ pub fn build_tpm_verification_result(
     }
 
     let claims = Claims {
+        signed_data,
         platform_data,
         ..base_claims
     };
@@ -1179,6 +1182,47 @@ mod tests {
             err.contains("RSA") || err.contains("sig") || err.contains("Signature"),
             "error should be about signature verification, not key extraction: {}",
             err
+        );
+    }
+
+    #[test]
+    fn test_build_tpm_verification_result_sets_signed_data_to_nonce() {
+        use crate::types::{Claims, TcbInfo};
+
+        let nonce = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let pcr_sel = &[0x03, 0x00, 0x00, 0x00];
+        let pcr_digest = vec![0u8; 32];
+        let tpm_msg = build_tpms_attest(&nonce, pcr_sel, &pcr_digest);
+        let tpm_pcrs: Vec<Vec<u8>> = (0..24).map(|_| vec![0u8; 32]).collect();
+
+        let base_claims = Claims {
+            launch_digest: "abcd".to_string(),
+            report_data: vec![0xFF; 64],
+            signed_data: vec![0xFF; 64],
+            init_data: vec![0x00; 32],
+            tcb: TcbInfo::Snp {
+                bootloader: 1,
+                tee: 0,
+                snp: 1,
+                microcode: 1,
+            },
+            platform_data: serde_json::json!({}),
+        };
+
+        let result = build_tpm_verification_result(
+            base_claims,
+            &tpm_pcrs,
+            &tpm_msg,
+            PlatformType::AzSnp,
+            None,
+            None,
+        );
+
+        assert_eq!(result.claims.signed_data, nonce, "signed_data should be the TPM nonce");
+        assert_eq!(result.claims.report_data, vec![0xFF; 64], "report_data should be unchanged");
+        assert_eq!(
+            result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
+            hex::encode(&nonce),
         );
     }
 }

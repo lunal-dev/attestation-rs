@@ -72,6 +72,11 @@ pub struct Claims {
     /// The report_data field from inside the HW quote, raw bytes.
     #[serde(with = "hex_bytes")]
     pub report_data: Vec<u8>,
+    /// The data requested to be signed by the attestation requester.
+    /// For bare-metal platforms this equals report_data; for vTPM platforms
+    /// this is the TPM nonce (the user's original challenge data).
+    #[serde(with = "hex_bytes")]
+    pub signed_data: Vec<u8>,
     /// Init data / host data from the quote, raw bytes.
     #[serde(with = "hex_bytes")]
     pub init_data: Vec<u8>,
@@ -355,6 +360,7 @@ mod tests {
         let claims = Claims {
             launch_digest: "a1f3930413247bb38cfc171579ea3c12".to_string(),
             report_data: vec![0xAA; 64],
+            signed_data: vec![0xAA; 64],
             init_data: vec![0xBB; 32],
             tcb: TcbInfo::Snp {
                 bootloader: 3,
@@ -398,6 +404,7 @@ mod tests {
         let claims = Claims {
             launch_digest: "dfba221b48a22af8511542ee796603f3".to_string(),
             report_data: vec![0xCC; 64],
+            signed_data: vec![0xCC; 64],
             init_data: vec![0x00; 48],
             tcb: TcbInfo::Tdx {
                 tcb_svn: vec![
@@ -436,6 +443,7 @@ mod tests {
             claims: Claims {
                 launch_digest: "abcdef".to_string(),
                 report_data: vec![0x01, 0x02],
+                signed_data: vec![0x01, 0x02],
                 init_data: vec![0x03, 0x04],
                 tcb: TcbInfo::Snp {
                     bootloader: 1,
@@ -467,6 +475,7 @@ mod tests {
             claims: Claims {
                 launch_digest: String::new(),
                 report_data: vec![],
+                signed_data: vec![],
                 init_data: vec![],
                 tcb: TcbInfo::Tdx { tcb_svn: vec![] },
                 platform_data: serde_json::json!(null),
