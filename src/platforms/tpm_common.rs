@@ -5,6 +5,7 @@ use rsa::RsaPublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AttestationError, Result};
+use crate::types::{Claims, PlatformType, VerificationResult};
 
 /// Decoded TPM quote components: (signature, message, pcr_values).
 pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
@@ -543,6 +544,85 @@ pub fn decode_tpm_quote(quote: &TpmQuote) -> Result<DecodedTpmQuote> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok((sig, msg, pcrs))
+}
+
+/// Check TPM nonce against expected report_data, returning `None` if no expectation was provided.
+pub fn check_report_data(tpm_msg: &[u8], expected: Option<&[u8]>) -> Result<Option<bool>> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    let matched = verify_tpm_nonce(tpm_msg, expected)?;
+    if !matched {
+        return Err(AttestationError::ReportDataMismatch);
+    }
+    Ok(Some(true))
+}
+
+/// Check TPM PCR[8] against expected init_data_hash, returning `None` if no expectation was provided.
+pub fn check_init_data(tpm_pcrs: &[Vec<u8>], expected: Option<&[u8]>) -> Result<Option<bool>> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    if expected.len() != 32 {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "expected_init_data_hash must be exactly 32 bytes, got {}",
+            expected.len()
+        )));
+    }
+    if tpm_pcrs.len() <= 8 {
+        return Err(AttestationError::InitDataMismatch);
+    }
+    if !crate::utils::constant_time_eq(&tpm_pcrs[8], expected) {
+        return Err(AttestationError::InitDataMismatch);
+    }
+    Ok(Some(true))
+}
+
+/// Build a `VerificationResult` with TPM PCR values and nonce in platform claims.
+pub fn build_tpm_verification_result(
+    base_claims: Claims,
+    tpm_pcrs: &[Vec<u8>],
+    tpm_msg: &[u8],
+    platform: PlatformType,
+    report_data_match: Option<bool>,
+    init_data_match: Option<bool>,
+) -> VerificationResult {
+    let mut platform_data = base_claims.platform_data.clone();
+
+    let pcr_map: serde_json::Value = tpm_pcrs
+        .iter()
+        .enumerate()
+        .map(|(i, pcr)| {
+            (
+                format!("pcr{:02}", i),
+                serde_json::Value::String(hex::encode(pcr)),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+    platform_data["tpm"] = pcr_map;
+
+    match extract_tpm_nonce(tpm_msg) {
+        Ok(nonce) => {
+            platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+        }
+        Err(e) => {
+            log::warn!("failed to extract TPM nonce for claims output: {}", e);
+        }
+    }
+
+    let claims = Claims {
+        platform_data,
+        ..base_claims
+    };
+
+    VerificationResult {
+        signature_valid: true,
+        platform,
+        claims,
+        report_data_match,
+        init_data_match,
+    }
 }
 
 #[cfg(test)]
