@@ -106,9 +106,18 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
             .try_into()
             .map_err(|_| AttestationError::QuoteParseFailed("HCL header slice".to_string()))?,
     );
+    let content_length = u32::from_le_bytes(
+        header[16..20]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("HCL content_length slice".to_string()))?,
+    ) as usize;
+
+    // Validate content_length against available data
+    let available = hcl_report.len() - content_start;
+    let bounded_len = content_length.min(available);
 
     // Extract content and trim trailing nulls
-    let content = &hcl_report[content_start..];
+    let content = &hcl_report[content_start..content_start + bounded_len];
     let trimmed_len = content.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
 
     Ok(HclReportData {
@@ -176,10 +185,15 @@ pub struct TpmQuote {
 /// its Attestation Key (AK). The AK public key is embedded in the HCL
 /// report's variable data, either as JWK JSON (real Azure format) or
 /// as a TPM2B_PUBLIC structure (synthetic test data).
-pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -> Result<bool> {
+pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -> Result<()> {
     // Extract the RSA public key: try JWK JSON first, fall back to TPM2B_PUBLIC
-    let (modulus, exponent) = extract_ak_pub_from_jwk_json(var_data)
-        .or_else(|_| extract_ak_pub_from_var_data(var_data))?;
+    let (modulus, exponent) = match extract_ak_pub_from_jwk_json(var_data) {
+        Ok(result) => result,
+        Err(jwk_err) => {
+            log::debug!("JWK AK extraction failed, trying TPM2B_PUBLIC: {}", jwk_err);
+            extract_ak_pub_from_var_data(var_data)?
+        }
+    };
 
     let n = rsa::BigUint::from_bytes_be(&modulus);
     let e = rsa::BigUint::from_bytes_be(&exponent);
@@ -194,13 +208,9 @@ pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -
         AttestationError::SignatureVerificationFailed(format!("parse RSA sig: {}", e))
     })?;
 
-    match verifying_key.verify(message, &sig) {
-        Ok(()) => Ok(true),
-        Err(e) => Err(AttestationError::SignatureVerificationFailed(format!(
-            "TPM RSA PKCS1v15 SHA-256: {}",
-            e
-        ))),
-    }
+    verifying_key.verify(message, &sig).map_err(|e| {
+        AttestationError::SignatureVerificationFailed(format!("TPM RSA PKCS1v15 SHA-256: {}", e))
+    })
 }
 
 /// Extract the AK public key (RSA modulus and exponent) from HCL var_data.
@@ -233,8 +243,16 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     let mut offset = 0;
 
     // TPM2B_PUBLIC.size
-    let _pub_size = read_be_u16(var_data, offset, "TPM2B_PUBLIC size")?;
+    let pub_size = read_be_u16(var_data, offset, "TPM2B_PUBLIC size")? as usize;
     offset += 2;
+
+    if offset + pub_size > var_data.len() {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "TPM2B_PUBLIC declared size {} exceeds available data {}",
+            pub_size,
+            var_data.len() - offset
+        )));
+    }
 
     // TPMT_PUBLIC.type
     let alg_type = read_be_u16(var_data, offset, "TPM2B_PUBLIC type")?;
@@ -362,7 +380,11 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
 pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
     let nonce = extract_tpm_nonce(message)?;
     if nonce.len() != expected.len() {
-        return Ok(false);
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "TPM nonce length mismatch: extracted {} bytes, expected {} bytes",
+            nonce.len(),
+            expected.len()
+        )));
     }
     Ok(crate::utils::constant_time_eq(&nonce, expected))
 }
@@ -615,18 +637,17 @@ mod tests {
         let nonce = b"correct data nonce value";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, b"wrong data").unwrap();
+        let result = verify_tpm_nonce(&msg, b"wrong___data nonce value").unwrap();
         assert!(!result, "nonce should not match for different data");
     }
 
     #[test]
     fn test_tpm_nonce_length_mismatch() {
-        // When nonce and expected have different lengths, should return false
         let nonce = b"short";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, b"much longer expected data").unwrap();
-        assert!(!result, "different length nonce should not match");
+        let result = verify_tpm_nonce(&msg, b"much longer expected data");
+        assert!(result.is_err(), "different length nonce should return error");
     }
 
     #[test]

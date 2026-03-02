@@ -3,7 +3,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use attestation::platforms::snp::certs::get_bundled_certs;
 use attestation::platforms::snp::claims::extract_claims;
-use attestation::platforms::snp::verify::{parse_report, verify_cert_chain_pub, verify_report_signature};
+use attestation::platforms::snp::verify::{parse_report, verify_cert_chain, verify_report_signature};
 use attestation::types::ProcessorGeneration;
 
 static SNP_REPORT_BYTES: &[u8] = include_bytes!("../test_data/snp/test-report.bin");
@@ -35,7 +35,7 @@ fn bench_cert_chain_verify_rsa_pss(c: &mut Criterion) {
     let (ark_der, ask_der) = get_bundled_certs(ProcessorGeneration::Milan);
     c.bench_function("snp/cert_chain_verify_rsa_pss", |b| {
         b.iter(|| {
-            verify_cert_chain_pub(
+            verify_cert_chain(
                 black_box(ark_der),
                 black_box(ask_der),
                 black_box(SNP_VCEK),
@@ -48,7 +48,7 @@ fn bench_cert_chain_verify_rsa_pss(c: &mut Criterion) {
 fn bench_cert_chain_verify_imds(c: &mut Criterion) {
     c.bench_function("snp/cert_chain_verify_imds", |b| {
         b.iter(|| {
-            verify_cert_chain_pub(
+            verify_cert_chain(
                 black_box(IMDS_ARK),
                 black_box(IMDS_ASK),
                 black_box(IMDS_VCEK),

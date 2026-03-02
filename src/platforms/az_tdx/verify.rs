@@ -1,16 +1,10 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
-
 use crate::error::{AttestationError, Result};
 use crate::platforms::tdx::{claims::extract_claims, dcap, verify as tdx_verify};
 use crate::platforms::tpm_common;
 use crate::types::{Claims, PlatformType, VerificationResult, VerifyParams};
+use crate::utils::decode_base64url;
 
 use super::evidence::AzTdxEvidence;
-
-/// Decode URL-safe base64, tolerating optional padding.
-fn decode_base64url(input: &str) -> std::result::Result<Vec<u8>, base64::DecodeError> {
-    BASE64URL.decode(input.trim_end_matches('='))
-}
 
 /// Verify Azure TDX vTPM attestation evidence.
 pub async fn verify_evidence(
@@ -32,7 +26,7 @@ pub async fn verify_evidence(
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
 
     // 5. TPM signature verification (AK pub key extracted from var_data JWK JSON)
-    let tpm_sig_valid = tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
+    tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
 
     // 6. TPM nonce check
     let tpm_nonce_match = if let Some(expected) = &params.expected_report_data {
@@ -114,7 +108,7 @@ pub async fn verify_evidence(
     };
 
     Ok(VerificationResult {
-        signature_valid: tpm_sig_valid && hcl_binding_valid,
+        signature_valid: true,
         platform: PlatformType::AzTdx,
         claims,
         report_data_match: tpm_nonce_match,
@@ -125,6 +119,7 @@ pub async fn verify_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
     use crate::platforms::tpm_common::TpmQuote;
 
     fn build_dummy_tpm_quote() -> TpmQuote {
@@ -351,6 +346,5 @@ mod tests {
             "TDX TPM signature should verify: {:?}",
             result.err()
         );
-        assert!(result.unwrap(), "TPM signature should be valid");
     }
 }

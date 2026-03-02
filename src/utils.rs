@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use sha2::{Digest, Sha256, Sha384};
 
 /// Pad report_data to exactly `target_len` bytes.
@@ -23,6 +24,11 @@ pub fn sha384(data: &[u8]) -> Vec<u8> {
     let mut hasher = Sha384::new();
     hasher.update(data);
     hasher.finalize().to_vec()
+}
+
+/// Decode URL-safe base64, tolerating optional padding.
+pub fn decode_base64url(input: &str) -> std::result::Result<Vec<u8>, base64::DecodeError> {
+    BASE64URL.decode(input.trim_end_matches('='))
 }
 
 /// Compare two byte slices in constant time (best effort).

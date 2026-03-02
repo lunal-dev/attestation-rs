@@ -13,7 +13,7 @@ pub fn is_available() -> bool {
     match is_snp_cvm() {
         Ok(is_snp) => is_snp,
         Err(e) => {
-            log::debug!("Azure SNP detection failed: {}", e);
+            log::warn!("Azure SNP detection failed: {}", e);
             false
         }
     }
@@ -38,7 +38,7 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
 
 /// Generate Azure SNP attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
-    let _padded = pad_report_data(report_data, 64)?;
+    let padded = pad_report_data(report_data, 64)?;
 
     // 1. Read HCL report from vTPM NVRAM
     let hcl_report_bytes = vtpm::get_report().map_err(|e| {
@@ -46,7 +46,7 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
     })?;
 
     // 2. Generate TPM quote with report_data as nonce
-    let quote = vtpm::get_quote(report_data).map_err(|e| {
+    let quote = vtpm::get_quote(&padded).map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("vtpm::get_quote failed: {}", e))
     })?;
     let tpm_quote = quote_to_tpm_quote(quote);

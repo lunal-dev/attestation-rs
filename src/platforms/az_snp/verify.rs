@@ -1,16 +1,10 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
-
 use crate::collateral::CertProvider;
 use crate::error::{AttestationError, Result};
 use crate::platforms::tpm_common;
 use crate::types::{PlatformType, VerificationResult, VerifyParams};
+use crate::utils::decode_base64url;
 
 use super::evidence::AzSnpEvidence;
-
-/// Decode URL-safe base64, tolerating optional padding.
-fn decode_base64url(input: &str) -> std::result::Result<Vec<u8>, base64::DecodeError> {
-    BASE64URL.decode(input.trim_end_matches('='))
-}
 
 /// Verify Azure SNP vTPM attestation evidence.
 pub async fn verify_evidence(
@@ -25,6 +19,14 @@ pub async fn verify_evidence(
     // 2. Parse HCL report structure (extracts TEE report + var_data JSON)
     let hcl = tpm_common::parse_hcl_report(&hcl_report_bytes)?;
 
+    if hcl.report_type != tpm_common::HCL_REPORT_TYPE_SNP {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "HCL report_type is {} (expected {} for SNP)",
+            hcl.report_type,
+            tpm_common::HCL_REPORT_TYPE_SNP
+        )));
+    }
+
     // 3. Decode VCEK
     let vcek_der = decode_base64url(&evidence.vcek)
         .map_err(|e| AttestationError::EvidenceDeserialize(format!("VCEK base64: {}", e)))?;
@@ -36,7 +38,7 @@ pub async fn verify_evidence(
     let snp_report = crate::platforms::snp::verify::parse_report(&hcl.tee_report)?;
 
     // 6. TPM signature verification (AK pub key extracted from var_data JWK JSON)
-    let tpm_sig_valid = tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
+    tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
 
     // 7. TPM nonce check
     let tpm_nonce_match = if let Some(expected) = &params.expected_report_data {
@@ -66,41 +68,43 @@ pub async fn verify_evidence(
     // 10. VCEK validation against bundled AMD CA chain
     // Azure CVMs may have zeroed CPUID fields in the SNP report.
     // Try CPUID first, then try each processor generation's cert chain.
-    let processor_gen = crate::types::ProcessorGeneration::from_cpuid(
+    use crate::types::ProcessorGeneration;
+    let processor_gen = ProcessorGeneration::from_cpuid(
         snp_report.cpuid_fam_id.unwrap_or(0),
         snp_report.cpuid_mod_id.unwrap_or(0),
     );
 
-    let cert_chain_result = if let Some(gen) = processor_gen {
-        // Known processor generation from CPUID
-        let (ark_der, ask_der) = cert_provider.get_snp_cert_chain(gen).await?;
-        crate::platforms::snp::verify::verify_cert_chain_pub(&ark_der, &ask_der, &vcek_der)
-    } else {
-        // CPUID fields zeroed (common on Azure CVMs) — try each generation
-        use crate::types::ProcessorGeneration::*;
-        let mut last_err = None;
-        let mut ok = false;
-        for gen in &[Milan, Genoa, Turin] {
-            let (ark_der, ask_der) = cert_provider.get_snp_cert_chain(*gen).await?;
-            match crate::platforms::snp::verify::verify_cert_chain_pub(
-                &ark_der, &ask_der, &vcek_der,
-            ) {
-                Ok(()) => {
-                    ok = true;
-                    break;
+    let gens = processor_gen.map_or(
+        vec![ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin],
+        |g| vec![g],
+    );
+    let mut last_err = None;
+    let mut chain_ok = false;
+    for gen in &gens {
+        match cert_provider.get_snp_cert_chain(*gen).await {
+            Ok((ark_der, ask_der)) => {
+                match crate::platforms::snp::verify::verify_cert_chain(&ark_der, &ask_der, &vcek_der) {
+                    Ok(()) => {
+                        chain_ok = true;
+                        break;
+                    }
+                    Err(e) => {
+                        log::debug!("VCEK chain check failed for {:?}: {}", gen, e);
+                        last_err = Some(e);
+                    }
                 }
-                Err(e) => last_err = Some(e),
+            }
+            Err(e) => {
+                log::debug!("cert fetch failed for {:?}: {}", gen, e);
+                last_err = Some(e);
             }
         }
-        if ok {
-            Ok(())
-        } else {
-            Err(last_err.unwrap_or_else(|| {
-                AttestationError::CertChainError("no matching AMD root cert found".to_string())
-            }))
-        }
-    };
-    cert_chain_result?;
+    }
+    if !chain_ok {
+        return Err(last_err.unwrap_or_else(|| {
+            AttestationError::CertChainError("no matching AMD root cert found".to_string())
+        }));
+    }
 
     // 10b. Verify SNP report signature against VCEK
     crate::platforms::snp::verify::verify_report_signature(&hcl.tee_report, &vcek_der)?;
@@ -110,13 +114,40 @@ pub async fn verify_evidence(
         return Err(AttestationError::VmplCheckFailed(snp_report.vmpl));
     }
 
+    // 11b. Debug policy enforcement
+    if snp_report.policy.debug_allowed() && !params.allow_debug {
+        return Err(AttestationError::DebugPolicyViolation);
+    }
+
+    // 11c. VCEK OID cross-validation
+    crate::platforms::snp::verify::verify_vcek_tcb(&snp_report, &vcek_der)?;
+
+    // 11d. Minimum TCB enforcement
+    if let Some(ref min_tcb) = params.min_tcb {
+        let tcb = &snp_report.reported_tcb;
+        if tcb.bootloader < min_tcb.bootloader
+            || tcb.tee < min_tcb.tee
+            || tcb.snp < min_tcb.snp
+            || tcb.microcode < min_tcb.microcode
+        {
+            return Err(AttestationError::TcbMismatch(format!(
+                "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
+                tcb.bootloader, tcb.tee, tcb.snp, tcb.microcode,
+                min_tcb.bootloader, min_tcb.tee, min_tcb.snp, min_tcb.microcode,
+            )));
+        }
+    }
+
     // 12. Init data check: expected_init_data_hash vs PCR[8]
     let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
+        if expected.len() != 32 {
+            return Err(AttestationError::QuoteParseFailed(format!(
+                "expected_init_data_hash must be exactly 32 bytes, got {}",
+                expected.len()
+            )));
+        }
         if tpm_pcrs.len() > 8 {
-            let mut padded = vec![0u8; 32];
-            let len = expected.len().min(32);
-            padded[..len].copy_from_slice(&expected[..len]);
-            if !crate::utils::constant_time_eq(&tpm_pcrs[8], &padded) {
+            if !crate::utils::constant_time_eq(&tpm_pcrs[8], expected) {
                 return Err(AttestationError::InitDataMismatch);
             }
             Some(true)
@@ -146,8 +177,13 @@ pub async fn verify_evidence(
     platform_data["tpm"] = pcr_map;
 
     // Add TPM nonce (user's custom report_data) to output
-    if let Ok(nonce) = tpm_common::extract_tpm_nonce(&tpm_msg) {
-        platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+    match tpm_common::extract_tpm_nonce(&tpm_msg) {
+        Ok(nonce) => {
+            platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+        }
+        Err(e) => {
+            log::warn!("failed to extract TPM nonce for claims output: {}", e);
+        }
     }
 
     let claims = crate::types::Claims {
@@ -156,7 +192,7 @@ pub async fn verify_evidence(
     };
 
     Ok(VerificationResult {
-        signature_valid: tpm_sig_valid && hcl_binding_valid,
+        signature_valid: true,
         platform: PlatformType::AzSnp,
         claims,
         report_data_match: tpm_nonce_match,
@@ -167,6 +203,7 @@ pub async fn verify_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
     use crate::platforms::tpm_common::TpmQuote;
 
     /// Build a properly-formatted HCL report with HCLA magic, embedded SNP report,
@@ -435,7 +472,6 @@ mod tests {
             "CoCo TPM signature should verify: {:?}",
             result.err()
         );
-        assert!(result.unwrap(), "TPM signature should be valid");
     }
 
     #[test]

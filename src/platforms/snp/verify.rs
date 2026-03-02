@@ -103,9 +103,7 @@ pub async fn verify_evidence(
 
     // 10. Check init_data binding (host_data, 32 bytes)
     let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
-        let mut padded = vec![0u8; 32];
-        let len = expected.len().min(32);
-        padded[..len].copy_from_slice(&expected[..len]);
+        let padded = crate::utils::pad_report_data(expected, 32)?;
         if !crate::utils::constant_time_eq(&report.host_data[..], &padded) {
             return Err(AttestationError::InitDataMismatch);
         }
@@ -166,11 +164,6 @@ pub fn verify_cert_chain(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) -> Res
     Ok(())
 }
 
-/// Public entry point for cert chain verification (used by Azure platforms).
-pub fn verify_cert_chain_pub(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) -> Result<()> {
-    verify_cert_chain(ark_der, ask_der, vcek_der)
-}
-
 /// Verify a report signature against a VCEK certificate.
 /// Delegates to the sev crate's Verifiable trait.
 pub fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<()> {
@@ -224,7 +217,7 @@ fn get_oid_octets(ext_value: &[u8]) -> Option<&[u8]> {
 ///
 /// - For "VCEK" certificates: validates chip_id and TCB SPL exact equality.
 /// - For "VLEK" certificates: skips chip_id check, only validates TCB SPLs.
-fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
+pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
     use x509_parser::prelude::*;
 
     let (_, cert) = X509Certificate::from_der(vcek_der)
