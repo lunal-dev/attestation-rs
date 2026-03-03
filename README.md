@@ -1,3 +1,5 @@
+[![CI](https://github.com/lunal-dev/attestation-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lunal-dev/attestation-rs/actions/workflows/ci.yml)
+
 # Lunal Attestation Tooling
 
 A Rust workspace providing comprehensive libraries and CLI tools for confidential computing attestation across multiple Trusted Execution Environment (TEE) platforms.

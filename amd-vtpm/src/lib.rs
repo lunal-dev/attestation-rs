@@ -1,5 +1,6 @@
-pub use vtpm_attestation::hcl;
+#![allow(unused)]
 
+pub use vtpm_attestation::hcl;
 pub use vtpm_attestation::quote;
 
 use thiserror::Error;

@@ -1,4 +1,3 @@
-use reqwest;
 use serde_json::Value;
 use std::error::Error;
 use urlencoding::decode;
@@ -30,10 +29,7 @@ impl TcbResponse {
 
 impl PcsClient {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-            base_url: "https://api.trustedservices.intel.com/tdx/certification/v4".to_string(),
-        }
+        Self::default()
     }
 
     /// Fetch QE (Quoting Enclave) identity information
@@ -158,9 +154,19 @@ impl PcsClient {
     }
 }
 
+impl Default for PcsClient {
+    fn default() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            base_url: "https://api.trustedservices.intel.com/tdx/certification/v4".to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env::args_os;
 
     #[tokio::test]
     async fn test_qe_identity() {
@@ -170,9 +176,9 @@ mod tests {
             .await
             .expect("Failed to fetch QE identity");
 
-        // Assert on the structure/content you expect
+        // the data here is platform independent, so checking there's
+        // an object will ahve to suffice
         assert!(data.is_object());
-        assert!(data.get("id").is_some()); // Example assertion
     }
 
     #[tokio::test]

@@ -61,8 +61,8 @@ pub async fn get_cert_chain(report: &AttestationReport) -> Result<AmdChain, AmdK
     }
 
     // Convert PEM to Certificate objects
-    let ask = Certificate::from_der(&pem_objects[0].contents())?;
-    let ark = Certificate::from_der(&pem_objects[1].contents())?;
+    let ask = Certificate::from_der(pem_objects[0].contents())?;
+    let ark = Certificate::from_der(pem_objects[1].contents())?;
 
     let chain = AmdChain { ask, ark };
 

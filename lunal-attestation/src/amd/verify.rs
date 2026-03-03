@@ -1,16 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+use crate::amd::AttestationEvidence;
 use amd_vtpm::amd_kds;
 use amd_vtpm::certs::Vcek;
 use amd_vtpm::hcl::HclReport;
 use amd_vtpm::report::{AttestationReport, Validateable};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::io::Read;
 
-use crate::amd::AttestationEvidence;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationResult {
     pub report: serde_json::Value,
@@ -40,7 +42,7 @@ pub async fn verify_evidence(
     let var_data_hash = hcl_report.var_data_sha256();
     // let ak_pub = hcl_report.ak_pub()?;
     let snp_report: AttestationReport = hcl_report.try_into()?;
-    let report_json = serde_json::to_value(&snp_report)?;
+    let report_json = serde_json::to_value(snp_report)?;
 
     // Get and validate certificate chain
     let cert_chain = amd_kds::get_cert_chain(&snp_report).await?;
@@ -87,7 +89,7 @@ pub async fn verify_compressed(
     check_custom_data: Option<bool>,
 ) -> Result<VerificationResult, Box<dyn Error>> {
     // Decode from base64
-    let compressed_bytes = base64::decode(compressed_evidence)?;
+    let compressed_bytes = BASE64_STANDARD.decode(compressed_evidence)?;
 
     // Decompress with gzip
     let mut decoder = GzDecoder::new(&compressed_bytes[..]);

@@ -1,13 +1,14 @@
 use crate::pcs_client::PcsClient;
 use crate::utils::{extract_sgx_extensions_from_quote, parse_sgx_key_values};
-use dcap_rs::types::VerifiedOutput;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use dcap_rs::types::collaterals::IntelCollateral;
 use dcap_rs::types::quotes::version_4::QuoteV4;
+use dcap_rs::types::VerifiedOutput;
 use dcap_rs::utils::quotes::version_4::verify_quote_dcapv4;
 use flate2::read::GzDecoder;
 use std::error::Error;
 use std::fmt::Display;
-use std::fs;
 use std::io::Read;
 
 #[derive(Debug)]
@@ -47,9 +48,15 @@ pub async fn verify_attestation(
 /// Parse attestation from header string (assumes base64 + gzip format)
 fn parse_attestation_header(attestation_header: &str) -> Result<QuoteV4, VerificationError> {
     let trimmed = attestation_header.trim();
+    if trimmed.is_empty() {
+        return Err(VerificationError::ParseError(
+            "Attestation header cannot be empty".to_string(),
+        ));
+    }
 
     // Decode base64
-    let compressed_bytes = base64::decode(trimmed)
+    let compressed_bytes = BASE64_STANDARD
+        .decode(trimmed)
         .map_err(|e| VerificationError::ParseError(format!("Base64 decode failed: {}", e)))?;
 
     // Decompress gzip

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub mod hcl;
 pub mod quote;
 

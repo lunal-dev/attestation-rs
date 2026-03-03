@@ -1,3 +1,4 @@
+#![allow(unused)]
 #[cfg(feature = "attestation-tdx")]
 pub mod attestation;
 

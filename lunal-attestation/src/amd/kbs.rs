@@ -57,7 +57,9 @@ pub mod attest {
 
     /// Serialize a value to canonical JSON format (RFC 8785).
     /// This uses the exact same canon-json crate as Trustee KBS.
-    pub fn serialize_canon_json<T: Serialize>(value: &T) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub fn serialize_canon_json<T: Serialize>(
+        value: &T,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut buf = Vec::new();
         let mut ser = serde_json::Serializer::with_formatter(&mut buf, CanonicalFormatter::new());
         value.serialize(&mut ser)?;
@@ -94,7 +96,10 @@ pub mod attest {
             // For single TEE attestation, this is always an empty string
             let mut value: serde_json::Value = serde_json::from_slice(&runtime_data_json)?;
             if let serde_json::Value::Object(ref mut map) = value {
-                map.insert("additional-evidence".to_string(), serde_json::Value::String(String::new()));
+                map.insert(
+                    "additional-evidence".to_string(),
+                    serde_json::Value::String(String::new()),
+                );
             }
 
             // Re-serialize in canonical form (RFC 8785)

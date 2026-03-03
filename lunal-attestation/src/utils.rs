@@ -25,7 +25,7 @@ pub fn extract_sgx_extensions_from_quote(
     let certchain_pems = parse_pem(&qe_cert_data.cert_data).unwrap();
     let certchain = parse_certchain(&certchain_pems);
     let pck_cert = &certchain[0];
-    let extensions = extract_sgx_extension(&pck_cert);
+    let extensions = extract_sgx_extension(pck_cert);
 
     Ok(extensions)
 }

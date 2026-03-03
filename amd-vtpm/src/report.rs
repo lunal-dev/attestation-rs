@@ -15,7 +15,6 @@ use sha2::{Digest, Sha384};
 #[cfg(feature = "verifier")]
 use signature::DigestVerifier; // Changed to DigestVerifier
 use thiserror::Error;
-use vtpm_attestation::hcl::HclReport;
 use vtpm_attestation::hcl::{self, SNP_REPORT_SIZE};
 #[cfg(feature = "attester")]
 use vtpm_attestation::vtpm;

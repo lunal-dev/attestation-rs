@@ -1,7 +1,7 @@
 use base64;
 use dcap_rs::types::quotes::version_4::QuoteV4;
-use flate2::Compression;
 use flate2::write::GzEncoder;
+use flate2::Compression;
 use std::io::Write;
 use tdx::Tdx;
 

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::fs;
 
 mod pcs_client;

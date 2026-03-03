@@ -7,7 +7,7 @@ pub mod verify;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-use amd_vtpm::{imds, quote};
+use amd_vtpm::imds;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
