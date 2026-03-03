@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AttestationError, Result};
 use crate::types::{Claims, PlatformType, VerificationResult};
+use crate::utils::strip_trailing_nulls;
 
 /// Decoded TPM quote components: (signature, message, pcr_values).
 pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
@@ -606,7 +607,7 @@ pub fn build_tpm_verification_result(
     match extract_tpm_nonce(tpm_msg) {
         Ok(nonce) => {
             platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
-            signed_data = nonce;
+            signed_data = strip_trailing_nulls(&nonce).to_vec();
         }
         Err(e) => {
             log::warn!("failed to extract TPM nonce for claims output: {}", e);
@@ -1223,6 +1224,54 @@ mod tests {
         assert_eq!(
             result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
             hex::encode(&nonce),
+        );
+    }
+
+    #[test]
+    fn test_build_tpm_verification_result_strips_trailing_nulls_from_signed_data() {
+        use crate::types::{Claims, TcbInfo};
+
+        // Simulate a nonce that was zero-padded to 64 bytes (as attest does)
+        let mut padded_nonce = vec![0u8; 64];
+        padded_nonce[..5].copy_from_slice(b"hello");
+
+        let pcr_sel = &[0x03, 0x00, 0x00, 0x00];
+        let pcr_digest = vec![0u8; 32];
+        let tpm_msg = build_tpms_attest(&padded_nonce, pcr_sel, &pcr_digest);
+        let tpm_pcrs: Vec<Vec<u8>> = (0..24).map(|_| vec![0u8; 32]).collect();
+
+        let base_claims = Claims {
+            launch_digest: "abcd".to_string(),
+            report_data: vec![0xFF; 64],
+            signed_data: vec![0xFF; 64],
+            init_data: vec![0x00; 32],
+            tcb: TcbInfo::Snp {
+                bootloader: 1,
+                tee: 0,
+                snp: 1,
+                microcode: 1,
+            },
+            platform_data: serde_json::json!({}),
+        };
+
+        let result = build_tpm_verification_result(
+            base_claims,
+            &tpm_pcrs,
+            &tpm_msg,
+            PlatformType::AzSnp,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            result.claims.signed_data,
+            b"hello".to_vec(),
+            "signed_data should have trailing nulls stripped"
+        );
+        // platform_data nonce should still contain the full padded value
+        assert_eq!(
+            result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
+            hex::encode(&padded_nonce),
         );
     }
 }

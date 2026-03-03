@@ -128,6 +128,13 @@ pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<Verif
         });
     }
 
+    // Validate expected_report_data size (all platforms use at most 64 bytes)
+    if let Some(ref data) = params.expected_report_data {
+        if data.len() > 64 {
+            return Err(AttestationError::ReportDataTooLarge { max: 64 });
+        }
+    }
+
     let envelope: AttestationEvidence = serde_json::from_slice(evidence_json)
         .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
 
