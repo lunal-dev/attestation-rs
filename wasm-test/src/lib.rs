@@ -3,7 +3,7 @@ use wasm_bindgen::prelude::*;
 use attestation::platforms::snp::certs::get_bundled_certs;
 use attestation::platforms::snp::claims::extract_claims;
 use attestation::platforms::snp::verify::{
-    parse_report, verify_cert_chain_pub, verify_report_signature,
+    parse_report, verify_cert_chain, verify_report_signature,
 };
 use attestation::types::ProcessorGeneration;
 use attestation::utils::{constant_time_eq, pad_report_data};
@@ -50,7 +50,7 @@ pub fn verify_snp(
 
     // Verify cert chain (bundled ARK/ASK -> VCEK)
     let (ark, ask) = get_bundled_certs(gen);
-    verify_cert_chain_pub(ark, ask, &vcek_der)
+    verify_cert_chain(ark, ask, &vcek_der)
         .map_err(|e| JsError::new(&format!("cert chain verify: {}", e)))?;
 
     // Verify report signature

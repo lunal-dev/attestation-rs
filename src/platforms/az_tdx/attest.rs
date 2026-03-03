@@ -11,9 +11,12 @@ use super::evidence::AzTdxEvidence;
 
 const IMDS_QUOTE_URL: &str = "http://169.254.169.254/acc/tdquote";
 
-/// Fetch TD quote from Azure IMDS, working around the ureq v3 Content-Type issue
-/// where `application/json; charset=utf-8` is rejected by IMDS (requires exactly
-/// `application/json`).
+#[derive(serde::Deserialize)]
+struct QuoteResponse {
+    quote: String,
+}
+
+/// Fetch TD quote from Azure IMDS.
 async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
     let report_b64 = BASE64URL.encode(td_report.as_bytes());
     let body = serde_json::json!({ "report": report_b64 });
@@ -21,7 +24,6 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
     let client = reqwest::Client::new();
     let response = client
         .post(IMDS_QUOTE_URL)
-        .header("Content-Type", "application/json")
         .json(&body)
         .send()
         .await
@@ -38,23 +40,13 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
         )));
     }
 
-    #[derive(serde::Deserialize)]
-    struct QuoteResponse {
-        quote: String,
-    }
-
     let quote_resp: QuoteResponse = response.json().await.map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("IMDS response parse failed: {}", e))
     })?;
 
-    BASE64URL
-        .decode(quote_resp.quote.trim_end_matches('='))
-        .map_err(|e| {
-            AttestationError::HardwareAccessFailed(format!(
-                "IMDS quote base64 decode failed: {}",
-                e
-            ))
-        })
+    crate::utils::decode_base64url(&quote_resp.quote).map_err(|e| {
+        AttestationError::HardwareAccessFailed(format!("IMDS quote base64 decode failed: {}", e))
+    })
 }
 
 /// Check if Azure TDX platform is available.
@@ -62,7 +54,7 @@ pub fn is_available() -> bool {
     match is_tdx_cvm() {
         Ok(is_tdx) => is_tdx,
         Err(e) => {
-            log::debug!("Azure TDX detection failed: {}", e);
+            log::warn!("Azure TDX detection failed: {}", e);
             false
         }
     }
@@ -79,7 +71,10 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
 
 /// Generate Azure TDX attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
-    let _padded = pad_report_data(report_data, 64)?;
+    // Validate size fits in 64-byte report_data field, but do NOT pad:
+    // TPM2B_DATA (used by vtpm::get_quote) has a smaller max size than 64 bytes
+    // on Azure vTPMs, so we must pass the original unpadded data as the nonce.
+    let _ = pad_report_data(report_data, 64)?;
 
     // 1. Write report_data to TPM NV index, wait for HCL to regenerate TD report,
     //    then read the updated HCL report from vTPM NVRAM.
@@ -90,8 +85,11 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
         ))
     })?;
 
-    // 2. Parse HCL envelope and extract TD report
-    let hcl_report = hcl::HclReport::new(hcl_report_bytes.clone()).map_err(|e| {
+    // 2. Encode HCL report before passing ownership to parser
+    let hcl_report_b64 = BASE64URL.encode(&hcl_report_bytes);
+
+    // 3. Parse HCL envelope and extract TD report
+    let hcl_report = hcl::HclReport::new(hcl_report_bytes).map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("HclReport::new failed: {}", e))
     })?;
     let td_report: tdx::TdReport = hcl_report.try_into().map_err(|e: hcl::HclError| {
@@ -101,20 +99,20 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
         ))
     })?;
 
-    // 3. Get TD quote from Azure IMDS (signed by Intel QE)
+    // 4. Get TD quote from Azure IMDS (signed by Intel QE)
     let td_quote_bytes = get_td_quote_from_imds(&td_report).await?;
 
-    // 4. Generate TPM quote with report_data as nonce
+    // 5. Generate TPM quote with report_data as nonce (unpadded)
     let quote = vtpm::get_quote(report_data).map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("vtpm::get_quote failed: {}", e))
     })?;
     let tpm_quote = quote_to_tpm_quote(quote);
 
-    // 5. Assemble evidence
+    // 6. Assemble evidence
     Ok(AzTdxEvidence {
         version: 1,
         tpm_quote,
-        hcl_report: BASE64URL.encode(&hcl_report_bytes),
+        hcl_report: hcl_report_b64,
         td_quote: BASE64URL.encode(&td_quote_bytes),
     })
 }

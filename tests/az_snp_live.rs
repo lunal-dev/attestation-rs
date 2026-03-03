@@ -193,6 +193,7 @@ async fn test_az_snp_verify_with_expected_nonce() {
     let params = VerifyParams {
         expected_report_data: Some(padded_nonce),
         expected_init_data_hash: None,
+        ..Default::default()
     };
 
     let provider = attestation::collateral::DefaultCertProvider::new();

@@ -1,14 +1,4 @@
 //! DCAP (Data Center Attestation Primitives) chain verification for TDX quotes.
-//!
-//! **Phase 1** (always-on, no network):
-//! 1. PCK certificate chain validation (leaf → intermediate → Intel Root CA)
-//! 2. QE report signature verification (signed by PCK leaf key)
-//! 3. QE report binding (attestation key is bound into QE report data)
-//!
-//! **Phase 2** (optional, needs network via `TdxCollateralProvider`):
-//! 4. FMSPC extraction from PCK cert extensions
-//! 5. TCB status evaluation against Intel collateral
-//! 6. CRL revocation checking
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use der::Decode;
@@ -31,13 +21,11 @@ use super::verify::{QuoteVersion, QUOTE_HEADER_SIZE, REPORT_BODY_SIZE};
 const INTEL_SGX_ROOT_CA_PUB_DER: &[u8] = &[
     0x04, // SEC1 uncompressed point prefix
     // X coordinate (32 bytes)
-    0x0b, 0xa9, 0xc4, 0xc0, 0xc0, 0xc8, 0x61, 0x93, 0xa3, 0xfe, 0x23, 0xd6, 0xb0, 0x2c, 0xda,
-    0x10, 0xa8, 0xbb, 0xd4, 0xe8, 0x8e, 0x48, 0xb4, 0x45, 0x85, 0x61, 0xa3, 0x6e, 0x70, 0x55,
-    0x25, 0xf5,
+    0x0b, 0xa9, 0xc4, 0xc0, 0xc0, 0xc8, 0x61, 0x93, 0xa3, 0xfe, 0x23, 0xd6, 0xb0, 0x2c, 0xda, 0x10,
+    0xa8, 0xbb, 0xd4, 0xe8, 0x8e, 0x48, 0xb4, 0x45, 0x85, 0x61, 0xa3, 0x6e, 0x70, 0x55, 0x25, 0xf5,
     // Y coordinate (32 bytes)
-    0x67, 0x91, 0x8e, 0x2e, 0xdc, 0x88, 0xe4, 0x0d, 0x86, 0x0b, 0xd0, 0xcc, 0x4e, 0xe2, 0x6a,
-    0xac, 0xc9, 0x88, 0xe5, 0x05, 0xa9, 0x53, 0x55, 0x8c, 0x45, 0x3f, 0x6b, 0x09, 0x04, 0xae,
-    0x73, 0x94,
+    0x67, 0x91, 0x8e, 0x2e, 0xdc, 0x88, 0xe4, 0x0d, 0x86, 0x0b, 0xd0, 0xcc, 0x4e, 0xe2, 0x6a, 0xac,
+    0xc9, 0x88, 0xe5, 0x05, 0xa9, 0x53, 0x55, 0x8c, 0x45, 0x3f, 0x6b, 0x09, 0x04, 0xae, 0x73, 0x94,
 ];
 
 /// QE (Quoting Enclave) report body size in bytes.
@@ -134,7 +122,8 @@ pub fn parse_auth_data<'a>(quote_bytes: &'a [u8], body_end: usize) -> Result<Quo
     }
     let qe_auth_data_size = cert_data
         .pread_with::<u16>(auth_size_offset, scroll::LE)
-        .map_err(|e| err(format!("qe_auth_data_size: {}", e)))? as usize;
+        .map_err(|e| err(format!("qe_auth_data_size: {}", e)))?
+        as usize;
 
     let qe_auth_data_start = auth_size_offset + 2;
     if cert_data.len() < qe_auth_data_start + qe_auth_data_size {
@@ -263,9 +252,8 @@ pub fn verify_pck_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
 
     // Step 1: Verify Root CA public key matches hardcoded Intel key
     let root_pub_key = extract_p256_pub_key(&root_cert.pub_key_bytes, "Root CA")?;
-    let intel_root_key = VerifyingKey::from_sec1_bytes(INTEL_SGX_ROOT_CA_PUB_DER).map_err(|e| {
-        AttestationError::CertChainError(format!("Intel Root CA key parse: {}", e))
-    })?;
+    let intel_root_key = VerifyingKey::from_sec1_bytes(INTEL_SGX_ROOT_CA_PUB_DER)
+        .map_err(|e| AttestationError::CertChainError(format!("Intel Root CA key parse: {}", e)))?;
 
     if root_pub_key.to_encoded_point(false) != intel_root_key.to_encoded_point(false) {
         return Err(AttestationError::CertChainError(
@@ -326,9 +314,7 @@ fn parse_x509_cert(der: &[u8], label: &str) -> Result<CertData> {
 
     // Extract subject public key bytes
     let spki = &cert.tbs_certificate.subject_public_key_info;
-    let pub_key_raw = spki
-        .subject_public_key
-        .raw_bytes();
+    let pub_key_raw = spki.subject_public_key.raw_bytes();
     let pub_key_bytes = pub_key_raw.to_vec();
 
     Ok(CertData {
@@ -340,17 +326,12 @@ fn parse_x509_cert(der: &[u8], label: &str) -> Result<CertData> {
 
 /// Extract a P-256 verifying key from SEC1-encoded public key bytes.
 fn extract_p256_pub_key(pub_key_bytes: &[u8], label: &str) -> Result<VerifyingKey> {
-    VerifyingKey::from_sec1_bytes(pub_key_bytes).map_err(|e| {
-        AttestationError::CertChainError(format!("{} public key parse: {}", label, e))
-    })
+    VerifyingKey::from_sec1_bytes(pub_key_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("{} public key parse: {}", label, e)))
 }
 
 /// Verify a certificate's signature using the issuer's public key.
-fn verify_cert_signature(
-    cert: &CertData,
-    issuer_key: &VerifyingKey,
-    label: &str,
-) -> Result<()> {
+fn verify_cert_signature(cert: &CertData, issuer_key: &VerifyingKey, label: &str) -> Result<()> {
     // The signature in X.509 is DER-encoded (ASN.1 SEQUENCE of two INTEGERs)
     let sig = Signature::from_der(&cert.signature_bytes).map_err(|e| {
         AttestationError::CertChainError(format!("{} signature parse: {}", label, e))
@@ -392,9 +373,8 @@ pub fn compute_body_end(quote_bytes: &[u8], quote_version: QuoteVersion) -> Resu
         QuoteVersion::V5Tdx10 | QuoteVersion::V5Tdx15 => {
             let body_size = quote_bytes
                 .pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
-                .map_err(|e| {
-                    AttestationError::QuoteParseFailed(format!("v5 body size: {}", e))
-                })? as usize;
+                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 body size: {}", e)))?
+                as usize;
             Ok(QUOTE_HEADER_SIZE + 6 + body_size)
         }
     }
@@ -431,9 +411,8 @@ const FMSPC_OID: &[u64] = &[1, 2, 840, 113741, 1, 13, 1, 4];
 /// The FMSPC is a 6-byte value embedded in the SGX extensions of the PCK certificate,
 /// under OID 1.2.840.113741.1.13.1.4. It identifies the platform for TCB Info lookup.
 pub fn extract_fmspc_from_pck(pem_data: &[u8]) -> Result<String> {
-    let pem_str = std::str::from_utf8(pem_data).map_err(|e| {
-        AttestationError::CertChainError(format!("PEM not UTF-8: {}", e))
-    })?;
+    let pem_str = std::str::from_utf8(pem_data)
+        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
 
     // Get just the first (leaf) cert
     let der_certs = split_pem_to_der(pem_str)?;
@@ -443,9 +422,8 @@ pub fn extract_fmspc_from_pck(pem_data: &[u8]) -> Result<String> {
         ));
     }
 
-    let (_, cert) = X509Certificate::from_der(&der_certs[0]).map_err(|e| {
-        AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e))
-    })?;
+    let (_, cert) = X509Certificate::from_der(&der_certs[0])
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
 
     // Find the SGX extensions OID in the cert extensions
     let sgx_ext_oid = x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID)
@@ -465,13 +443,11 @@ pub fn extract_fmspc_from_pck(pem_data: &[u8]) -> Result<String> {
 
 /// Parse the SGX extension ASN.1 blob and extract the FMSPC value.
 fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
-    let fmspc_oid = x509_parser::oid_registry::Oid::from(FMSPC_OID)
-        .expect("FMSPC_OID is valid");
+    let fmspc_oid = x509_parser::oid_registry::Oid::from(FMSPC_OID).expect("FMSPC_OID is valid");
 
     // Parse outer SEQUENCE
-    let (_, seq) = parse_der_sequence(data).map_err(|e| {
-        AttestationError::CertChainError(format!("SGX extension parse: {}", e))
-    })?;
+    let (_, seq) = parse_der_sequence(data)
+        .map_err(|e| AttestationError::CertChainError(format!("SGX extension parse: {}", e)))?;
 
     // Each element is a SEQUENCE { OID, value }
     for item in seq.ref_iter() {
@@ -538,9 +514,8 @@ struct SvnComponent {
 /// The PCK certificate contains 16 TCB component SVNs under OID
 /// 1.2.840.113741.1.13.1.2.{1..16} and a PCESVN under 1.2.840.113741.1.13.1.2.17.
 fn extract_pck_tcb_components(pem_data: &[u8]) -> Result<([u8; 16], u16)> {
-    let pem_str = std::str::from_utf8(pem_data).map_err(|e| {
-        AttestationError::CertChainError(format!("PEM not UTF-8: {}", e))
-    })?;
+    let pem_str = std::str::from_utf8(pem_data)
+        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
 
     let der_certs = split_pem_to_der(pem_str)?;
     if der_certs.is_empty() {
@@ -549,9 +524,8 @@ fn extract_pck_tcb_components(pem_data: &[u8]) -> Result<([u8; 16], u16)> {
         ));
     }
 
-    let (_, cert) = X509Certificate::from_der(&der_certs[0]).map_err(|e| {
-        AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e))
-    })?;
+    let (_, cert) = X509Certificate::from_der(&der_certs[0])
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
 
     let sgx_ext_oid = x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID)
         .expect("SGX_EXTENSIONS_OID is valid");
@@ -584,9 +558,7 @@ fn extract_pck_tcb_components(pem_data: &[u8]) -> Result<([u8; 16], u16)> {
 }
 
 /// Parse TCB SEQUENCE containing 16 component SVNs and PCESVN.
-fn parse_tcb_sequence(
-    obj: &x509_parser::der_parser::ber::BerObject,
-) -> Result<([u8; 16], u16)> {
+fn parse_tcb_sequence(obj: &x509_parser::der_parser::ber::BerObject) -> Result<([u8; 16], u16)> {
     let items = match &obj.content {
         BerObjectContent::Sequence(items) => items,
         _ => {
@@ -658,9 +630,8 @@ pub fn evaluate_tcb_status(
     tee_tcb_svn: &[u8; 16],
     pck_pem: &[u8],
 ) -> Result<DcapVerificationStatus> {
-    let wrapper: TcbInfoWrapper = serde_json::from_slice(tcb_info_json).map_err(|e| {
-        AttestationError::CertChainError(format!("TCB Info JSON parse: {}", e))
-    })?;
+    let wrapper: TcbInfoWrapper = serde_json::from_slice(tcb_info_json)
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info JSON parse: {}", e)))?;
 
     let (pck_compsvn, pck_pcesvn) = extract_pck_tcb_components(pck_pem)?;
     let fmspc = extract_fmspc_from_pck(pck_pem)?;
@@ -686,9 +657,8 @@ pub fn evaluate_tcb_status(
         }
     }
 
-    let sgx_idx = sgx_match_idx.ok_or_else(|| {
-        AttestationError::TcbMismatch("no matching SGX TCB level found".into())
-    })?;
+    let sgx_idx = sgx_match_idx
+        .ok_or_else(|| AttestationError::TcbMismatch("no matching SGX TCB level found".into()))?;
 
     // Now find matching TDX TCB level starting from the SGX match
     for level in &wrapper.tcb_info.tcb_levels[sgx_idx..] {
@@ -725,9 +695,7 @@ fn parse_tcb_status(s: &str) -> Result<TdxTcbStatus> {
         "UpToDate" => Ok(TdxTcbStatus::UpToDate),
         "SWHardeningNeeded" => Ok(TdxTcbStatus::SWHardeningNeeded),
         "ConfigurationNeeded" => Ok(TdxTcbStatus::ConfigurationNeeded),
-        "ConfigurationAndSWHardeningNeeded" => {
-            Ok(TdxTcbStatus::ConfigurationAndSWHardeningNeeded)
-        }
+        "ConfigurationAndSWHardeningNeeded" => Ok(TdxTcbStatus::ConfigurationAndSWHardeningNeeded),
         "OutOfDate" => Ok(TdxTcbStatus::OutOfDate),
         "OutOfDateConfigurationNeeded" => Ok(TdxTcbStatus::OutOfDateConfigurationNeeded),
         "Revoked" => Ok(TdxTcbStatus::Revoked),
@@ -743,9 +711,8 @@ fn parse_tcb_status(s: &str) -> Result<TdxTcbStatus> {
 /// `pck_pem`: PCK cert chain PEM data.
 /// `crl_der`: DER-encoded CRL (from Intel PCS PCK CRL endpoint).
 pub fn check_cert_revocation(pck_pem: &[u8], crl_der: &[u8]) -> Result<()> {
-    let pem_str = std::str::from_utf8(pck_pem).map_err(|e| {
-        AttestationError::CertChainError(format!("PEM not UTF-8: {}", e))
-    })?;
+    let pem_str = std::str::from_utf8(pck_pem)
+        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
 
     let der_certs = split_pem_to_der(pem_str)?;
     if der_certs.is_empty() {
@@ -755,15 +722,13 @@ pub fn check_cert_revocation(pck_pem: &[u8], crl_der: &[u8]) -> Result<()> {
     }
 
     // Parse the leaf cert to get its serial number
-    let (_, leaf_cert) = X509Certificate::from_der(&der_certs[0]).map_err(|e| {
-        AttestationError::CertChainError(format!("PCK leaf parse: {}", e))
-    })?;
+    let (_, leaf_cert) = X509Certificate::from_der(&der_certs[0])
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf parse: {}", e)))?;
     let leaf_serial = leaf_cert.raw_serial();
 
     // Parse the CRL
-    let (_, crl) = CertificateRevocationList::from_der(crl_der).map_err(|e| {
-        AttestationError::CertChainError(format!("CRL DER parse: {}", e))
-    })?;
+    let (_, crl) = CertificateRevocationList::from_der(crl_der)
+        .map_err(|e| AttestationError::CertChainError(format!("CRL DER parse: {}", e)))?;
 
     // Check if leaf serial is in the revoked list
     for revoked in crl.iter_revoked_certificates() {
@@ -979,7 +944,10 @@ mod tests {
     #[test]
     fn test_parse_tcb_status_strings() {
         use crate::types::TdxTcbStatus;
-        assert_eq!(parse_tcb_status("UpToDate").unwrap(), TdxTcbStatus::UpToDate);
+        assert_eq!(
+            parse_tcb_status("UpToDate").unwrap(),
+            TdxTcbStatus::UpToDate
+        );
         assert_eq!(
             parse_tcb_status("SWHardeningNeeded").unwrap(),
             TdxTcbStatus::SWHardeningNeeded

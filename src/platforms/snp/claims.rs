@@ -1,6 +1,7 @@
 use sev::firmware::guest::AttestationReport;
 
 use crate::types::{Claims, TcbInfo};
+use crate::utils::strip_trailing_nulls;
 
 /// Extract normalized claims from a parsed SNP attestation report.
 pub fn extract_claims(report: &AttestationReport) -> Claims {
@@ -32,6 +33,7 @@ pub fn extract_claims(report: &AttestationReport) -> Claims {
     Claims {
         launch_digest: hex::encode(&report.measurement[..]),
         report_data: report.report_data[..].to_vec(),
+        signed_data: strip_trailing_nulls(&report.report_data[..]).to_vec(),
         init_data: report.host_data[..].to_vec(),
         tcb: TcbInfo::Snp {
             bootloader: report.reported_tcb.bootloader,

@@ -5,6 +5,8 @@ use rsa::RsaPublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AttestationError, Result};
+use crate::types::{Claims, PlatformType, VerificationResult};
+use crate::utils::strip_trailing_nulls;
 
 /// Decoded TPM quote components: (signature, message, pcr_values).
 pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
@@ -106,9 +108,18 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
             .try_into()
             .map_err(|_| AttestationError::QuoteParseFailed("HCL header slice".to_string()))?,
     );
+    let content_length = u32::from_le_bytes(
+        header[16..20]
+            .try_into()
+            .map_err(|_| AttestationError::QuoteParseFailed("HCL content_length slice".to_string()))?,
+    ) as usize;
+
+    // Validate content_length against available data
+    let available = hcl_report.len() - content_start;
+    let bounded_len = content_length.min(available);
 
     // Extract content and trim trailing nulls
-    let content = &hcl_report[content_start..];
+    let content = &hcl_report[content_start..content_start + bounded_len];
     let trimmed_len = content.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
 
     Ok(HclReportData {
@@ -176,10 +187,15 @@ pub struct TpmQuote {
 /// its Attestation Key (AK). The AK public key is embedded in the HCL
 /// report's variable data, either as JWK JSON (real Azure format) or
 /// as a TPM2B_PUBLIC structure (synthetic test data).
-pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -> Result<bool> {
+pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -> Result<()> {
     // Extract the RSA public key: try JWK JSON first, fall back to TPM2B_PUBLIC
-    let (modulus, exponent) = extract_ak_pub_from_jwk_json(var_data)
-        .or_else(|_| extract_ak_pub_from_var_data(var_data))?;
+    let (modulus, exponent) = match extract_ak_pub_from_jwk_json(var_data) {
+        Ok(result) => result,
+        Err(jwk_err) => {
+            log::debug!("JWK AK extraction failed, trying TPM2B_PUBLIC: {}", jwk_err);
+            extract_ak_pub_from_var_data(var_data)?
+        }
+    };
 
     let n = rsa::BigUint::from_bytes_be(&modulus);
     let e = rsa::BigUint::from_bytes_be(&exponent);
@@ -194,13 +210,9 @@ pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -
         AttestationError::SignatureVerificationFailed(format!("parse RSA sig: {}", e))
     })?;
 
-    match verifying_key.verify(message, &sig) {
-        Ok(()) => Ok(true),
-        Err(e) => Err(AttestationError::SignatureVerificationFailed(format!(
-            "TPM RSA PKCS1v15 SHA-256: {}",
-            e
-        ))),
-    }
+    verifying_key.verify(message, &sig).map_err(|e| {
+        AttestationError::SignatureVerificationFailed(format!("TPM RSA PKCS1v15 SHA-256: {}", e))
+    })
 }
 
 /// Extract the AK public key (RSA modulus and exponent) from HCL var_data.
@@ -233,8 +245,16 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
     let mut offset = 0;
 
     // TPM2B_PUBLIC.size
-    let _pub_size = read_be_u16(var_data, offset, "TPM2B_PUBLIC size")?;
+    let pub_size = read_be_u16(var_data, offset, "TPM2B_PUBLIC size")? as usize;
     offset += 2;
+
+    if offset + pub_size > var_data.len() {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "TPM2B_PUBLIC declared size {} exceeds available data {}",
+            pub_size,
+            var_data.len() - offset
+        )));
+    }
 
     // TPMT_PUBLIC.type
     let alg_type = read_be_u16(var_data, offset, "TPM2B_PUBLIC type")?;
@@ -362,7 +382,11 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
 pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
     let nonce = extract_tpm_nonce(message)?;
     if nonce.len() != expected.len() {
-        return Ok(false);
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "TPM nonce length mismatch: extracted {} bytes, expected {} bytes",
+            nonce.len(),
+            expected.len()
+        )));
     }
     Ok(crate::utils::constant_time_eq(&nonce, expected))
 }
@@ -523,6 +547,88 @@ pub fn decode_tpm_quote(quote: &TpmQuote) -> Result<DecodedTpmQuote> {
     Ok((sig, msg, pcrs))
 }
 
+/// Check TPM nonce against expected report_data, returning `None` if no expectation was provided.
+pub fn check_report_data(tpm_msg: &[u8], expected: Option<&[u8]>) -> Result<Option<bool>> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    let matched = verify_tpm_nonce(tpm_msg, expected)?;
+    if !matched {
+        return Err(AttestationError::ReportDataMismatch);
+    }
+    Ok(Some(true))
+}
+
+/// Check TPM PCR[8] against expected init_data_hash, returning `None` if no expectation was provided.
+pub fn check_init_data(tpm_pcrs: &[Vec<u8>], expected: Option<&[u8]>) -> Result<Option<bool>> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    if expected.len() != 32 {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "expected_init_data_hash must be exactly 32 bytes, got {}",
+            expected.len()
+        )));
+    }
+    if tpm_pcrs.len() <= 8 {
+        return Err(AttestationError::InitDataMismatch);
+    }
+    if !crate::utils::constant_time_eq(&tpm_pcrs[8], expected) {
+        return Err(AttestationError::InitDataMismatch);
+    }
+    Ok(Some(true))
+}
+
+/// Build a `VerificationResult` with TPM PCR values and nonce in platform claims.
+pub fn build_tpm_verification_result(
+    base_claims: Claims,
+    tpm_pcrs: &[Vec<u8>],
+    tpm_msg: &[u8],
+    platform: PlatformType,
+    report_data_match: Option<bool>,
+    init_data_match: Option<bool>,
+) -> VerificationResult {
+    let mut platform_data = base_claims.platform_data.clone();
+
+    let pcr_map: serde_json::Value = tpm_pcrs
+        .iter()
+        .enumerate()
+        .map(|(i, pcr)| {
+            (
+                format!("pcr{:02}", i),
+                serde_json::Value::String(hex::encode(pcr)),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+    platform_data["tpm"] = pcr_map;
+
+    let mut signed_data = base_claims.signed_data.clone();
+    match extract_tpm_nonce(tpm_msg) {
+        Ok(nonce) => {
+            platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+            signed_data = strip_trailing_nulls(&nonce).to_vec();
+        }
+        Err(e) => {
+            log::warn!("failed to extract TPM nonce for claims output: {}", e);
+        }
+    }
+
+    let claims = Claims {
+        signed_data,
+        platform_data,
+        ..base_claims
+    };
+
+    VerificationResult {
+        signature_valid: true,
+        platform,
+        claims,
+        report_data_match,
+        init_data_match,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,18 +721,17 @@ mod tests {
         let nonce = b"correct data nonce value";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, b"wrong data").unwrap();
+        let result = verify_tpm_nonce(&msg, b"wrong___data nonce value").unwrap();
         assert!(!result, "nonce should not match for different data");
     }
 
     #[test]
     fn test_tpm_nonce_length_mismatch() {
-        // When nonce and expected have different lengths, should return false
         let nonce = b"short";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, b"much longer expected data").unwrap();
-        assert!(!result, "different length nonce should not match");
+        let result = verify_tpm_nonce(&msg, b"much longer expected data");
+        assert!(result.is_err(), "different length nonce should return error");
     }
 
     #[test]
@@ -1078,6 +1183,155 @@ mod tests {
             err.contains("RSA") || err.contains("sig") || err.contains("Signature"),
             "error should be about signature verification, not key extraction: {}",
             err
+        );
+    }
+
+    // --- Regression: TPM nonce must NOT be zero-padded ---
+    // Azure vTPMs have a TPM2B_DATA max size smaller than 64 bytes.
+    // Passing zero-padded report_data to vtpm::get_quote() causes TPM_RC_SIZE.
+    // The attest path must pass unpadded data; the verify path must match
+    // the original unpadded data against the unpadded nonce in the quote.
+
+    #[test]
+    fn test_check_report_data_unpadded_nonce_matches_original() {
+        // Simulate: attester passes unpadded "hello" as TPM nonce.
+        // Verifier checks with the same unpadded "hello" → should match.
+        let nonce = b"hello";
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let result = check_report_data(&msg, Some(b"hello"));
+        assert!(result.is_ok(), "unpadded nonce should match: {:?}", result.err());
+        assert_eq!(result.unwrap(), Some(true));
+    }
+
+    #[test]
+    fn test_check_report_data_unpadded_nonce_rejects_padded_expected() {
+        // Simulate: attester passes unpadded "hello" (5 bytes) as TPM nonce.
+        // Verifier checks with zero-padded 64-byte version → should fail
+        // because lengths differ.
+        let nonce = b"hello";
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let mut padded_expected = vec![0u8; 64];
+        padded_expected[..5].copy_from_slice(b"hello");
+
+        let result = check_report_data(&msg, Some(&padded_expected));
+        assert!(result.is_err(), "padded expected should not match unpadded nonce");
+    }
+
+    #[test]
+    fn test_check_report_data_padded_nonce_rejects_unpadded_expected() {
+        // Simulate the bug scenario: attester mistakenly passes zero-padded
+        // 64-byte nonce to TPM. Verifier checks with original unpadded data.
+        // This should fail because the nonce in the quote is 64 bytes but
+        // the expected is 5 bytes.
+        let mut padded_nonce = vec![0u8; 64];
+        padded_nonce[..5].copy_from_slice(b"hello");
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(&padded_nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let result = check_report_data(&msg, Some(b"hello"));
+        assert!(
+            result.is_err(),
+            "unpadded expected should not match padded nonce (length mismatch)"
+        );
+    }
+
+    #[test]
+    fn test_check_report_data_none_returns_none() {
+        let msg = build_tpms_attest(b"any", &[3, 0xFF, 0xFF, 0xFF], &[0u8; 32]);
+        let result = check_report_data(&msg, None).unwrap();
+        assert_eq!(result, None, "no expected data should return None");
+    }
+
+    #[test]
+    fn test_build_tpm_verification_result_sets_signed_data_to_nonce() {
+        use crate::types::{Claims, TcbInfo};
+
+        let nonce = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let pcr_sel = &[0x03, 0x00, 0x00, 0x00];
+        let pcr_digest = vec![0u8; 32];
+        let tpm_msg = build_tpms_attest(&nonce, pcr_sel, &pcr_digest);
+        let tpm_pcrs: Vec<Vec<u8>> = (0..24).map(|_| vec![0u8; 32]).collect();
+
+        let base_claims = Claims {
+            launch_digest: "abcd".to_string(),
+            report_data: vec![0xFF; 64],
+            signed_data: vec![0xFF; 64],
+            init_data: vec![0x00; 32],
+            tcb: TcbInfo::Snp {
+                bootloader: 1,
+                tee: 0,
+                snp: 1,
+                microcode: 1,
+            },
+            platform_data: serde_json::json!({}),
+        };
+
+        let result = build_tpm_verification_result(
+            base_claims,
+            &tpm_pcrs,
+            &tpm_msg,
+            PlatformType::AzSnp,
+            None,
+            None,
+        );
+
+        assert_eq!(result.claims.signed_data, nonce, "signed_data should be the TPM nonce");
+        assert_eq!(result.claims.report_data, vec![0xFF; 64], "report_data should be unchanged");
+        assert_eq!(
+            result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
+            hex::encode(&nonce),
+        );
+    }
+
+    #[test]
+    fn test_build_tpm_verification_result_strips_trailing_nulls_from_signed_data() {
+        use crate::types::{Claims, TcbInfo};
+
+        // Simulate a nonce that was zero-padded to 64 bytes (as attest does)
+        let mut padded_nonce = vec![0u8; 64];
+        padded_nonce[..5].copy_from_slice(b"hello");
+
+        let pcr_sel = &[0x03, 0x00, 0x00, 0x00];
+        let pcr_digest = vec![0u8; 32];
+        let tpm_msg = build_tpms_attest(&padded_nonce, pcr_sel, &pcr_digest);
+        let tpm_pcrs: Vec<Vec<u8>> = (0..24).map(|_| vec![0u8; 32]).collect();
+
+        let base_claims = Claims {
+            launch_digest: "abcd".to_string(),
+            report_data: vec![0xFF; 64],
+            signed_data: vec![0xFF; 64],
+            init_data: vec![0x00; 32],
+            tcb: TcbInfo::Snp {
+                bootloader: 1,
+                tee: 0,
+                snp: 1,
+                microcode: 1,
+            },
+            platform_data: serde_json::json!({}),
+        };
+
+        let result = build_tpm_verification_result(
+            base_claims,
+            &tpm_pcrs,
+            &tpm_msg,
+            PlatformType::AzSnp,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            result.claims.signed_data,
+            b"hello".to_vec(),
+            "signed_data should have trailing nulls stripped"
+        );
+        // platform_data nonce should still contain the full padded value
+        assert_eq!(
+            result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
+            hex::encode(&padded_nonce),
         );
     }
 }

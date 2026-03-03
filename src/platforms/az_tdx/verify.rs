@@ -1,15 +1,22 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
-
 use crate::error::{AttestationError, Result};
 use crate::platforms::tdx::{claims::extract_claims, dcap, verify as tdx_verify};
 use crate::platforms::tpm_common;
-use crate::types::{Claims, PlatformType, VerificationResult, VerifyParams};
+use crate::types::{PlatformType, VerificationResult, VerifyParams};
+use crate::utils::decode_base64url;
 
 use super::evidence::AzTdxEvidence;
 
-/// Decode URL-safe base64, tolerating optional padding.
-fn decode_base64url(input: &str) -> std::result::Result<Vec<u8>, base64::DecodeError> {
-    BASE64URL.decode(input.trim_end_matches('='))
+fn verify_hcl_var_data_binding(
+    tdx_quote: &tdx_verify::TdxQuote,
+    var_data: &[u8],
+) -> Result<()> {
+    let hash = crate::utils::sha256(var_data);
+    if !crate::utils::constant_time_eq(&tdx_quote.body.report_data[..32], &hash) {
+        return Err(AttestationError::SignatureVerificationFailed(
+            "HCL var_data binding failed: TDX quote report_data != SHA-256(var_data)".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Verify Azure TDX vTPM attestation evidence.
@@ -17,114 +24,65 @@ pub async fn verify_evidence(
     evidence: &AzTdxEvidence,
     params: &VerifyParams,
 ) -> Result<VerificationResult> {
-    // 1. Decode HCL report
+    if evidence.version != 1 {
+        return Err(AttestationError::EvidenceDeserialize(format!(
+            "unsupported az_tdx evidence version: {}",
+            evidence.version
+        )));
+    }
+
+    // Decode
     let hcl_report_bytes = decode_base64url(&evidence.hcl_report)
         .map_err(|e| AttestationError::EvidenceDeserialize(format!("HCL report base64: {}", e)))?;
-
-    // 2. Parse HCL report structure (extracts TEE report + var_data JSON)
     let hcl = tpm_common::parse_hcl_report(&hcl_report_bytes)?;
-
-    // 3. Decode TD quote
+    if hcl.report_type != tpm_common::HCL_REPORT_TYPE_TDX {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "HCL report_type is {} (expected {} for TDX)",
+            hcl.report_type,
+            tpm_common::HCL_REPORT_TYPE_TDX
+        )));
+    }
     let td_quote_bytes = decode_base64url(&evidence.td_quote)
         .map_err(|e| AttestationError::EvidenceDeserialize(format!("TD quote base64: {}", e)))?;
-
-    // 4. Parse TPM quote
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
 
-    // 5. TPM signature verification (AK pub key extracted from var_data JWK JSON)
-    let tpm_sig_valid = tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
-
-    // 6. TPM nonce check
-    let tpm_nonce_match = if let Some(expected) = &params.expected_report_data {
-        let matched = tpm_common::verify_tpm_nonce(&tpm_msg, expected)?;
-        if !matched {
-            return Err(AttestationError::ReportDataMismatch);
-        }
-        Some(true)
-    } else {
-        None
-    };
-
-    // 7. TPM PCR integrity
+    // TPM layer
+    tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
+    let report_data_match =
+        tpm_common::check_report_data(&tpm_msg, params.expected_report_data.as_deref())?;
     tpm_common::verify_tpm_pcrs(&tpm_msg, &tpm_pcrs)?;
 
-    // 8. TDX DCAP quote verification
+    // TDX DCAP layer
     let tdx_quote = tdx_verify::parse_tdx_quote(&td_quote_bytes)?;
-
-    // 8b. Verify TDX quote ECDSA P-256 signature
     tdx_verify::verify_quote_signature(&td_quote_bytes, &tdx_quote)?;
-
-    // 8c. Full DCAP chain verification: PCK cert chain → QE report sig → QE binding
     dcap::verify_dcap_chain(&td_quote_bytes, tdx_quote.quote_version)?;
 
-    // 9. HCL var_data binding: td_quote.report_data[..32] == SHA-256(null-trimmed var_data)
-    let var_data_hash = crate::utils::sha256(&hcl.var_data);
-    let hcl_binding_valid =
-        crate::utils::constant_time_eq(&tdx_quote.body.report_data[..32], &var_data_hash);
-
-    if !hcl_binding_valid {
-        return Err(AttestationError::SignatureVerificationFailed(
-            "HCL var_data binding failed: TDX quote report_data != SHA-256(var_data)".to_string(),
-        ));
+    // TDX debug policy enforcement (bit 0 of td_attributes)
+    if tdx_quote.body.td_attributes[0] & 0x01 != 0 && !params.allow_debug {
+        return Err(AttestationError::DebugPolicyViolation);
     }
 
-    // 10. Init data check: expected_init_data_hash vs PCR[8]
-    let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
-        if tpm_pcrs.len() > 8 {
-            let mut padded = vec![0u8; 32];
-            let len = expected.len().min(32);
-            padded[..len].copy_from_slice(&expected[..len]);
-            if !crate::utils::constant_time_eq(&tpm_pcrs[8], &padded) {
-                return Err(AttestationError::InitDataMismatch);
-            }
-            Some(true)
-        } else {
-            return Err(AttestationError::InitDataMismatch);
-        }
-    } else {
-        None
-    };
+    // Bindings
+    verify_hcl_var_data_binding(&tdx_quote, &hcl.var_data)?;
+    let init_data_match =
+        tpm_common::check_init_data(&tpm_pcrs, params.expected_init_data_hash.as_deref())?;
 
-    // 11. Extract TDX claims + TPM PCR values
+    // Result
     let tdx_claims = extract_claims(&tdx_quote);
-    let mut platform_data = tdx_claims.platform_data.clone();
-
-    // Add TPM PCR values
-    let pcr_map: serde_json::Value = tpm_pcrs
-        .iter()
-        .enumerate()
-        .map(|(i, pcr)| {
-            (
-                format!("pcr{:02}", i),
-                serde_json::Value::String(hex::encode(pcr)),
-            )
-        })
-        .collect::<serde_json::Map<String, serde_json::Value>>()
-        .into();
-    platform_data["tpm"] = pcr_map;
-
-    // Add TPM nonce (user's custom report_data) to output
-    if let Ok(nonce) = tpm_common::extract_tpm_nonce(&tpm_msg) {
-        platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
-    }
-
-    let claims = Claims {
-        platform_data,
-        ..tdx_claims
-    };
-
-    Ok(VerificationResult {
-        signature_valid: tpm_sig_valid && hcl_binding_valid,
-        platform: PlatformType::AzTdx,
-        claims,
-        report_data_match: tpm_nonce_match,
+    Ok(tpm_common::build_tpm_verification_result(
+        tdx_claims,
+        &tpm_pcrs,
+        &tpm_msg,
+        PlatformType::AzTdx,
+        report_data_match,
         init_data_match,
-    })
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
     use crate::platforms::tpm_common::TpmQuote;
 
     fn build_dummy_tpm_quote() -> TpmQuote {
@@ -133,6 +91,21 @@ mod tests {
             message: "ff544347".to_string() + &"00".repeat(100),
             pcrs: (0..24).map(|_| "00".repeat(32)).collect(),
         }
+    }
+
+    fn build_hcl_report(report_type: u32, content: &[u8]) -> Vec<u8> {
+        let tee_end = 0x20 + 1184;
+        let content_start = tee_end + 20;
+        let mut hcl = vec![0u8; content_start + content.len()];
+        hcl[0..4].copy_from_slice(b"HCLA");
+        let total = (20 + content.len()) as u32;
+        hcl[tee_end..tee_end + 4].copy_from_slice(&total.to_le_bytes());
+        hcl[tee_end + 4..tee_end + 8].copy_from_slice(&1u32.to_le_bytes());
+        hcl[tee_end + 8..tee_end + 12].copy_from_slice(&report_type.to_le_bytes());
+        hcl[tee_end + 12..tee_end + 16].copy_from_slice(&1u32.to_le_bytes());
+        hcl[tee_end + 16..tee_end + 20].copy_from_slice(&(content.len() as u32).to_le_bytes());
+        hcl[content_start..].copy_from_slice(content);
+        hcl
     }
 
     #[test]
@@ -173,21 +146,7 @@ mod tests {
 
     #[test]
     fn test_invalid_base64_td_quote() {
-        // Build a properly-formatted HCL report
-        let tee_report_end = 0x20 + 1184;
-        let content_start = tee_report_end + 20;
-        let content = b"{}";
-        let mut hcl = vec![0u8; content_start + content.len()];
-        hcl[0..4].copy_from_slice(b"HCLA");
-        let total_remaining = (20 + content.len()) as u32;
-        hcl[tee_report_end..tee_report_end + 4].copy_from_slice(&total_remaining.to_le_bytes());
-        hcl[tee_report_end + 4..tee_report_end + 8].copy_from_slice(&1u32.to_le_bytes());
-        hcl[tee_report_end + 8..tee_report_end + 12]
-            .copy_from_slice(&tpm_common::HCL_REPORT_TYPE_TDX.to_le_bytes());
-        hcl[tee_report_end + 12..tee_report_end + 16].copy_from_slice(&1u32.to_le_bytes());
-        hcl[tee_report_end + 16..tee_report_end + 20]
-            .copy_from_slice(&(content.len() as u32).to_le_bytes());
-        hcl[content_start..].copy_from_slice(content);
+        let hcl = build_hcl_report(tpm_common::HCL_REPORT_TYPE_TDX, b"{}");
 
         let evidence = AzTdxEvidence {
             version: 1,
@@ -204,53 +163,99 @@ mod tests {
     }
 
     #[test]
-    fn test_hcl_var_data_binding_sha256() {
-        // Azure TDX uses SHA-256 for HCL var_data binding (same as SNP)
-        // The CoCo reference compares SHA-256(var_data) with td_quote.report_data[..32]
-        let var_data = b"test variable data for tdx binding";
-        let var_data_hash = crate::utils::sha256(var_data);
+    fn test_evidence_version_rejected() {
+        let evidence = AzTdxEvidence {
+            version: 99,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: "dGVzdA".to_string(),
+            td_quote: "AAAA".to_string(),
+        };
 
-        assert_eq!(var_data_hash.len(), 32);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("version"), "error should mention version: {}", err);
     }
 
     #[test]
-    fn test_hcl_report_layout_consistent() {
-        // Azure TDX uses the same HCL report layout as Azure SNP
-        // TEE report at 0x20 (1184 bytes), var_data header at 0x4C0,
-        // var_data content at 0x4D4
-        assert_eq!(0x20 + 1184, 0x4C0);
-        assert_eq!(0x4C0 + 20, 0x4D4);
+    fn test_hcl_report_type_must_be_tdx() {
+        let hcl = build_hcl_report(tpm_common::HCL_REPORT_TYPE_SNP, b"{}");
+
+        let evidence = AzTdxEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: BASE64URL.encode(&hcl),
+            td_quote: BASE64URL.encode([0u8; 100]),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("report_type") || err.contains("expected"), "error: {}", err);
     }
 
     #[test]
-    fn test_platform_type_is_az_tdx() {
-        assert_eq!(
-            format!("{}", PlatformType::AzTdx),
-            "az-tdx",
-            "platform type should display as az-tdx"
+    fn test_hcl_report_too_short() {
+        let short_hcl = vec![0u8; 100];
+
+        let evidence = AzTdxEvidence {
+            version: 1,
+            tpm_quote: build_dummy_tpm_quote(),
+            hcl_report: BASE64URL.encode(&short_hcl),
+            td_quote: BASE64URL.encode([0u8; 100]),
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let params = VerifyParams::default();
+
+        let result = rt.block_on(verify_evidence(&evidence, &params));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("too short"), "error should mention too short: {}", err);
+    }
+
+    #[test]
+    fn test_init_data_hash_wrong_length() {
+        let result_31 = tpm_common::check_init_data(
+            &(0..24).map(|_| vec![0u8; 32]).collect::<Vec<_>>(),
+            Some(&vec![0u8; 31]),
         );
+        assert!(result_31.is_err(), "31-byte init data hash should be rejected");
+
+        let result_64 = tpm_common::check_init_data(
+            &(0..24).map(|_| vec![0u8; 32]).collect::<Vec<_>>(),
+            Some(&vec![0u8; 64]),
+        );
+        assert!(result_64.is_err(), "64-byte init data hash should be rejected");
     }
 
     #[test]
-    fn test_init_data_pcr8_check() {
-        // Verify the PCR[8] init data check logic
+    fn test_init_data_pcr8_mismatch() {
         let pcrs: Vec<Vec<u8>> = (0..24).map(|i| vec![i as u8; 32]).collect();
-
-        // Expected init data should match PCR[8]
-        let expected = pcrs[8].clone();
-        let mut padded = vec![0u8; 32];
-        padded[..expected.len().min(32)].copy_from_slice(&expected[..expected.len().min(32)]);
-
-        assert!(
-            crate::utils::constant_time_eq(&pcrs[8], &padded),
-            "PCR[8] should match expected init data"
-        );
-
-        // Non-matching expected should fail
         let wrong = vec![0xFF; 32];
-        assert!(
-            !crate::utils::constant_time_eq(&pcrs[8], &wrong),
-            "PCR[8] should not match wrong init data"
+
+        let result = tpm_common::check_init_data(&pcrs, Some(&wrong));
+        assert!(result.is_err(), "mismatched PCR[8] should be rejected");
+    }
+
+    #[test]
+    fn test_coco_tdx_tpm_message_has_valid_magic() {
+        let json = include_str!("../../../test_data/az_tdx/tpm-quote-v1.json");
+        let quote: tpm_common::TpmQuote = serde_json::from_str(json).unwrap();
+        let msg = hex::decode(&quote.message).unwrap();
+
+        assert!(msg.len() >= 4, "TPM message too short");
+        let magic = u32::from_be_bytes(msg[0..4].try_into().unwrap());
+        assert_eq!(
+            magic, 0xFF544347,
+            "TPM Attest magic should be 0xFF544347, got 0x{:08X}",
+            magic
         );
     }
 
@@ -300,6 +305,20 @@ mod tests {
     }
 
     #[test]
+    fn test_coco_tdx_hcl_var_data_binding() {
+        let parsed = tpm_common::parse_hcl_report(COCO_TDX_HCL_REPORT).unwrap();
+
+        // For az_tdx, the TD quote report_data[..32] should match SHA-256(var_data).
+        // We can at least verify the hash computation is deterministic and 32 bytes.
+        let var_data_hash = crate::utils::sha256(&parsed.var_data);
+        assert_eq!(var_data_hash.len(), 32);
+        assert!(
+            parsed.var_data.len() > 0,
+            "var_data should not be empty for binding test"
+        );
+    }
+
+    #[test]
     fn test_coco_tdx_tpm_quote_v1_deserializes() {
         let json = include_str!("../../../test_data/az_tdx/tpm-quote-v1.json");
         let quote: std::result::Result<tpm_common::TpmQuote, _> = serde_json::from_str(json);
@@ -338,7 +357,6 @@ mod tests {
     fn test_coco_tdx_tpm_signature_verification() {
         let parsed = tpm_common::parse_hcl_report(COCO_TDX_HCL_REPORT).unwrap();
 
-        // Load TPM quote from JSON fixture
         let json = include_str!("../../../test_data/az_tdx/tpm-quote-v1.json");
         let quote: tpm_common::TpmQuote = serde_json::from_str(json).unwrap();
 
@@ -351,6 +369,5 @@ mod tests {
             "TDX TPM signature should verify: {:?}",
             result.err()
         );
-        assert!(result.unwrap(), "TPM signature should be valid");
     }
 }

@@ -1,4 +1,5 @@
 use crate::types::{Claims, TcbInfo};
+use crate::utils::strip_trailing_nulls;
 
 use super::verify::TdxQuote;
 
@@ -24,6 +25,7 @@ pub fn extract_claims(quote: &TdxQuote) -> Claims {
     Claims {
         launch_digest: hex::encode(quote.body.mr_td),
         report_data: quote.body.report_data.to_vec(),
+        signed_data: strip_trailing_nulls(&quote.body.report_data).to_vec(),
         init_data: quote.body.mr_config_id.to_vec(),
         tcb: TcbInfo::Tdx {
             tcb_svn: quote.body.tee_tcb_svn.to_vec(),

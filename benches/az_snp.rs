@@ -120,13 +120,12 @@ fn bench_tpm_signature_verify(c: &mut Criterion) {
 
     c.bench_function("az_snp/tpm_signature_verify", |b| {
         b.iter(|| {
-            let result = attestation::platforms::tpm_common::verify_tpm_signature(
+            attestation::platforms::tpm_common::verify_tpm_signature(
                 black_box(&sig),
                 black_box(&msg),
                 black_box(&parsed.var_data),
             )
             .unwrap();
-            black_box(&result);
         });
     });
 }
@@ -203,7 +202,7 @@ fn bench_tpm_checks_only(c: &mut Criterion) {
 
     c.bench_function("az_snp/tpm_checks_only", |b| {
         b.iter(|| {
-            let sig_valid = attestation::platforms::tpm_common::verify_tpm_signature(
+            attestation::platforms::tpm_common::verify_tpm_signature(
                 black_box(&tpm_sig),
                 black_box(&tpm_msg),
                 black_box(&parsed.var_data),
@@ -214,7 +213,6 @@ fn bench_tpm_checks_only(c: &mut Criterion) {
                 black_box(&tpm_pcrs),
             )
             .unwrap();
-            black_box(sig_valid);
         });
     });
 }
