@@ -71,7 +71,10 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
 
 /// Generate Azure TDX attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
-    let padded = pad_report_data(report_data, 64)?;
+    // Validate size fits in 64-byte report_data field, but do NOT pad:
+    // TPM2B_DATA (used by vtpm::get_quote) has a smaller max size than 64 bytes
+    // on Azure vTPMs, so we must pass the original unpadded data as the nonce.
+    let _ = pad_report_data(report_data, 64)?;
 
     // 1. Write report_data to TPM NV index, wait for HCL to regenerate TD report,
     //    then read the updated HCL report from vTPM NVRAM.
@@ -99,8 +102,8 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
     // 4. Get TD quote from Azure IMDS (signed by Intel QE)
     let td_quote_bytes = get_td_quote_from_imds(&td_report).await?;
 
-    // 5. Generate TPM quote with report_data as nonce
-    let quote = vtpm::get_quote(&padded).map_err(|e| {
+    // 5. Generate TPM quote with report_data as nonce (unpadded)
+    let quote = vtpm::get_quote(report_data).map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("vtpm::get_quote failed: {}", e))
     })?;
     let tpm_quote = quote_to_tpm_quote(quote);

@@ -1186,6 +1186,66 @@ mod tests {
         );
     }
 
+    // --- Regression: TPM nonce must NOT be zero-padded ---
+    // Azure vTPMs have a TPM2B_DATA max size smaller than 64 bytes.
+    // Passing zero-padded report_data to vtpm::get_quote() causes TPM_RC_SIZE.
+    // The attest path must pass unpadded data; the verify path must match
+    // the original unpadded data against the unpadded nonce in the quote.
+
+    #[test]
+    fn test_check_report_data_unpadded_nonce_matches_original() {
+        // Simulate: attester passes unpadded "hello" as TPM nonce.
+        // Verifier checks with the same unpadded "hello" → should match.
+        let nonce = b"hello";
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let result = check_report_data(&msg, Some(b"hello"));
+        assert!(result.is_ok(), "unpadded nonce should match: {:?}", result.err());
+        assert_eq!(result.unwrap(), Some(true));
+    }
+
+    #[test]
+    fn test_check_report_data_unpadded_nonce_rejects_padded_expected() {
+        // Simulate: attester passes unpadded "hello" (5 bytes) as TPM nonce.
+        // Verifier checks with zero-padded 64-byte version → should fail
+        // because lengths differ.
+        let nonce = b"hello";
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let mut padded_expected = vec![0u8; 64];
+        padded_expected[..5].copy_from_slice(b"hello");
+
+        let result = check_report_data(&msg, Some(&padded_expected));
+        assert!(result.is_err(), "padded expected should not match unpadded nonce");
+    }
+
+    #[test]
+    fn test_check_report_data_padded_nonce_rejects_unpadded_expected() {
+        // Simulate the bug scenario: attester mistakenly passes zero-padded
+        // 64-byte nonce to TPM. Verifier checks with original unpadded data.
+        // This should fail because the nonce in the quote is 64 bytes but
+        // the expected is 5 bytes.
+        let mut padded_nonce = vec![0u8; 64];
+        padded_nonce[..5].copy_from_slice(b"hello");
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(&padded_nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let result = check_report_data(&msg, Some(b"hello"));
+        assert!(
+            result.is_err(),
+            "unpadded expected should not match padded nonce (length mismatch)"
+        );
+    }
+
+    #[test]
+    fn test_check_report_data_none_returns_none() {
+        let msg = build_tpms_attest(b"any", &[3, 0xFF, 0xFF, 0xFF], &[0u8; 32]);
+        let result = check_report_data(&msg, None).unwrap();
+        assert_eq!(result, None, "no expected data should return None");
+    }
+
     #[test]
     fn test_build_tpm_verification_result_sets_signed_data_to_nonce() {
         use crate::types::{Claims, TcbInfo};
