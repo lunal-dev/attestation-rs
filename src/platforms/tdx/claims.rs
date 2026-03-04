@@ -3,15 +3,28 @@ use crate::utils::strip_trailing_nulls;
 
 use super::verify::TdxQuote;
 
+/// Parse TD attributes bitflags into named booleans.
+fn parse_td_attributes(raw: &[u8; 8]) -> serde_json::Value {
+    let bits = u64::from_le_bytes(*raw);
+    serde_json::json!({
+        "debug": bits & (1 << 0) != 0,
+        "septve_disable": bits & (1 << 28) != 0,
+        "protection_keys": bits & (1 << 30) != 0,
+        "key_locker": bits & (1 << 31) != 0,
+        "perfmon": bits & (1 << 63) != 0,
+    })
+}
+
 /// Extract normalized claims from a parsed TDX quote.
 pub fn extract_claims(quote: &TdxQuote) -> Claims {
-    let platform_data = serde_json::json!({
+    let mut platform_data = serde_json::json!({
         "quote_version": format!("{:?}", quote.quote_version),
         "tee_type": format!("0x{:x}", quote.header.tee_type),
         "mr_seam": hex::encode(quote.body.mr_seam),
         "mrsigner_seam": hex::encode(quote.body.mrsigner_seam),
         "seam_attributes": hex::encode(quote.body.seam_attributes),
         "td_attributes": hex::encode(quote.body.td_attributes),
+        "td_attributes_parsed": parse_td_attributes(&quote.body.td_attributes),
         "xfam": hex::encode(quote.body.xfam),
         "mr_config_id": hex::encode(quote.body.mr_config_id),
         "mr_owner": hex::encode(quote.body.mr_owner),
@@ -21,6 +34,14 @@ pub fn extract_claims(quote: &TdxQuote) -> Claims {
         "rtmr_2": hex::encode(quote.body.rtmr_2),
         "rtmr_3": hex::encode(quote.body.rtmr_3),
     });
+
+    // TDX 1.5 extra fields
+    if let Some(svn2) = &quote.body.tee_tcb_svn2 {
+        platform_data["tee_tcb_svn2"] = serde_json::Value::String(hex::encode(svn2));
+    }
+    if let Some(svc) = &quote.body.mr_servicetd {
+        platform_data["mr_servicetd"] = serde_json::Value::String(hex::encode(svc));
+    }
 
     Claims {
         launch_digest: hex::encode(quote.body.mr_td),
@@ -205,5 +226,54 @@ mod tests {
         let decoded = hex::decode(&claims.launch_digest);
         assert!(decoded.is_ok(), "launch_digest should be valid hex");
         assert_eq!(decoded.unwrap().len(), 48);
+    }
+
+    #[test]
+    fn test_td_attributes_parsed_in_claims() {
+        let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
+        let claims = extract_claims(&quote);
+
+        let parsed = &claims.platform_data["td_attributes_parsed"];
+        assert!(parsed.is_object(), "td_attributes_parsed should be an object");
+        assert!(parsed.get("debug").is_some(), "should have debug field");
+        assert!(parsed.get("septve_disable").is_some());
+        assert!(parsed.get("protection_keys").is_some());
+        assert!(parsed.get("key_locker").is_some());
+        assert!(parsed.get("perfmon").is_some());
+    }
+
+    #[test]
+    fn test_td_attributes_debug_flag() {
+        // Parse raw td_attributes and check debug bit
+        let td_attrs: [u8; 8] = [0x01, 0, 0, 0, 0, 0, 0, 0]; // bit 0 set = DEBUG
+        let parsed = parse_td_attributes(&td_attrs);
+        assert_eq!(parsed["debug"], true);
+        assert_eq!(parsed["septve_disable"], false);
+
+        // No debug
+        let td_attrs_no_debug: [u8; 8] = [0x00, 0, 0, 0, 0, 0, 0, 0];
+        let parsed2 = parse_td_attributes(&td_attrs_no_debug);
+        assert_eq!(parsed2["debug"], false);
+    }
+
+    #[test]
+    fn test_v5_claims_include_tdx15_fields() {
+        let quote = parse_tdx_quote(V5_QUOTE).expect("failed to parse v5 quote");
+        let claims = extract_claims(&quote);
+
+        // V5 TDX 1.5 claims should have tee_tcb_svn2 and mr_servicetd
+        // if the quote fixture body is large enough to contain them
+        if quote.body.tee_tcb_svn2.is_some() {
+            assert!(
+                claims.platform_data.get("tee_tcb_svn2").is_some(),
+                "V5 claims should include tee_tcb_svn2"
+            );
+        }
+        if quote.body.mr_servicetd.is_some() {
+            assert!(
+                claims.platform_data.get("mr_servicetd").is_some(),
+                "V5 claims should include mr_servicetd"
+            );
+        }
     }
 }

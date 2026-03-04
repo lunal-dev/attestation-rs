@@ -62,6 +62,9 @@ pub struct VerificationResult {
     pub report_data_match: Option<bool>,
     /// Did the init_data match expected (None if no expected value provided).
     pub init_data_match: Option<bool>,
+    /// TDX DCAP TCB status from Intel collateral evaluation (TDX platforms only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tcb_status: Option<DcapVerificationStatus>,
 }
 
 /// Normalized claims extracted from evidence.
@@ -95,6 +98,9 @@ pub enum TcbInfo {
         tee: u8,
         snp: u8,
         microcode: u8,
+        /// FMC (Firmware Microcontroller) SPL — present only on Turin processors.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fmc: Option<u8>,
     },
     Tdx {
         /// Raw 16-byte TCB SVN from the quote body.
@@ -142,6 +148,9 @@ pub struct DcapVerificationStatus {
     pub fmspc: String,
     /// Security advisory IDs affecting this TCB level.
     pub advisory_ids: Vec<String>,
+    /// Whether the TCB Info collateral has expired (nextUpdate in the past).
+    #[serde(default)]
+    pub collateral_expired: bool,
 }
 
 /// AMD processor generation for SNP.
@@ -180,6 +189,9 @@ pub struct SnpTcb {
     pub tee: u8,
     pub snp: u8,
     pub microcode: u8,
+    /// FMC (Firmware Microcontroller) SPL — present only on Turin processors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmc: Option<u8>,
 }
 
 #[cfg(test)]
@@ -334,11 +346,13 @@ mod tests {
             tee: 0,
             snp: 8,
             microcode: 115,
+            fmc: None,
         };
         assert_eq!(tcb.bootloader, 3);
         assert_eq!(tcb.tee, 0);
         assert_eq!(tcb.snp, 8);
         assert_eq!(tcb.microcode, 115);
+        assert_eq!(tcb.fmc, None);
     }
 
     #[test]
@@ -348,8 +362,25 @@ mod tests {
             tee: 0,
             snp: 8,
             microcode: 115,
+            fmc: None,
         };
         let json = serde_json::to_string(&tcb).unwrap();
+        assert!(!json.contains("fmc"), "fmc: None should be skipped in JSON");
+        let back: SnpTcb = serde_json::from_str(&json).unwrap();
+        assert_eq!(tcb, back);
+    }
+
+    #[test]
+    fn test_snp_tcb_with_fmc() {
+        let tcb = SnpTcb {
+            bootloader: 3,
+            tee: 0,
+            snp: 8,
+            microcode: 115,
+            fmc: Some(42),
+        };
+        let json = serde_json::to_string(&tcb).unwrap();
+        assert!(json.contains("\"fmc\":42"), "fmc should be present in JSON");
         let back: SnpTcb = serde_json::from_str(&json).unwrap();
         assert_eq!(tcb, back);
     }
@@ -367,6 +398,7 @@ mod tests {
                 tee: 0,
                 snp: 8,
                 microcode: 115,
+                fmc: None,
             },
             platform_data: serde_json::json!({
                 "vmpl": 0,
@@ -388,6 +420,7 @@ mod tests {
                 tee,
                 snp,
                 microcode,
+                ..
             } => {
                 assert_eq!(*bootloader, 3);
                 assert_eq!(*tee, 0);
@@ -450,11 +483,13 @@ mod tests {
                     tee: 2,
                     snp: 3,
                     microcode: 4,
+                    fmc: None,
                 },
                 platform_data: serde_json::json!({}),
             },
             report_data_match: Some(true),
             init_data_match: Some(false),
+            tcb_status: None,
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -482,6 +517,7 @@ mod tests {
             },
             report_data_match: None,
             init_data_match: None,
+            tcb_status: None,
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -500,6 +536,7 @@ mod tests {
             tee: 2,
             snp: 3,
             microcode: 4,
+            fmc: None,
         };
         let json = serde_json::to_string(&snp_tcb).unwrap();
         assert!(
