@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
 use az_tdx_vtpm::{hcl, is_tdx_cvm, tdx, vtpm};
@@ -21,7 +23,13 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
     let report_b64 = BASE64URL.encode(td_report.as_bytes());
     let body = serde_json::json!({ "report": report_b64 });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| {
+            AttestationError::HardwareAccessFailed(format!("build HTTP client: {}", e))
+        })?;
     let response = client
         .post(IMDS_QUOTE_URL)
         .json(&body)

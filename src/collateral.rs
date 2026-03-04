@@ -1,9 +1,20 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 #[cfg(not(target_arch = "wasm32"))]
 use base64::Engine;
 
 use crate::error::Result;
 use crate::types::{ProcessorGeneration, SnpTcb};
+
+/// HTTP request timeout (total).
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// HTTP connection timeout.
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum allowed HTTP response body size (5 MiB).
+const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024;
 
 /// Trait for providing platform vendor certificates.
 /// The library ships a default impl that does HTTP fetch with in-memory caching.
@@ -50,7 +61,11 @@ impl DefaultCertProvider {
     pub fn new() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(HTTP_TIMEOUT)
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .build()
+                .expect("failed to build HTTP client"),
             cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
@@ -84,8 +99,13 @@ impl DefaultCertProvider {
         chip_id: &[u8; 64],
         tcb: &SnpTcb,
     ) -> String {
-        let chip_id_hex = hex::encode(chip_id);
-        format!(
+        // Turin uses only the first 8 bytes of chip_id for KDS lookup
+        let chip_id_hex = if processor_gen == ProcessorGeneration::Turin {
+            hex::encode(&chip_id[..8])
+        } else {
+            hex::encode(chip_id)
+        };
+        let mut url = format!(
             "https://kdsintf.amd.com/vcek/v1/{}/{}?blSPL={:02}&teeSPL={:02}&snpSPL={:02}&ucodeSPL={:02}",
             processor_gen.product_name(),
             chip_id_hex,
@@ -93,7 +113,12 @@ impl DefaultCertProvider {
             tcb.tee,
             tcb.snp,
             tcb.microcode,
-        )
+        );
+        // Turin processors have an additional FMC SPL parameter
+        if let Some(fmc) = tcb.fmc {
+            url.push_str(&format!("&fmcSPL={:02}", fmc));
+        }
+        url
     }
 
     /// Build AMD KDS URL for cert chain (ARK + ASK).
@@ -115,7 +140,7 @@ impl DefaultCertProvider {
         }
 
         // Fetch from network
-        let bytes = self
+        let response = self
             .client
             .get(url)
             .send()
@@ -126,13 +151,32 @@ impl DefaultCertProvider {
             .error_for_status()
             .map_err(|e| {
                 crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
-            })?
+            })?;
+
+        // Check Content-Length header before reading body
+        if let Some(len) = response.content_length() {
+            if len as usize > MAX_RESPONSE_SIZE {
+                return Err(crate::error::AttestationError::CertFetchError(format!(
+                    "response too large: Content-Length {} exceeds {} byte limit",
+                    len, MAX_RESPONSE_SIZE
+                )));
+            }
+        }
+
+        let bytes = response
             .bytes()
             .await
             .map_err(|e| {
                 crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
             })?
             .to_vec();
+
+        if bytes.len() > MAX_RESPONSE_SIZE {
+            return Err(crate::error::AttestationError::CertFetchError(format!(
+                "response body too large: {} bytes exceeds {} byte limit",
+                bytes.len(), MAX_RESPONSE_SIZE
+            )));
+        }
 
         // Cache the result
         self.set_cached(url.to_string(), bytes.clone());
@@ -263,6 +307,29 @@ pub trait TdxCollateralProvider: Send + Sync {
 
     /// Fetch the PCK CRL for a given CA type ("platform" or "processor").
     async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>>;
+
+    /// Fetch the TCB Info signing certificate chain (PEM).
+    ///
+    /// This is the `TCB-Info-Issuer-Chain` response header from Intel PCS,
+    /// containing the Intel SGX TCB Signing Certificate → Root CA chain.
+    /// Used to verify the Intel ECDSA signature on TCB Info JSON.
+    ///
+    /// Returns `None` if the signing chain is not available (signature
+    /// verification will be skipped).
+    async fn get_tcb_signing_chain(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// Fetch the QE Identity signing certificate chain (PEM).
+    ///
+    /// This is the `SGX-Enclave-Identity-Issuer-Chain` response header from
+    /// Intel PCS. Used to verify the Intel ECDSA signature on QE Identity JSON.
+    ///
+    /// Returns `None` if the signing chain is not available (signature
+    /// verification will be skipped).
+    async fn get_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
 
 /// Default TDX collateral provider: fetches from Intel PCS v4 with caching.
@@ -276,7 +343,11 @@ impl DefaultTdxCollateralProvider {
     pub fn new() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(HTTP_TIMEOUT)
+                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .build()
+                .expect("failed to build HTTP client"),
             cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
@@ -338,7 +409,7 @@ impl DefaultTdxCollateralProvider {
             return Ok(cached);
         }
 
-        let bytes = self
+        let response = self
             .client
             .get(url)
             .send()
@@ -349,7 +420,18 @@ impl DefaultTdxCollateralProvider {
             .error_for_status()
             .map_err(|e| {
                 crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
-            })?
+            })?;
+
+        if let Some(len) = response.content_length() {
+            if len as usize > MAX_RESPONSE_SIZE {
+                return Err(crate::error::AttestationError::CertFetchError(format!(
+                    "response too large: Content-Length {} exceeds {} byte limit",
+                    len, MAX_RESPONSE_SIZE
+                )));
+            }
+        }
+
+        let bytes = response
             .bytes()
             .await
             .map_err(|e| {
@@ -357,8 +439,83 @@ impl DefaultTdxCollateralProvider {
             })?
             .to_vec();
 
+        if bytes.len() > MAX_RESPONSE_SIZE {
+            return Err(crate::error::AttestationError::CertFetchError(format!(
+                "response body too large: {} bytes exceeds {} byte limit",
+                bytes.len(), MAX_RESPONSE_SIZE
+            )));
+        }
+
         self.set_cached(url.to_string(), bytes.clone());
         Ok(bytes)
+    }
+
+    /// Fetch a URL and capture a specific response header as PEM cert chain.
+    ///
+    /// Intel PCS returns signing cert chains as URL-encoded PEM in response
+    /// headers (`TCB-Info-Issuer-Chain`, `SGX-Enclave-Identity-Issuer-Chain`).
+    async fn fetch_with_signing_chain(
+        &self,
+        url: &str,
+        header_name: &str,
+        chain_cache_key: &str,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
+        // Check body cache
+        if let Some(cached_body) = self.get_cached(url) {
+            let chain = self.get_cached(chain_cache_key);
+            return Ok((cached_body, chain));
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("HTTP request: {}", e))
+            })?
+            .error_for_status()
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
+            })?;
+
+        if let Some(len) = response.content_length() {
+            if len as usize > MAX_RESPONSE_SIZE {
+                return Err(crate::error::AttestationError::CertFetchError(format!(
+                    "response too large: Content-Length {} exceeds {} byte limit",
+                    len, MAX_RESPONSE_SIZE
+                )));
+            }
+        }
+
+        // Extract signing chain from response header (URL-encoded PEM)
+        let chain_pem = response
+            .headers()
+            .get(header_name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| percent_decode(v).into_bytes());
+
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| {
+                crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
+            })?
+            .to_vec();
+
+        if body.len() > MAX_RESPONSE_SIZE {
+            return Err(crate::error::AttestationError::CertFetchError(format!(
+                "response body too large: {} bytes exceeds {} byte limit",
+                body.len(), MAX_RESPONSE_SIZE
+            )));
+        }
+
+        self.set_cached(url.to_string(), body.clone());
+        if let Some(ref chain) = chain_pem {
+            self.set_cached(chain_cache_key.to_string(), chain.clone());
+        }
+
+        Ok((body, chain_pem))
     }
 }
 
@@ -366,11 +523,32 @@ impl DefaultTdxCollateralProvider {
 #[async_trait]
 impl TdxCollateralProvider for DefaultTdxCollateralProvider {
     async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>> {
-        self.fetch(&Self::tcb_info_url(fmspc)).await
+        let url = Self::tcb_info_url(fmspc);
+        let (body, chain) = self
+            .fetch_with_signing_chain(&url, "tcb-info-issuer-chain", "tcb_signing_chain")
+            .await?;
+        if let Some(ref chain_pem) = chain {
+            self.set_cached("tcb_signing_chain".to_string(), chain_pem.clone());
+        }
+        Ok(body)
     }
 
     async fn get_qe_identity(&self) -> Result<Vec<u8>> {
-        self.fetch(&Self::qe_identity_url()).await
+        let url = Self::qe_identity_url();
+        let (body, chain) = self
+            .fetch_with_signing_chain(
+                &url,
+                "sgx-enclave-identity-issuer-chain",
+                "qe_identity_signing_chain",
+            )
+            .await?;
+        if let Some(ref chain_pem) = chain {
+            self.set_cached(
+                "qe_identity_signing_chain".to_string(),
+                chain_pem.clone(),
+            );
+        }
+        Ok(body)
     }
 
     async fn get_root_ca_crl(&self) -> Result<Vec<u8>> {
@@ -379,6 +557,14 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
 
     async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>> {
         self.fetch(&Self::pck_crl_url(ca)).await
+    }
+
+    async fn get_tcb_signing_chain(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.get_cached("tcb_signing_chain"))
+    }
+
+    async fn get_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.get_cached("qe_identity_signing_chain"))
     }
 }
 
@@ -432,6 +618,39 @@ impl Default for DefaultTdxCollateralProvider {
     }
 }
 
+/// Simple percent-decoding for URL-encoded PEM strings from Intel PCS headers.
+#[cfg(not(target_arch = "wasm32"))]
+fn percent_decode(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            if let (Some(h), Some(l)) = (chars.next(), chars.next()) {
+                if let (Some(hv), Some(lv)) = (hex_val(h), hex_val(l)) {
+                    result.push((hv << 4 | lv) as char);
+                    continue;
+                }
+            }
+            result.push('%');
+        } else if b == b'+' {
+            result.push(' ');
+        } else {
+            result.push(b as char);
+        }
+    }
+    result
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +663,7 @@ mod tests {
             tee: 0,
             snp: 8,
             microcode: 115,
+            fmc: None,
         };
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Milan, &chip_id, &tcb);
 
@@ -453,6 +673,7 @@ mod tests {
         assert!(url.contains("teeSPL=00"));
         assert!(url.contains("snpSPL=08"));
         assert!(url.contains("ucodeSPL=115"));
+        assert!(!url.contains("fmcSPL"), "Milan should not include fmcSPL");
     }
 
     #[test]
@@ -463,6 +684,7 @@ mod tests {
             tee: 2,
             snp: 3,
             microcode: 4,
+            fmc: None,
         };
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Genoa, &chip_id, &tcb);
 
@@ -472,6 +694,7 @@ mod tests {
         assert!(url.contains("teeSPL=02"));
         assert!(url.contains("snpSPL=03"));
         assert!(url.contains("ucodeSPL=04"));
+        assert!(!url.contains("fmcSPL"), "Genoa should not include fmcSPL");
     }
 
     #[test]
@@ -482,15 +705,19 @@ mod tests {
             tee: 0,
             snp: 0,
             microcode: 0,
+            fmc: Some(10),
         };
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Turin, &chip_id, &tcb);
 
         assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Turin/"));
-        assert!(url.contains(&hex::encode(chip_id)));
+        // Turin uses only first 8 bytes of chip_id
+        assert!(url.contains(&hex::encode(&chip_id[..8])));
+        assert!(!url.contains(&hex::encode(chip_id)), "Turin should NOT use full 64-byte chip_id");
         assert!(url.contains("blSPL=00"));
         assert!(url.contains("teeSPL=00"));
         assert!(url.contains("snpSPL=00"));
         assert!(url.contains("ucodeSPL=00"));
+        assert!(url.contains("fmcSPL=10"), "Turin should include fmcSPL");
     }
 
     #[test]
@@ -501,6 +728,7 @@ mod tests {
             tee: 128,
             snp: 64,
             microcode: 32,
+            fmc: None,
         };
         let url = DefaultCertProvider::vcek_url(ProcessorGeneration::Milan, &chip_id, &tcb);
 
