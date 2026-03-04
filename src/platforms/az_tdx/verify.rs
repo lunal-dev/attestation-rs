@@ -55,7 +55,7 @@ pub async fn verify_evidence(
     // TDX DCAP layer
     let tdx_quote = tdx_verify::parse_tdx_quote(&td_quote_bytes)?;
     tdx_verify::verify_quote_signature(&td_quote_bytes, &tdx_quote)?;
-    dcap::verify_dcap_chain(&td_quote_bytes, tdx_quote.quote_version)?;
+    dcap::verify_dcap_chain(&td_quote_bytes, tdx_quote.quote_version, None)?;
 
     // TDX debug policy enforcement (bit 0 of td_attributes)
     if tdx_quote.body.td_attributes[0] & 0x01 != 0 && !params.allow_debug {

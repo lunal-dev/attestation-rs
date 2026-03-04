@@ -338,7 +338,7 @@ pub async fn verify_evidence(
     let sig_valid = verify_quote_signature(&quote_bytes, &quote)?;
 
     // 3b. Full DCAP chain verification: PCK cert chain → QE report sig → QE binding
-    super::dcap::verify_dcap_chain(&quote_bytes, quote.quote_version)?;
+    super::dcap::verify_dcap_chain(&quote_bytes, quote.quote_version, None)?;
 
     // 4. Check report_data binding
     let report_data_match = if let Some(expected) = &params.expected_report_data {
@@ -365,17 +365,12 @@ pub async fn verify_evidence(
     };
 
     // 6. Eventlog integrity check (if present)
-    if let Some(eventlog_b64) = &evidence.cc_eventlog {
-        let _eventlog_bytes = BASE64
-            .decode(eventlog_b64)
-            .map_err(|e| AttestationError::EvidenceDeserialize(format!("eventlog base64: {}", e)))?;
-
-        // Eventlog replay is not yet implemented. Warn the user so they
-        // know RTMR integrity against the eventlog is NOT verified.
-        log::warn!(
-            "TDX eventlog present but replay verification is not implemented; \
-             RTMR values are NOT verified against the eventlog"
-        );
+    if evidence.cc_eventlog.is_some() {
+        return Err(AttestationError::EventlogIntegrityFailed(
+            "eventlog replay verification is not yet implemented; \
+             cannot verify RTMR integrity against the eventlog"
+                .to_string(),
+        ));
     }
 
     // 7. Extract claims

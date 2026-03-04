@@ -231,24 +231,30 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         .and_then(|cn| cn.as_str().ok())
         .unwrap_or("");
 
-    let is_vcek = cn.contains("VCEK");
+    let is_vcek = !cn.contains("VLEK");
 
     // Validate chip_id only for VCEK (not VLEK)
     if is_vcek {
-        if let Some(ext) = cert
+        let ext = cert
             .extensions()
             .iter()
             .find(|e| e.oid.to_string() == HW_ID_OID)
+            .ok_or_else(|| {
+                AttestationError::TcbMismatch(
+                    "VCEK missing required HW_ID OID extension".to_string(),
+                )
+            })?;
+        let chip_id_bytes = get_oid_octets(ext.value).ok_or_else(|| {
+            AttestationError::TcbMismatch(
+                "VCEK HW_ID OID has unparseable value".to_string(),
+            )
+        })?;
+        if chip_id_bytes.len() != report.chip_id[..].len()
+            || !crate::utils::constant_time_eq(chip_id_bytes, &report.chip_id[..])
         {
-            if let Some(chip_id_bytes) = get_oid_octets(ext.value) {
-                if chip_id_bytes.len() != report.chip_id[..].len()
-                    || !crate::utils::constant_time_eq(chip_id_bytes, &report.chip_id[..])
-                {
-                    return Err(AttestationError::TcbMismatch(
-                        "VCEK chip_id does not match report chip_id".to_string(),
-                    ));
-                }
-            }
+            return Err(AttestationError::TcbMismatch(
+                "VCEK chip_id does not match report chip_id".to_string(),
+            ));
         }
     }
 
@@ -261,19 +267,27 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
     ];
 
     for &(oid_str, expected, name) in checks {
-        if let Some(ext) = cert
+        let ext = cert
             .extensions()
             .iter()
             .find(|e| e.oid.to_string() == oid_str)
-        {
-            if let Some(cert_val) = get_oid_int(ext.value) {
-                if cert_val != expected {
-                    return Err(AttestationError::TcbMismatch(format!(
-                        "VCEK {} SPL {} does not match report {}",
-                        name, cert_val, expected
-                    )));
-                }
-            }
+            .ok_or_else(|| {
+                AttestationError::TcbMismatch(format!(
+                    "VCEK missing required OID extension: {}",
+                    name
+                ))
+            })?;
+        let cert_val = get_oid_int(ext.value).ok_or_else(|| {
+            AttestationError::TcbMismatch(format!(
+                "VCEK {} OID has unparseable value",
+                name
+            ))
+        })?;
+        if cert_val != expected {
+            return Err(AttestationError::TcbMismatch(format!(
+                "VCEK {} SPL {} does not match report {}",
+                name, cert_val, expected
+            )));
         }
     }
 

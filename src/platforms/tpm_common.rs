@@ -122,6 +122,12 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
     let content = &hcl_report[content_start..content_start + bounded_len];
     let trimmed_len = content.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
 
+    if trimmed_len == 0 {
+        return Err(AttestationError::QuoteParseFailed(
+            "HCL var_data is empty after null trimming".to_string(),
+        ));
+    }
+
     Ok(HclReportData {
         tee_report,
         report_type,
@@ -379,7 +385,7 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Verify TPM nonce matches expected report_data.
-pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
+pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<()> {
     let nonce = extract_tpm_nonce(message)?;
     if nonce.len() != expected.len() {
         return Err(AttestationError::QuoteParseFailed(format!(
@@ -388,7 +394,10 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
             expected.len()
         )));
     }
-    Ok(crate::utils::constant_time_eq(&nonce, expected))
+    if !crate::utils::constant_time_eq(&nonce, expected) {
+        return Err(AttestationError::ReportDataMismatch);
+    }
+    Ok(())
 }
 
 /// Verify TPM PCR digest integrity.
@@ -552,10 +561,7 @@ pub fn check_report_data(tpm_msg: &[u8], expected: Option<&[u8]>) -> Result<Opti
     let Some(expected) = expected else {
         return Ok(None);
     };
-    let matched = verify_tpm_nonce(tpm_msg, expected)?;
-    if !matched {
-        return Err(AttestationError::ReportDataMismatch);
-    }
+    verify_tpm_nonce(tpm_msg, expected)?;
     Ok(Some(true))
 }
 
@@ -712,8 +718,7 @@ mod tests {
         let report_data = b"hello world test nonce";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(report_data, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, report_data).unwrap();
-        assert!(result, "nonce should match via direct comparison");
+        assert!(verify_tpm_nonce(&msg, report_data).is_ok(), "nonce should match via direct comparison");
     }
 
     #[test]
@@ -721,8 +726,7 @@ mod tests {
         let nonce = b"correct data nonce value";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, b"wrong___data nonce value").unwrap();
-        assert!(!result, "nonce should not match for different data");
+        assert!(verify_tpm_nonce(&msg, b"wrong___data nonce value").is_err(), "nonce should not match for different data");
     }
 
     #[test]

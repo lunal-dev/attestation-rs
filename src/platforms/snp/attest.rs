@@ -15,7 +15,7 @@ pub fn is_available() -> bool {
     std::path::Path::new(SEV_PLATFORM_PATH).exists()
 }
 
-/// Extract VCEK/ASK/ARK certificates from the sev crate's cert table entries.
+/// Extract certificates from the sev crate's cert table entries.
 fn certs_to_chain(certs: Vec<CertTableEntry>) -> Option<SnpCertChain> {
     let mut vcek = None;
     let mut ask = None;

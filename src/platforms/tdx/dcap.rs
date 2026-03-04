@@ -272,6 +272,15 @@ pub fn verify_pck_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     // Step 4: Verify Leaf is signed by Intermediate
     verify_cert_signature(&leaf_cert, &intermediate_pub_key, "PCK leaf cert")?;
 
+    // Step 5: Verify certificate validity periods
+    for (der, label) in [
+        (&der_certs[0], "PCK leaf"),
+        (&der_certs[1], "PCK Platform CA"),
+        (&der_certs[2], "Intel SGX Root CA"),
+    ] {
+        verify_cert_validity_period(der, label)?;
+    }
+
     extract_p256_pub_key(&leaf_cert.pub_key_bytes, "PCK leaf")
 }
 
@@ -342,6 +351,31 @@ fn verify_cert_signature(cert: &CertData, issuer_key: &VerifyingKey, label: &str
     })
 }
 
+/// Verify a certificate's validity period (NotBefore/NotAfter) against the current time.
+fn verify_cert_validity_period(der: &[u8], label: &str) -> Result<()> {
+    let (_, cert) = X509Certificate::from_der(der).map_err(|e| {
+        AttestationError::CertChainError(format!("{} x509 parse for validity: {}", label, e))
+    })?;
+
+    let validity = cert.validity();
+    let now = x509_parser::time::ASN1Time::now();
+
+    if now < validity.not_before {
+        return Err(AttestationError::CertChainError(format!(
+            "{} certificate is not yet valid (notBefore: {})",
+            label, validity.not_before
+        )));
+    }
+    if now > validity.not_after {
+        return Err(AttestationError::CertChainError(format!(
+            "{} certificate has expired (notAfter: {})",
+            label, validity.not_after
+        )));
+    }
+
+    Ok(())
+}
+
 /// Split a PEM string into individual DER-encoded certificate blobs.
 fn split_pem_to_der(pem_str: &str) -> Result<Vec<Vec<u8>>> {
     let mut certs = Vec::new();
@@ -387,12 +421,25 @@ pub fn compute_body_end(quote_bytes: &[u8], quote_version: QuoteVersion) -> Resu
 /// 2. Validate PCK certificate chain to Intel Root CA
 /// 3. Verify QE report signature with PCK leaf key
 /// 4. Verify QE report binding (attestation key bound into QE report)
-pub fn verify_dcap_chain(quote_bytes: &[u8], quote_version: QuoteVersion) -> Result<()> {
+/// 5. Check PCK certificate against CRL (if provided)
+///
+/// `pck_crl_der`: optional DER-encoded CRL from Intel PCS. When provided,
+/// the PCK leaf certificate is checked for revocation.
+pub fn verify_dcap_chain(
+    quote_bytes: &[u8],
+    quote_version: QuoteVersion,
+    pck_crl_der: Option<&[u8]>,
+) -> Result<()> {
     let body_end = compute_body_end(quote_bytes, quote_version)?;
     let auth = parse_auth_data(quote_bytes, body_end)?;
     let pck_pub_key = verify_pck_cert_chain(auth.pck_cert_chain_pem)?;
     verify_qe_report_signature(&auth, &pck_pub_key)?;
     verify_qe_report_binding(&auth)?;
+
+    if let Some(crl_der) = pck_crl_der {
+        check_cert_revocation(auth.pck_cert_chain_pem, crl_der)?;
+    }
+
     Ok(())
 }
 
@@ -470,6 +517,15 @@ fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
     Err(AttestationError::CertChainError(
         "FMSPC OID not found in SGX extension".into(),
     ))
+}
+
+/// Intel PCS v4 TCB Info JSON signed envelope.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TcbInfoSignedEnvelope {
+    #[allow(dead_code)]
+    tcb_info: TcbInfoJson,
+    signature: String,
 }
 
 /// Intel PCS v4 TCB Info JSON structure (subset needed for evaluation).
@@ -617,6 +673,57 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> u64 {
     }
 }
 
+/// Verify the ECDSA-P256 signature on the Intel PCS TCB Info response.
+///
+/// Intel PCS v4 returns TCB Info as a signed envelope:
+/// ```json
+/// { "tcbInfo": { ... }, "signature": "hex-encoded ECDSA-P256 signature" }
+/// ```
+///
+/// The signature covers the raw JSON string of the `tcbInfo` field.
+/// `signing_certs_pem`: PEM-encoded signing certificate chain from the
+/// `TCB-Info-Issuer-Chain` response header, rooted to Intel SGX Root CA.
+pub fn verify_tcb_info_signature(
+    tcb_info_json: &[u8],
+    signing_certs_pem: &[u8],
+) -> Result<()> {
+    let envelope: TcbInfoSignedEnvelope = serde_json::from_slice(tcb_info_json)
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info envelope parse: {}", e)))?;
+
+    let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
+        AttestationError::CertChainError(format!("TCB Info signature hex decode: {}", e))
+    })?;
+    let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
+        AttestationError::CertChainError(format!("TCB Info signature parse: {}", e))
+    })?;
+
+    // Extract the raw JSON string of "tcbInfo" from the envelope.
+    // We must hash/verify the exact bytes Intel signed, so extract from the raw JSON.
+    let raw_json: serde_json::Value = serde_json::from_slice(tcb_info_json).map_err(|e| {
+        AttestationError::CertChainError(format!("TCB Info raw JSON parse: {}", e))
+    })?;
+    let tcb_info_raw = raw_json
+        .get("tcbInfo")
+        .ok_or_else(|| {
+            AttestationError::CertChainError("TCB Info missing 'tcbInfo' field".into())
+        })?
+        .to_string();
+
+    // Verify the signing cert chain roots to Intel SGX Root CA
+    let signing_key = verify_pck_cert_chain(signing_certs_pem)?;
+
+    signing_key
+        .verify(tcb_info_raw.as_bytes(), &signature)
+        .map_err(|e| {
+            AttestationError::CertChainError(format!(
+                "TCB Info signature verification failed: {}",
+                e
+            ))
+        })?;
+
+    Ok(())
+}
+
 /// Evaluate TCB status for a TDX quote against Intel TCB Info collateral.
 ///
 /// Matches the quote's TCB SVNs against the TCB levels from Intel PCS,
@@ -625,11 +732,19 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> u64 {
 /// `tcb_info_json`: raw JSON response from Intel PCS v4 `/tcb` endpoint.
 /// `tee_tcb_svn`: 16-byte TEE TCB SVN from the TDX quote body.
 /// `pck_pem`: PCK cert chain PEM (for extracting SGX TCB components).
+/// `signing_certs_pem`: optional PEM-encoded TCB signing certificate chain
+/// from the `TCB-Info-Issuer-Chain` response header. When provided, the
+/// Intel signature on the TCB Info is verified before use.
 pub fn evaluate_tcb_status(
     tcb_info_json: &[u8],
     tee_tcb_svn: &[u8; 16],
     pck_pem: &[u8],
+    signing_certs_pem: Option<&[u8]>,
 ) -> Result<DcapVerificationStatus> {
+    if let Some(certs_pem) = signing_certs_pem {
+        verify_tcb_info_signature(tcb_info_json, certs_pem)?;
+    }
+
     let wrapper: TcbInfoWrapper = serde_json::from_slice(tcb_info_json)
         .map_err(|e| AttestationError::CertChainError(format!("TCB Info JSON parse: {}", e)))?;
 
