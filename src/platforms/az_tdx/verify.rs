@@ -1,3 +1,4 @@
+use crate::collateral::TdxCollateralProvider;
 use crate::error::{AttestationError, Result};
 use crate::platforms::tdx::{claims::extract_claims, dcap, verify as tdx_verify};
 use crate::platforms::tpm_common;
@@ -20,9 +21,13 @@ fn verify_hcl_var_data_binding(
 }
 
 /// Verify Azure TDX vTPM attestation evidence.
+///
+/// When `collateral_provider` is `Some`, performs full DCAP collateral verification.
+/// When `None`, CRL/TCB/QE Identity checks are skipped.
 pub async fn verify_evidence(
     evidence: &AzTdxEvidence,
     params: &VerifyParams,
+    collateral_provider: Option<&dyn TdxCollateralProvider>,
 ) -> Result<VerificationResult> {
     if evidence.version != 1 {
         return Err(AttestationError::EvidenceDeserialize(format!(
@@ -30,6 +35,12 @@ pub async fn verify_evidence(
             evidence.version
         )));
     }
+
+    // Input size validation
+    crate::utils::check_field_size("hcl_report", evidence.hcl_report.len())?;
+    crate::utils::check_field_size("td_quote", evidence.td_quote.len())?;
+    crate::utils::check_field_size("tpm_quote.signature", evidence.tpm_quote.signature.len())?;
+    crate::utils::check_field_size("tpm_quote.message", evidence.tpm_quote.message.len())?;
 
     // Decode
     let hcl_report_bytes = decode_base64url(&evidence.hcl_report)
@@ -47,7 +58,21 @@ pub async fn verify_evidence(
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
 
     // TPM layer
+    //
+    // Verification order safety:
+    // 1. TPM sig uses the AK (attestation key) extracted from var_data in the HCL
+    //    report — an attacker cannot substitute a different AK without forging the
+    //    TPM signature (RSA-2048 with the TPM's internal signing key).
+    // 2. HCL binding then confirms var_data is bound to the TEE report via
+    //    report_data[..32] == SHA-256(var_data).
+    // 3. The TEE report itself is signed by Intel's QE (DCAP chain for TDX).
+    // Trust chain: TEE report → var_data → AK → TPM quote → nonce
     tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
+    if params.expected_report_data.is_none() {
+        log::warn!(
+            "az-tdx: no expected_report_data provided; TPM nonce binding will not be verified"
+        );
+    }
     let report_data_match =
         tpm_common::check_report_data(&tpm_msg, params.expected_report_data.as_deref())?;
     tpm_common::verify_tpm_pcrs(&tpm_msg, &tpm_pcrs)?;
@@ -62,6 +87,53 @@ pub async fn verify_evidence(
         return Err(AttestationError::DebugPolicyViolation);
     }
 
+    // DCAP collateral checks (CRL, TCB, QE Identity) when provider is available
+    let tcb_status = if let Some(provider) = collateral_provider {
+        let body_end = dcap::compute_body_end(&td_quote_bytes, tdx_quote.quote_version)?;
+        let auth = dcap::parse_auth_data(&td_quote_bytes, body_end)?;
+
+        // PCK CRL revocation check
+        let ca_type = dcap::determine_ca_type(auth.pck_cert_chain_pem)?;
+        let pck_crl_der = provider.get_pck_crl(&ca_type).await?;
+        dcap::check_cert_revocation(auth.pck_cert_chain_pem, &pck_crl_der)?;
+
+        // Root CA CRL check (Intermediate CA not revoked)
+        let root_ca_crl_der = provider.get_root_ca_crl().await?;
+        dcap::check_intermediate_ca_revocation(auth.pck_cert_chain_pem, &root_ca_crl_der)?;
+
+        // TCB status evaluation
+        let fmspc = dcap::extract_fmspc_from_pck(auth.pck_cert_chain_pem)?;
+        let tcb_info_json = provider.get_tcb_info(&fmspc).await?;
+        let tcb_signing_chain = provider.get_tcb_signing_chain().await?;
+        let status = dcap::evaluate_tcb_status(
+            &tcb_info_json,
+            &tdx_quote.body.tee_tcb_svn,
+            auth.pck_cert_chain_pem,
+            tcb_signing_chain.as_deref(),
+        )?;
+
+        // Reject Revoked TCB status
+        if status.tcb_status == crate::types::TdxTcbStatus::Revoked {
+            return Err(AttestationError::TcbMismatch(
+                "TDX TCB status is Revoked".into(),
+            ));
+        }
+
+        // QE Identity verification
+        let qe_identity_json = provider.get_qe_identity().await?;
+        let qe_signing_chain = provider.get_qe_identity_signing_chain().await?;
+        dcap::verify_qe_identity(
+            auth.qe_report_body,
+            &qe_identity_json,
+            qe_signing_chain.as_deref(),
+        )?;
+
+        Some(status)
+    } else {
+        log::warn!("TDX collateral provider not available; skipping CRL, TCB status, and QE Identity checks");
+        None
+    };
+
     // Bindings
     verify_hcl_var_data_binding(&tdx_quote, &hcl.var_data)?;
     let init_data_match =
@@ -69,14 +141,16 @@ pub async fn verify_evidence(
 
     // Result
     let tdx_claims = extract_claims(&tdx_quote);
-    Ok(tpm_common::build_tpm_verification_result(
+    let mut result = tpm_common::build_tpm_verification_result(
         tdx_claims,
         &tpm_pcrs,
         &tpm_msg,
         PlatformType::AzTdx,
         report_data_match,
         init_data_match,
-    ))
+    );
+    result.tcb_status = tcb_status;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -138,7 +212,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let params = VerifyParams::default();
 
-        let result = rt.block_on(verify_evidence(&evidence, &params));
+        let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
         assert!(err.contains("base64") || err.contains("Base64"), "error: {}", err);
@@ -158,7 +232,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let params = VerifyParams::default();
 
-        let result = rt.block_on(verify_evidence(&evidence, &params));
+        let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
     }
 
@@ -174,7 +248,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let params = VerifyParams::default();
 
-        let result = rt.block_on(verify_evidence(&evidence, &params));
+        let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
         assert!(err.contains("version"), "error should mention version: {}", err);
@@ -194,7 +268,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let params = VerifyParams::default();
 
-        let result = rt.block_on(verify_evidence(&evidence, &params));
+        let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
         assert!(err.contains("report_type") || err.contains("expected"), "error: {}", err);
@@ -214,7 +288,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let params = VerifyParams::default();
 
-        let result = rt.block_on(verify_evidence(&evidence, &params));
+        let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
         assert!(err.contains("too short"), "error should mention too short: {}", err);

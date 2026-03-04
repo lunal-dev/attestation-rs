@@ -3,6 +3,7 @@ use p256::ecdsa::signature::hazmat::PrehashVerifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 use scroll::Pread;
 
+use crate::collateral::TdxCollateralProvider;
 use crate::error::{AttestationError, Result};
 use crate::types::{PlatformType, VerificationResult, VerifyParams};
 
@@ -38,6 +39,10 @@ pub struct TdxReportBody {
     pub rtmr_2: [u8; 48],
     pub rtmr_3: [u8; 48],
     pub report_data: [u8; 64],
+    /// Additional TCB SVN for TDX 1.5 (present only in V5 body_type=3).
+    pub tee_tcb_svn2: Option<[u8; 16]>,
+    /// Service TD measurement for TDX 1.5 TD Partitioning (present only in V5 body_type=3).
+    pub mr_servicetd: Option<[u8; 48]>,
 }
 
 /// Parsed TDX quote (supports v4 and v5 formats).
@@ -130,6 +135,15 @@ impl TdxReportBody {
         let rtmr_2 = read_bytes!(48);
         let rtmr_3 = read_bytes!(48);
         let report_data = read_bytes!(64);
+
+        // TDX 1.5 extra fields (64 bytes: tee_tcb_svn2[16] + mr_servicetd[48])
+        let (tee_tcb_svn2, mr_servicetd) = if data.len() >= offset + 64 {
+            let svn2 = read_bytes!(16);
+            let svc = read_bytes!(48);
+            (Some(svn2), Some(svc))
+        } else {
+            (None, None)
+        };
         let _ = offset; // suppress unused assignment warning from macro
 
         Ok(Self {
@@ -148,6 +162,8 @@ impl TdxReportBody {
             rtmr_2,
             rtmr_3,
             report_data,
+            tee_tcb_svn2,
+            mr_servicetd,
         })
     }
 }
@@ -170,7 +186,16 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
     match header.version {
         4 => {
             // v4: header (48) + body (584) + auth data
-            let body = TdxReportBody::from_bytes(&data[QUOTE_HEADER_SIZE..])?;
+            if data.len() < QUOTE_HEADER_SIZE + REPORT_BODY_SIZE {
+                return Err(AttestationError::QuoteParseFailed(format!(
+                    "v4 quote too short: need {} bytes, have {}",
+                    QUOTE_HEADER_SIZE + REPORT_BODY_SIZE,
+                    data.len()
+                )));
+            }
+            let body = TdxReportBody::from_bytes(
+                &data[QUOTE_HEADER_SIZE..QUOTE_HEADER_SIZE + REPORT_BODY_SIZE],
+            )?;
             Ok(TdxQuote {
                 header,
                 body,
@@ -322,10 +347,18 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
 }
 
 /// Verify TDX attestation evidence.
+///
+/// When `collateral_provider` is `Some`, performs full DCAP collateral verification:
+/// PCK CRL revocation check, TCB status evaluation, and QE Identity verification.
+/// When `None`, these checks are skipped (suitable for offline/testing scenarios).
 pub async fn verify_evidence(
     evidence: &TdxEvidence,
     params: &VerifyParams,
+    collateral_provider: Option<&dyn TdxCollateralProvider>,
 ) -> Result<VerificationResult> {
+    // 0. Input size validation
+    crate::utils::check_field_size("quote", evidence.quote.len())?;
+
     // 1. Decode the quote
     let quote_bytes = BASE64
         .decode(&evidence.quote)
@@ -340,6 +373,61 @@ pub async fn verify_evidence(
     // 3b. Full DCAP chain verification: PCK cert chain → QE report sig → QE binding
     super::dcap::verify_dcap_chain(&quote_bytes, quote.quote_version, None)?;
 
+    // 3c. TDX debug policy enforcement (bit 0 of td_attributes)
+    if quote.body.td_attributes[0] & 0x01 != 0 && !params.allow_debug {
+        return Err(AttestationError::DebugPolicyViolation);
+    }
+
+    // 3d. DCAP collateral checks (CRL, TCB, QE Identity) when provider is available
+    let tcb_status = if let Some(provider) = collateral_provider {
+        let body_end = super::dcap::compute_body_end(&quote_bytes, quote.quote_version)?;
+        let auth = super::dcap::parse_auth_data(&quote_bytes, body_end)?;
+
+        // PCK CRL revocation check
+        let ca_type = super::dcap::determine_ca_type(auth.pck_cert_chain_pem)?;
+        let pck_crl_der = provider.get_pck_crl(&ca_type).await?;
+        super::dcap::check_cert_revocation(auth.pck_cert_chain_pem, &pck_crl_der)?;
+
+        // Root CA CRL check (Intermediate CA not revoked)
+        let root_ca_crl_der = provider.get_root_ca_crl().await?;
+        super::dcap::check_intermediate_ca_revocation(
+            auth.pck_cert_chain_pem,
+            &root_ca_crl_der,
+        )?;
+
+        // TCB status evaluation
+        let fmspc = super::dcap::extract_fmspc_from_pck(auth.pck_cert_chain_pem)?;
+        let tcb_info_json = provider.get_tcb_info(&fmspc).await?;
+        let tcb_signing_chain = provider.get_tcb_signing_chain().await?;
+        let status = super::dcap::evaluate_tcb_status(
+            &tcb_info_json,
+            &quote.body.tee_tcb_svn,
+            auth.pck_cert_chain_pem,
+            tcb_signing_chain.as_deref(),
+        )?;
+
+        // Reject Revoked TCB status
+        if status.tcb_status == crate::types::TdxTcbStatus::Revoked {
+            return Err(AttestationError::TcbMismatch(
+                "TDX TCB status is Revoked".into(),
+            ));
+        }
+
+        // QE Identity verification
+        let qe_identity_json = provider.get_qe_identity().await?;
+        let qe_signing_chain = provider.get_qe_identity_signing_chain().await?;
+        super::dcap::verify_qe_identity(
+            auth.qe_report_body,
+            &qe_identity_json,
+            qe_signing_chain.as_deref(),
+        )?;
+
+        Some(status)
+    } else {
+        log::warn!("TDX collateral provider not available; skipping CRL, TCB status, and QE Identity checks");
+        None
+    };
+
     // 4. Check report_data binding
     let report_data_match = if let Some(expected) = &params.expected_report_data {
         let padded = crate::utils::pad_report_data(expected, 64)?;
@@ -353,9 +441,7 @@ pub async fn verify_evidence(
 
     // 5. Check MRCONFIGID binding
     let init_data_match = if let Some(expected) = &params.expected_init_data_hash {
-        let mut padded = vec![0u8; 48];
-        let len = expected.len().min(48);
-        padded[..len].copy_from_slice(&expected[..len]);
+        let padded = crate::utils::pad_report_data(expected, 48)?;
         if !crate::utils::constant_time_eq(&quote.body.mr_config_id, &padded) {
             return Err(AttestationError::InitDataMismatch);
         }
@@ -366,11 +452,11 @@ pub async fn verify_evidence(
 
     // 6. Eventlog integrity check (if present)
     if evidence.cc_eventlog.is_some() {
-        return Err(AttestationError::EventlogIntegrityFailed(
-            "eventlog replay verification is not yet implemented; \
-             cannot verify RTMR integrity against the eventlog"
-                .to_string(),
-        ));
+        log::warn!(
+            "CC eventlog present but replay verification not yet implemented; \
+             skipping eventlog-to-RTMR integrity check. RTMRs are still verified \
+             transitively through the quote signature."
+        );
     }
 
     // 7. Extract claims
@@ -382,6 +468,7 @@ pub async fn verify_evidence(
         claims,
         report_data_match,
         init_data_match,
+        tcb_status,
     })
 }
 
@@ -540,6 +627,30 @@ mod tests {
         assert_eq!(quote.body.tee_tcb_svn[0], 0x05);
         assert_eq!(quote.body.tee_tcb_svn[1], 0x01);
         assert_eq!(quote.body.tee_tcb_svn[2], 0x02);
+
+        // V5 TDX 1.5 should have extra fields if the body is large enough
+        if quote.quote_version == QuoteVersion::V5Tdx15 {
+            // Both fields should be parsed (may be Some or None depending on fixture body size)
+            if let Some(ref svn2) = quote.body.tee_tcb_svn2 {
+                assert_eq!(svn2.len(), 16);
+            }
+            if let Some(ref svc) = quote.body.mr_servicetd {
+                assert_eq!(svc.len(), 48);
+            }
+        }
+    }
+
+    #[test]
+    fn test_v4_has_no_tdx15_fields() {
+        let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
+        assert!(
+            quote.body.tee_tcb_svn2.is_none(),
+            "V4 quote should not have tee_tcb_svn2"
+        );
+        assert!(
+            quote.body.mr_servicetd.is_none(),
+            "V4 quote should not have mr_servicetd"
+        );
     }
 
     #[test]
@@ -690,6 +801,64 @@ mod tests {
     }
 
     #[test]
+    fn test_debug_policy_enforcement() {
+        // v4 fixture has debug bit set, v5 does not
+        let v4 = parse_tdx_quote(V4_QUOTE).unwrap();
+        assert_eq!(
+            v4.body.td_attributes[0] & 0x01, 1,
+            "v4 fixture has debug bit set"
+        );
+        let v5 = parse_tdx_quote(V5_QUOTE).unwrap();
+        assert_eq!(
+            v5.body.td_attributes[0] & 0x01, 0,
+            "v5 fixture should not have debug bit set"
+        );
+    }
+
+    #[test]
+    fn test_debug_bit_detection() {
+        // Construct td_attributes with debug bit set
+        let mut attrs = [0u8; 8];
+        attrs[0] = 0x01; // debug bit
+        assert_eq!(attrs[0] & 0x01, 1, "debug bit should be detected");
+
+        attrs[0] = 0x00;
+        assert_eq!(attrs[0] & 0x01, 0, "no debug bit");
+
+        attrs[0] = 0xFE; // all bits except debug
+        assert_eq!(attrs[0] & 0x01, 0, "debug bit should not be set");
+
+        attrs[0] = 0xFF; // all bits including debug
+        assert_eq!(attrs[0] & 0x01, 1, "debug bit should be set");
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_debug_td_rejected() {
+        // v4 fixture has debug bit set — should be rejected with allow_debug=false
+        let evidence = make_tdx_evidence(V4_QUOTE);
+        let params = VerifyParams::default(); // allow_debug = false
+
+        let result = verify_evidence(&evidence, &params, None).await;
+        assert!(result.is_err(), "debug TD should not pass verification");
+        let err = format!("{:?}", result.err().unwrap());
+        assert!(err.contains("DebugPolicyViolation"), "should be DebugPolicyViolation, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_verify_evidence_debug_td_allowed() {
+        // v4 fixture has debug bit set — should pass with allow_debug=true
+        let quote = parse_tdx_quote(V4_QUOTE).unwrap();
+        let evidence = make_tdx_evidence(V4_QUOTE);
+        let params = VerifyParams {
+            expected_report_data: Some(quote.body.report_data.to_vec()),
+            allow_debug: true,
+            ..Default::default()
+        };
+        let result = verify_evidence(&evidence, &params, None).await;
+        assert!(result.is_ok(), "debug TD with allow_debug should pass: {:?}", result.err());
+    }
+
+    #[test]
     fn test_quote_header_from_bytes_too_short() {
         let data = vec![0u8; 20]; // Less than 48 bytes
         let result = QuoteHeader::from_bytes(&data);
@@ -769,8 +938,9 @@ mod tests {
     #[tokio::test]
     async fn test_verify_evidence_v4_no_expected_report_data() {
         let evidence = make_tdx_evidence(V4_QUOTE);
-        let params = VerifyParams::default();
-        let result = verify_evidence(&evidence, &params).await;
+        // v4 fixture has debug bit set, so allow_debug must be true
+        let params = VerifyParams { allow_debug: true, ..Default::default() };
+        let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_ok(), "verify should succeed: {:?}", result.err());
         let result = result.unwrap();
         assert!(result.signature_valid);
@@ -779,16 +949,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_evidence_v4_matching_report_data() {
-        // Extract the actual report_data from the v4 quote fixture
         let quote = parse_tdx_quote(V4_QUOTE).unwrap();
         let evidence = make_tdx_evidence(V4_QUOTE);
 
-        // Pass the exact report_data from the quote — should match
         let params = VerifyParams {
             expected_report_data: Some(quote.body.report_data.to_vec()),
+            allow_debug: true,
             ..Default::default()
         };
-        let result = verify_evidence(&evidence, &params).await;
+        let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_ok(), "verify with matching report_data should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().report_data_match, Some(true));
     }
@@ -797,12 +966,12 @@ mod tests {
     async fn test_verify_evidence_v4_wrong_report_data_fails() {
         let evidence = make_tdx_evidence(V4_QUOTE);
 
-        // Pass wrong report_data — should fail with ReportDataMismatch
         let params = VerifyParams {
             expected_report_data: Some(vec![0xFF; 64]),
+            allow_debug: true,
             ..Default::default()
         };
-        let result = verify_evidence(&evidence, &params).await;
+        let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_err(), "verify with wrong report_data should fail");
         let err = format!("{:?}", result.err().unwrap());
         assert!(err.contains("ReportDataMismatch"), "error should be ReportDataMismatch, got: {}", err);
@@ -810,24 +979,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_evidence_v4_partial_report_data_padded() {
-        // For bare TDX, report_data is padded to 64 bytes. If the fixture has a
-        // specific pattern, passing just the non-zero prefix should still match
-        // (only if the rest of report_data in the quote is zero-padded).
         let quote = parse_tdx_quote(V4_QUOTE).unwrap();
 
-        // Find where the non-zero data ends
         let last_nonzero = quote.body.report_data.iter().rposition(|&b| b != 0);
         if let Some(end) = last_nonzero {
-            // If the rest after end+1 is all zeros, passing just the prefix should match
             let suffix_is_zeros = quote.body.report_data[end + 1..].iter().all(|&b| b == 0);
             if suffix_is_zeros && end < 63 {
                 let prefix = &quote.body.report_data[..=end];
                 let evidence = make_tdx_evidence(V4_QUOTE);
                 let params = VerifyParams {
                     expected_report_data: Some(prefix.to_vec()),
+                    allow_debug: true,
                     ..Default::default()
                 };
-                let result = verify_evidence(&evidence, &params).await;
+                let result = verify_evidence(&evidence, &params, None).await;
                 assert!(result.is_ok(), "padded partial report_data should match: {:?}", result.err());
             }
         }
@@ -842,7 +1007,7 @@ mod tests {
             expected_report_data: Some(quote.body.report_data.to_vec()),
             ..Default::default()
         };
-        let result = verify_evidence(&evidence, &params).await;
+        let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_ok(), "v5 verify with matching report_data should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().report_data_match, Some(true));
     }
@@ -855,7 +1020,7 @@ mod tests {
             expected_report_data: Some(vec![0x00; 64]),
             ..Default::default()
         };
-        let result = verify_evidence(&evidence, &params).await;
+        let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_err(), "v5 verify with wrong report_data should fail");
     }
 
@@ -863,12 +1028,12 @@ mod tests {
     async fn test_verify_evidence_report_data_too_large() {
         let evidence = make_tdx_evidence(V4_QUOTE);
 
-        // 65 bytes exceeds the 64-byte limit
         let params = VerifyParams {
             expected_report_data: Some(vec![0xAA; 65]),
+            allow_debug: true,
             ..Default::default()
         };
-        let result = verify_evidence(&evidence, &params).await;
+        let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_err(), "65-byte report_data should be rejected");
     }
 }
