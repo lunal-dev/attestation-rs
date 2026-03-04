@@ -159,6 +159,7 @@ dependencies = [
  "sha2",
  "signature",
  "spki",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

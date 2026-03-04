@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use sha2::{Digest, Sha256, Sha384};
+use subtle::ConstantTimeEq;
 
 /// Pad report_data to exactly `target_len` bytes.
 /// Errors if input exceeds `target_len`.
@@ -16,6 +17,14 @@ pub fn pad_report_data(data: &[u8], target_len: usize) -> crate::error::Result<V
 pub fn sha256(data: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(data);
+    hasher.finalize().to_vec()
+}
+
+/// SHA-256 hash of two concatenated byte slices.
+pub fn sha256_two(a: &[u8], b: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    hasher.update(a);
+    hasher.update(b);
     hasher.finalize().to_vec()
 }
 
@@ -38,15 +47,26 @@ pub fn strip_trailing_nulls(data: &[u8]) -> &[u8] {
     &data[..end]
 }
 
-/// Compare two byte slices in constant time (best effort).
+/// Maximum allowed size for a single evidence field (1 MiB).
+pub const MAX_EVIDENCE_FIELD_SIZE: usize = 1_048_576;
+
+/// Validate that an evidence field does not exceed the size limit.
+pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
+    if len > MAX_EVIDENCE_FIELD_SIZE {
+        return Err(crate::error::AttestationError::EvidenceDeserialize(format!(
+            "field '{}' too large: {} bytes (max {})",
+            name, len, MAX_EVIDENCE_FIELD_SIZE
+        )));
+    }
+    Ok(())
+}
+
+/// Compare two byte slices in constant time.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    a.ct_eq(b).into()
 }
 
 #[cfg(test)]
@@ -85,6 +105,17 @@ mod tests {
     fn test_sha384() {
         let hash = sha384(b"test");
         assert_eq!(hash.len(), 48);
+    }
+
+    #[test]
+    fn test_check_field_size_ok() {
+        assert!(check_field_size("test", 1024).is_ok());
+        assert!(check_field_size("test", MAX_EVIDENCE_FIELD_SIZE).is_ok());
+    }
+
+    #[test]
+    fn test_check_field_size_too_large() {
+        assert!(check_field_size("test", MAX_EVIDENCE_FIELD_SIZE + 1).is_err());
     }
 
     #[test]

@@ -31,6 +31,7 @@ thiserror = "2"
 anyhow = "1"
 log = "0.4"
 cfg-if = "1"
+subtle = "2"
 
 # Crypto
 p256 = { version = "0.13", features = ["ecdsa"] }
