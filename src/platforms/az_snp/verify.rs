@@ -23,7 +23,7 @@ fn verify_hcl_var_data_binding(
 pub async fn verify_evidence(
     evidence: &AzSnpEvidence,
     params: &VerifyParams,
-    cert_provider: &dyn CertProvider,
+    _cert_provider: &dyn CertProvider,
 ) -> Result<VerificationResult> {
     if evidence.version != 1 {
         return Err(AttestationError::EvidenceDeserialize(format!(
@@ -31,6 +31,12 @@ pub async fn verify_evidence(
             evidence.version
         )));
     }
+
+    // Input size validation
+    crate::utils::check_field_size("hcl_report", evidence.hcl_report.len())?;
+    crate::utils::check_field_size("vcek", evidence.vcek.len())?;
+    crate::utils::check_field_size("tpm_quote.signature", evidence.tpm_quote.signature.len())?;
+    crate::utils::check_field_size("tpm_quote.message", evidence.tpm_quote.message.len())?;
 
     // Decode
     let hcl_report_bytes = decode_base64url(&evidence.hcl_report)
@@ -48,8 +54,34 @@ pub async fn verify_evidence(
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
     let snp_report = crate::platforms::snp::verify::parse_report(&hcl.tee_report)?;
 
+    // Version range check: Azure HCL may use v2 (no CPUID), up to MAX_REPORT_VERSION
+    const AZ_MIN_REPORT_VERSION: u32 = 2;
+    if snp_report.version < AZ_MIN_REPORT_VERSION
+        || snp_report.version > crate::platforms::snp::verify::MAX_REPORT_VERSION
+    {
+        return Err(AttestationError::UnsupportedReportVersion {
+            version: snp_report.version,
+            min: AZ_MIN_REPORT_VERSION,
+            max: crate::platforms::snp::verify::MAX_REPORT_VERSION,
+        });
+    }
+
     // TPM layer
+    //
+    // Verification order safety:
+    // 1. TPM sig uses the AK (attestation key) extracted from var_data in the HCL
+    //    report — an attacker cannot substitute a different AK without forging the
+    //    TPM signature (RSA-2048 with the TPM's internal signing key).
+    // 2. HCL binding then confirms var_data is bound to the TEE report via
+    //    report_data[..32] == SHA-256(var_data).
+    // 3. The TEE report itself is signed by the platform (VCEK/VLEK for SNP).
+    // Trust chain: TEE report → var_data → AK → TPM quote → nonce
     tpm_common::verify_tpm_signature(&tpm_sig, &tpm_msg, &hcl.var_data)?;
+    if params.expected_report_data.is_none() {
+        log::warn!(
+            "az-snp: no expected_report_data provided; TPM nonce binding will not be verified"
+        );
+    }
     let report_data_match =
         tpm_common::check_report_data(&tpm_msg, params.expected_report_data.as_deref())?;
     tpm_common::verify_tpm_pcrs(&tpm_msg, &tpm_pcrs)?;
@@ -57,34 +89,40 @@ pub async fn verify_evidence(
     // HCL binding
     verify_hcl_var_data_binding(&snp_report, &hcl.var_data)?;
 
-    // VCEK validation against bundled AMD CA chain
+    // VCEK/VLEK validation against bundled AMD CA chain
     use crate::types::ProcessorGeneration;
-    let processor_gen = ProcessorGeneration::from_cpuid(
-        snp_report.cpuid_fam_id.unwrap_or(0),
-        snp_report.cpuid_mod_id.unwrap_or(0),
-    );
-    let gens = processor_gen.map_or(
-        vec![ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin],
-        |g| vec![g],
-    );
+    let is_vlek = crate::platforms::snp::verify::is_vlek_cert(&vcek_der)?;
+    let cpuid_fam_id = snp_report.cpuid_fam_id.unwrap_or(0);
+    let cpuid_mod_id = snp_report.cpuid_mod_id.unwrap_or(0);
+    let processor_gen = ProcessorGeneration::from_cpuid(cpuid_fam_id, cpuid_mod_id);
+    let gens = match processor_gen {
+        Some(g) => vec![g],
+        None => {
+            log::warn!(
+                "could not determine processor generation from CPUID \
+                 (family=0x{:02X}, model=0x{:02X}); trying all known generations",
+                cpuid_fam_id, cpuid_mod_id
+            );
+            vec![ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin]
+        }
+    };
     let mut last_err = None;
     let mut chain_ok = false;
     for gen in &gens {
-        match cert_provider.get_snp_cert_chain(*gen).await {
-            Ok((ark_der, ask_der)) => {
-                match crate::platforms::snp::verify::verify_cert_chain(&ark_der, &ask_der, &vcek_der) {
-                    Ok(()) => {
-                        chain_ok = true;
-                        break;
-                    }
-                    Err(e) => {
-                        log::debug!("VCEK chain check failed for {:?}: {}", gen, e);
-                        last_err = Some(e);
-                    }
-                }
+        let ark_der = crate::platforms::snp::certs::get_ark(*gen);
+        // VLEK chain: ARK → ASVK → VLEK; VCEK chain: ARK → ASK → VCEK
+        let intermediate_der = if is_vlek {
+            crate::platforms::snp::certs::get_asvk(*gen)
+        } else {
+            crate::platforms::snp::certs::get_ask(*gen)
+        };
+        match crate::platforms::snp::verify::verify_cert_chain(ark_der, intermediate_der, &vcek_der) {
+            Ok(()) => {
+                chain_ok = true;
+                break;
             }
             Err(e) => {
-                log::debug!("cert fetch failed for {:?}: {}", gen, e);
+                log::debug!("VEK chain check failed for {:?}: {}", gen, e);
                 last_err = Some(e);
             }
         }
@@ -111,13 +149,19 @@ pub async fn verify_evidence(
     // VCEK OID cross-validation
     crate::platforms::snp::verify::verify_vcek_tcb(&snp_report, &vcek_der)?;
 
-    // Minimum TCB enforcement
+    // Minimum TCB enforcement (including FMC for Turin)
     if let Some(ref min_tcb) = params.min_tcb {
         let tcb = &snp_report.reported_tcb;
+        let fmc_below = match (min_tcb.fmc, tcb.fmc) {
+            (Some(min_fmc), Some(report_fmc)) => report_fmc < min_fmc,
+            (Some(_), None) => true, // min requires FMC but report doesn't have it
+            _ => false,
+        };
         if tcb.bootloader < min_tcb.bootloader
             || tcb.tee < min_tcb.tee
             || tcb.snp < min_tcb.snp
             || tcb.microcode < min_tcb.microcode
+            || fmc_below
         {
             return Err(AttestationError::TcbMismatch(format!(
                 "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
@@ -309,6 +353,30 @@ mod tests {
         assert_eq!(
             extracted_report_data, &computed[..],
             "HCL var_data binding: report_data[..32] should equal SHA-256(var_data)"
+        );
+    }
+
+    #[test]
+    fn test_snp_report_version_check_constants() {
+        // Verify the version range constants are correct
+        const AZ_MIN_REPORT_VERSION: u32 = 2;
+        assert!(AZ_MIN_REPORT_VERSION <= crate::platforms::snp::verify::MAX_REPORT_VERSION);
+        assert_eq!(crate::platforms::snp::verify::MAX_REPORT_VERSION, 5);
+
+        // Version 6 would be rejected
+        assert!(6 > crate::platforms::snp::verify::MAX_REPORT_VERSION);
+        // Version 1 would be rejected (below az min)
+        assert!(1 < AZ_MIN_REPORT_VERSION);
+        // Verify our CoCo fixture is within range
+        let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
+        let snp_report = crate::platforms::snp::verify::parse_report(&parsed.tee_report).unwrap();
+        assert!(
+            snp_report.version >= AZ_MIN_REPORT_VERSION
+                && snp_report.version <= crate::platforms::snp::verify::MAX_REPORT_VERSION,
+            "CoCo fixture version {} should be in range [{}, {}]",
+            snp_report.version,
+            AZ_MIN_REPORT_VERSION,
+            crate::platforms::snp::verify::MAX_REPORT_VERSION
         );
     }
 
