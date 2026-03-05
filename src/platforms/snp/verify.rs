@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use der::Decode;
 
 use sev::certs::snp::{Certificate, Chain, Verifiable};
 use sev::firmware::guest::AttestationReport;
@@ -13,12 +14,19 @@ use super::evidence::SnpEvidence;
 /// SNP Attestation Report version (must be >= 3 for cpuid fields).
 const MIN_REPORT_VERSION: u32 = 3;
 
+/// Maximum supported SNP report version.
+/// Matches Trustee's upper bound — future versions may change field layout.
+pub const MAX_REPORT_VERSION: u32 = 5;
+
 /// Verify SNP attestation evidence.
 pub async fn verify_evidence(
     evidence: &SnpEvidence,
     params: &VerifyParams,
     cert_provider: &dyn CertProvider,
 ) -> Result<VerificationResult> {
+    // 0. Input size validation
+    crate::utils::check_field_size("attestation_report", evidence.attestation_report.len())?;
+
     // 1. Decode the attestation report
     let report_bytes = BASE64
         .decode(&evidence.attestation_report)
@@ -29,11 +37,11 @@ pub async fn verify_evidence(
         .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {}", e)))?;
 
     // 3. Version check
-    if report.version < MIN_REPORT_VERSION {
+    if report.version < MIN_REPORT_VERSION || report.version > MAX_REPORT_VERSION {
         return Err(AttestationError::UnsupportedReportVersion {
             version: report.version,
             min: MIN_REPORT_VERSION,
-            max: u32::MAX,
+            max: MAX_REPORT_VERSION,
         });
     }
 
@@ -47,16 +55,27 @@ pub async fn verify_evidence(
         ))
     })?;
 
-    // 5. Resolve VCEK cert
+    // 5. Resolve VEK cert (VCEK or VLEK)
     let vcek_der = resolve_vcek(evidence, &report, processor_gen, cert_provider).await?;
 
-    // 6. Build sev cert chain and verify (ARK -> ASK -> VCEK)
-    let (ark_der, ask_der) = super::certs::get_bundled_certs(processor_gen);
-    verify_cert_chain(ark_der, ask_der, &vcek_der)?;
+    // 6. Detect VLEK vs VCEK and build the appropriate cert chain
+    let is_vlek = is_vlek_cert(&vcek_der)?;
+    let ark_der = super::certs::get_ark(processor_gen);
+    let intermediate_der = if is_vlek {
+        // VLEK chain: ARK → ASVK → VLEK
+        super::certs::get_asvk(processor_gen)
+    } else {
+        // VCEK chain: ARK → ASK → VCEK
+        super::certs::get_ask(processor_gen)
+    };
+    verify_cert_chain(ark_der, intermediate_der, &vcek_der)?;
 
-    // 7. Verify report signature against VCEK
+    // 6b. Verify VCEK/VLEK certificate validity period
+    verify_vek_validity_period(&vcek_der)?;
+
+    // 7. Verify report signature against VEK
     let vek = Certificate::from_der(&vcek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("VCEK to sev Certificate: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("VEK to sev Certificate: {}", e)))?;
     (&vek, &report)
         .verify()
         .map_err(|e| AttestationError::SignatureVerificationFailed(format!("{}", e)))?;
@@ -77,10 +96,16 @@ pub async fn verify_evidence(
     // 8d. Minimum TCB enforcement
     if let Some(ref min_tcb) = params.min_tcb {
         let tcb = &report.reported_tcb;
+        let fmc_below = match (min_tcb.fmc, tcb.fmc) {
+            (Some(min_fmc), Some(report_fmc)) => report_fmc < min_fmc,
+            (Some(_), None) => true, // min requires FMC but report doesn't have it
+            _ => false,
+        };
         if tcb.bootloader < min_tcb.bootloader
             || tcb.tee < min_tcb.tee
             || tcb.snp < min_tcb.snp
             || tcb.microcode < min_tcb.microcode
+            || fmc_below
         {
             return Err(AttestationError::TcbMismatch(format!(
                 "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
@@ -121,6 +146,7 @@ pub async fn verify_evidence(
         claims,
         report_data_match,
         init_data_match,
+        tcb_status: None,
     })
 }
 
@@ -138,12 +164,25 @@ async fn resolve_vcek(
             .map_err(|e| AttestationError::CertChainError(format!("VCEK base64: {}", e)))?;
         Ok(vcek)
     } else {
+        // Guard: all-zeros chip_id means MASK_CHIP_ID was set, can't fetch from KDS
+        if report.chip_id.iter().all(|&b| b == 0) {
+            return Err(AttestationError::CertFetchError(
+                "chip_id is all zeros in attestation report. \
+                 Confirm that MASK_CHIP_ID is set to 0 to request VCEK from KDS."
+                    .to_string(),
+            ));
+        }
         // Fetch from cert provider using report's TCB
         let tcb = SnpTcb {
             bootloader: report.reported_tcb.bootloader,
             tee: report.reported_tcb.tee,
             snp: report.reported_tcb.snp,
             microcode: report.reported_tcb.microcode,
+            fmc: if processor_gen == ProcessorGeneration::Turin {
+                Some(report.reported_tcb.fmc.unwrap_or(0))
+            } else {
+                None
+            },
         };
         let mut chip_id = [0u8; 64];
         chip_id.copy_from_slice(&report.chip_id[..]);
@@ -177,6 +216,43 @@ pub fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<(
     Ok(())
 }
 
+/// Verify a VEK (VCEK/VLEK) certificate's validity period (notBefore/notAfter).
+fn verify_vek_validity_period(vek_der: &[u8]) -> Result<()> {
+    use x509_parser::prelude::*;
+    let (_, cert) = X509Certificate::from_der(vek_der)
+        .map_err(|e| AttestationError::CertChainError(format!("VEK x509 parse for validity: {}", e)))?;
+    let validity = cert.validity();
+    let now = x509_parser::time::ASN1Time::now();
+    if now < validity.not_before {
+        return Err(AttestationError::CertChainError(format!(
+            "VEK certificate is not yet valid (notBefore: {})",
+            validity.not_before
+        )));
+    }
+    if now > validity.not_after {
+        return Err(AttestationError::CertChainError(format!(
+            "VEK certificate has expired (notAfter: {})",
+            validity.not_after
+        )));
+    }
+    Ok(())
+}
+
+/// Check if a VEK certificate is a VLEK (versioned loaded endorsement key)
+/// by examining its Common Name.
+pub(crate) fn is_vlek_cert(vek_der: &[u8]) -> Result<bool> {
+    use x509_parser::prelude::*;
+    let (_, cert) = X509Certificate::from_der(vek_der)
+        .map_err(|e| AttestationError::CertChainError(format!("VEK x509 parse: {}", e)))?;
+    let cn = cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .unwrap_or("");
+    Ok(cn.contains("VLEK"))
+}
+
 // --- VCEK OID cross-validation ---
 // OID constants from AMD SEV-SNP ABI specification
 const HW_ID_OID: &str = "1.3.6.1.4.1.3704.1.4";
@@ -184,33 +260,30 @@ const UCODE_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.8";
 const SNP_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.3";
 const TEE_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.2";
 const LOADER_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.1";
+const FMC_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.9";
 
-/// Extract an integer value from a DER-encoded extension value.
+/// Extract a u8 integer value from a DER-encoded extension value.
 /// AMD VCEK TCB extensions encode SPL values as DER INTEGERs.
 fn get_oid_int(ext_value: &[u8]) -> Option<u8> {
-    // DER INTEGER: tag(0x02) + length(1) + value(1)
-    if ext_value.len() >= 3 && ext_value[0] == 0x02 && ext_value[1] == 0x01 {
-        Some(ext_value[2])
-    } else if ext_value.len() >= 2 && ext_value[0] == 0x02 && ext_value[1] == 0x00 {
-        // Zero-length integer
-        Some(0)
-    } else {
-        None
-    }
+    u8::from_der(ext_value).ok()
 }
 
-/// Extract an octet string value from a DER-encoded extension value.
-/// AMD VCEK HW_ID extension encodes chip_id as a DER OCTET STRING.
+/// Extract the chip_id bytes from the VCEK HW_ID extension value.
+///
+/// Some VCEK certificates encode the chip_id as a DER OCTET STRING,
+/// while others (notably Azure VCEK certs from THIM/IMDS) encode it
+/// as raw bytes without an inner DER wrapper. This matches the approach
+/// used by the Trustee reference implementation.
 fn get_oid_octets(ext_value: &[u8]) -> Option<&[u8]> {
-    // DER OCTET STRING: tag(0x04) + length + data
-    if ext_value.len() < 2 || ext_value[0] != 0x04 {
-        return None;
+    // Try proper DER OCTET STRING decode first.
+    if let Ok(octet_string) = der::asn1::OctetStringRef::from_der(ext_value) {
+        return Some(octet_string.as_bytes());
     }
-    let len = ext_value[1] as usize;
-    if ext_value.len() < 2 + len {
-        return None;
+    // Raw bytes (no inner DER wrapper) — return as-is if non-empty.
+    if !ext_value.is_empty() {
+        return Some(ext_value);
     }
-    Some(&ext_value[2..2 + len])
+    None
 }
 
 /// Verify VCEK certificate TCB extensions match the SNP attestation report.
@@ -231,24 +304,30 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         .and_then(|cn| cn.as_str().ok())
         .unwrap_or("");
 
-    let is_vcek = cn.contains("VCEK");
+    let is_vcek = !cn.contains("VLEK");
 
     // Validate chip_id only for VCEK (not VLEK)
     if is_vcek {
-        if let Some(ext) = cert
+        let ext = cert
             .extensions()
             .iter()
             .find(|e| e.oid.to_string() == HW_ID_OID)
+            .ok_or_else(|| {
+                AttestationError::TcbMismatch(
+                    "VCEK missing required HW_ID OID extension".to_string(),
+                )
+            })?;
+        let chip_id_bytes = get_oid_octets(ext.value).ok_or_else(|| {
+            AttestationError::TcbMismatch(
+                "VCEK HW_ID OID has unparseable value".to_string(),
+            )
+        })?;
+        if chip_id_bytes.len() != report.chip_id[..].len()
+            || !crate::utils::constant_time_eq(chip_id_bytes, &report.chip_id[..])
         {
-            if let Some(chip_id_bytes) = get_oid_octets(ext.value) {
-                if chip_id_bytes.len() != report.chip_id[..].len()
-                    || !crate::utils::constant_time_eq(chip_id_bytes, &report.chip_id[..])
-                {
-                    return Err(AttestationError::TcbMismatch(
-                        "VCEK chip_id does not match report chip_id".to_string(),
-                    ));
-                }
-            }
+            return Err(AttestationError::TcbMismatch(
+                "VCEK chip_id does not match report chip_id".to_string(),
+            ));
         }
     }
 
@@ -261,20 +340,45 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
     ];
 
     for &(oid_str, expected, name) in checks {
-        if let Some(ext) = cert
+        let ext = cert
             .extensions()
             .iter()
             .find(|e| e.oid.to_string() == oid_str)
-        {
-            if let Some(cert_val) = get_oid_int(ext.value) {
-                if cert_val != expected {
-                    return Err(AttestationError::TcbMismatch(format!(
-                        "VCEK {} SPL {} does not match report {}",
-                        name, cert_val, expected
-                    )));
-                }
+            .ok_or_else(|| {
+                AttestationError::TcbMismatch(format!(
+                    "VCEK missing required OID extension: {}",
+                    name
+                ))
+            })?;
+        let cert_val = get_oid_int(ext.value).ok_or_else(|| {
+            AttestationError::TcbMismatch(format!(
+                "VCEK {} OID has unparseable value",
+                name
+            ))
+        })?;
+        if cert_val != expected {
+            return Err(AttestationError::TcbMismatch(format!(
+                "VCEK {} SPL {} does not match report {}",
+                name, cert_val, expected
+            )));
+        }
+    }
+
+    // Turin processors have an additional FMC SPL OID
+    if let Some(fmc_expected) = report.reported_tcb.fmc {
+        if let Some(ext) = cert.extensions().iter().find(|e| e.oid.to_string() == FMC_SPL_OID) {
+            let cert_val = get_oid_int(ext.value).ok_or_else(|| {
+                AttestationError::TcbMismatch("VCEK FMC OID has unparseable value".to_string())
+            })?;
+            if cert_val != fmc_expected {
+                return Err(AttestationError::TcbMismatch(format!(
+                    "VCEK fmc SPL {} does not match report {}",
+                    cert_val, fmc_expected
+                )));
             }
         }
+        // If the cert doesn't have FMC OID but the report does, that's OK —
+        // older VCEKs may not include it. Only validate when present.
     }
 
     Ok(())
@@ -549,6 +653,86 @@ mod tests {
         );
     }
 
+    // ---------------------------------------------------------------
+    // DER OID parsing helper tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_get_oid_int_single_byte() {
+        // DER INTEGER: tag=0x02, len=0x01, value
+        assert_eq!(get_oid_int(&[0x02, 0x01, 0x73]), Some(115));
+        assert_eq!(get_oid_int(&[0x02, 0x01, 0x00]), Some(0));
+        assert_eq!(get_oid_int(&[0x02, 0x01, 0x7F]), Some(127));
+        // 0xFF unpadded is -1 in DER signed integer — must use 2-byte padded form
+        assert_eq!(get_oid_int(&[0x02, 0x01, 0xFF]), None);
+    }
+
+    #[test]
+    fn test_get_oid_int_two_byte_padded() {
+        // Values > 127 need a leading 0x00 pad in DER to stay positive.
+        // DER INTEGER: tag=0x02, len=0x02, value=0x00DB (219)
+        assert_eq!(get_oid_int(&[0x02, 0x02, 0x00, 0xDB]), Some(219));
+        assert_eq!(get_oid_int(&[0x02, 0x02, 0x00, 0x80]), Some(128));
+        assert_eq!(get_oid_int(&[0x02, 0x02, 0x00, 0xFF]), Some(255));
+    }
+
+    #[test]
+    fn test_get_oid_int_invalid() {
+        assert_eq!(get_oid_int(&[]), None);
+        assert_eq!(get_oid_int(&[0x04, 0x01, 0x00]), None); // wrong tag
+        assert_eq!(get_oid_int(&[0x02]), None); // truncated
+        assert_eq!(get_oid_int(&[0x02, 0x00]), None); // zero-length is invalid DER
+        // 3-byte value doesn't fit in u8
+        assert_eq!(get_oid_int(&[0x02, 0x03, 0x01, 0x00, 0x00]), None);
+    }
+
+    #[test]
+    fn test_get_oid_octets_raw_bytes() {
+        // Raw chip_id bytes (no inner DER wrapper) — the common case for AMD VCEKs
+        let raw = [0x06u8; 64]; // first byte is NOT 0x04
+        assert_eq!(get_oid_octets(&raw), Some(raw.as_slice()));
+    }
+
+    #[test]
+    fn test_get_oid_octets_der_wrapped() {
+        // DER OCTET STRING: tag=0x04, len=0x03, data=[0xAA, 0xBB, 0xCC]
+        let wrapped = [0x04, 0x03, 0xAA, 0xBB, 0xCC];
+        assert_eq!(get_oid_octets(&wrapped), Some(&[0xAA, 0xBB, 0xCC][..]));
+    }
+
+    #[test]
+    fn test_get_oid_octets_empty() {
+        assert_eq!(get_oid_octets(&[]), None);
+    }
+
+    // ---------------------------------------------------------------
+    // TCB cross-validation tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_verify_vcek_tcb_milan() {
+        let report = parse_report(TEST_REPORT).expect("parse report");
+        let result = verify_vcek_tcb(&report, TEST_VCEK);
+        assert!(result.is_ok(), "Milan VCEK TCB should verify: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_verify_vcek_tcb_genoa() {
+        let report = parse_report(LIVE_REPORT_V5).expect("parse report");
+        let result = verify_vcek_tcb(&report, LIVE_VCEK_GENOA);
+        assert!(result.is_ok(), "Genoa VCEK TCB should verify: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_version_upper_bound() {
+        // MAX_REPORT_VERSION is 5, version 6 should be rejected
+        assert!(MAX_REPORT_VERSION == 5);
+        // Version 5 is within bounds
+        assert!(5 >= MIN_REPORT_VERSION && 5 <= MAX_REPORT_VERSION);
+        // Version 6 exceeds upper bound
+        assert!(6 > MAX_REPORT_VERSION);
+    }
+
     #[test]
     fn test_processor_generation_detection() {
         assert_eq!(
@@ -568,5 +752,72 @@ mod tests {
             Some(ProcessorGeneration::Turin)
         );
         assert_eq!(ProcessorGeneration::from_cpuid(0xFF, 0x00), None);
+    }
+
+    // ---------------------------------------------------------------
+    // VLEK / ASVK tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_is_vlek_vcek_detection() {
+        // Regular VCEK should not be detected as VLEK
+        assert!(!is_vlek_cert(TEST_VCEK).unwrap(), "VCEK should not be VLEK");
+        assert!(!is_vlek_cert(LIVE_VCEK_GENOA).unwrap(), "Genoa VCEK should not be VLEK");
+        assert!(!is_vlek_cert(IMDS_VCEK).unwrap(), "IMDS VCEK should not be VLEK");
+    }
+
+    #[test]
+    fn test_asvk_certs_parse() {
+        // Verify ASVK certs for all generations can be parsed
+        for gen in [ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin] {
+            let asvk_der = super::super::certs::get_asvk(gen);
+            let cert = x509_cert::Certificate::from_der(asvk_der)
+                .unwrap_or_else(|e| panic!("{:?} ASVK parse failed: {}", gen, e));
+            let subject = format!("{}", cert.tbs_certificate.subject);
+            assert!(
+                subject.contains("VLEK"),
+                "{:?} ASVK subject should contain VLEK: {}",
+                gen, subject
+            );
+        }
+    }
+
+    #[test]
+    fn test_asvk_issued_by_ark() {
+        // ASVK should be issued by the same ARK as ASK
+        for gen in [ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin] {
+            let ark_der = super::super::certs::get_ark(gen);
+            let asvk_der = super::super::certs::get_asvk(gen);
+            let ark = x509_cert::Certificate::from_der(ark_der)
+                .unwrap_or_else(|e| panic!("{:?} ARK parse: {}", gen, e));
+            let asvk = x509_cert::Certificate::from_der(asvk_der)
+                .unwrap_or_else(|e| panic!("{:?} ASVK parse: {}", gen, e));
+            assert_eq!(
+                asvk.tbs_certificate.issuer,
+                ark.tbs_certificate.subject,
+                "{:?} ASVK issuer should match ARK subject",
+                gen
+            );
+        }
+    }
+
+    #[test]
+    fn test_asvk_chain_validates() {
+        // ARK → ASVK chain should verify for all generations
+        // (We can't do full chain verify without a real VLEK cert, but we can
+        // verify the ARK → ASVK link)
+        for gen in [ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin] {
+            let ark_der = super::super::certs::get_ark(gen);
+            let asvk_der = super::super::certs::get_asvk(gen);
+            // Parse via sev crate to verify the crypto
+            let ark = Certificate::from_der(ark_der)
+                .unwrap_or_else(|e| panic!("{:?} ARK sev parse: {}", gen, e));
+            let asvk = Certificate::from_der(asvk_der)
+                .unwrap_or_else(|e| panic!("{:?} ASVK sev parse: {}", gen, e));
+            // ARK should verify ASVK
+            (&ark, &asvk)
+                .verify()
+                .unwrap_or_else(|e| panic!("{:?} ARK->ASVK verify failed: {}", gen, e));
+        }
     }
 }

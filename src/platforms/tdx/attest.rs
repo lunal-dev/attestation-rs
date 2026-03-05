@@ -36,7 +36,9 @@ fn check_tsm_provider() -> bool {
     let is_tdx = provider.trim().contains("tdx_guest");
     // ConfigFS dirs need rmdir, not recursive delete
     let path = temp_dir.keep();
-    let _ = std::fs::remove_dir(&path);
+    if let Err(e) = std::fs::remove_dir(&path) {
+        log::warn!("failed to clean up ConfigFS TSM report dir {:?}: {}", path, e);
+    }
     is_tdx
 }
 
@@ -119,7 +121,9 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     // The temp dir is cleaned up by the Drop impl of tempfile
     // But ConfigFS dirs need rmdir, not recursive delete
     let path = temp_dir.keep();
-    let _ = std::fs::remove_dir(&path);
+    if let Err(e) = std::fs::remove_dir(&path) {
+        log::warn!("failed to clean up ConfigFS TSM report dir {:?}: {}", path, e);
+    }
 
     Ok(quote)
 }

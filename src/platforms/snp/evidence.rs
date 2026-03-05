@@ -12,14 +12,22 @@ pub struct SnpEvidence {
 }
 
 /// Certificate chain provided by the hypervisor in the extended report.
+///
+/// Only the VCEK/VLEK is used from the hypervisor-provided chain.
+/// The ASK and ARK are accepted for serialization compatibility but are
+/// **intentionally ignored** during verification — the library always resolves
+/// these from bundled trust anchors to prevent an attacker from substituting
+/// a rogue intermediate or root certificate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnpCertChain {
     /// VCEK or VLEK certificate (DER, base64 encoded).
     pub vcek: String,
-    /// ASK certificate (DER, base64 encoded). Optional - use bundled if missing.
+    /// ASK certificate (DER, base64 encoded). Ignored during verification —
+    /// bundled ASK is always used as the trust anchor.
     #[serde(default)]
     pub ask: Option<String>,
-    /// ARK certificate (DER, base64 encoded). Optional - use bundled if missing.
+    /// ARK certificate (DER, base64 encoded). Ignored during verification —
+    /// bundled ARK is always used as the trust anchor.
     #[serde(default)]
     pub ark: Option<String>,
 }

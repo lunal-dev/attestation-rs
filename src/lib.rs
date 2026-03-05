@@ -153,7 +153,8 @@ pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<Verif
             let evidence: platforms::tdx::evidence::TdxEvidence =
                 serde_json::from_value(envelope.evidence)
                     .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
-            platforms::tdx::verify::verify_evidence(&evidence, params).await
+            let provider = collateral::DefaultTdxCollateralProvider::new();
+            platforms::tdx::verify::verify_evidence(&evidence, params, Some(&provider)).await
         }
         #[cfg(feature = "az-snp")]
         PlatformType::AzSnp => {
@@ -168,7 +169,8 @@ pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<Verif
             let evidence: platforms::az_tdx::evidence::AzTdxEvidence =
                 serde_json::from_value(envelope.evidence)
                     .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
-            platforms::az_tdx::verify::verify_evidence(&evidence, params).await
+            let provider = collateral::DefaultTdxCollateralProvider::new();
+            platforms::az_tdx::verify::verify_evidence(&evidence, params, Some(&provider)).await
         }
         _other => {
             let _ = params;

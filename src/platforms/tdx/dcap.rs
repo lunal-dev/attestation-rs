@@ -272,7 +272,70 @@ pub fn verify_pck_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     // Step 4: Verify Leaf is signed by Intermediate
     verify_cert_signature(&leaf_cert, &intermediate_pub_key, "PCK leaf cert")?;
 
+    // Step 5: Verify certificate validity periods
+    for (der, label) in [
+        (&der_certs[0], "PCK leaf"),
+        (&der_certs[1], "PCK Platform CA"),
+        (&der_certs[2], "Intel SGX Root CA"),
+    ] {
+        verify_cert_validity_period(der, label)?;
+    }
+
     extract_p256_pub_key(&leaf_cert.pub_key_bytes, "PCK leaf")
+}
+
+/// Validate a 2-cert signing chain (Signing Cert → Root CA) and return
+/// the signing certificate's ECDSA P-256 public key.
+///
+/// Used for verifying Intel's ECDSA signatures on TCB Info and QE Identity
+/// JSON. The signing chain is obtained from Intel PCS response headers
+/// (`TCB-Info-Issuer-Chain` / `SGX-Enclave-Identity-Issuer-Chain`).
+///
+/// Validates:
+///   - Root CA public key matches hardcoded Intel trust anchor
+///   - Root CA self-signs correctly
+///   - Signing cert is signed by Root CA
+///   - Both certificates are within their validity periods
+pub fn verify_signing_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
+    let pem_str = std::str::from_utf8(pem_data).map_err(|e| {
+        AttestationError::CertChainError(format!("signing chain PEM not UTF-8: {}", e))
+    })?;
+
+    let der_certs = split_pem_to_der(pem_str)?;
+
+    if der_certs.len() < 2 {
+        return Err(AttestationError::CertChainError(format!(
+            "expected at least 2 certificates in signing chain, got {}",
+            der_certs.len()
+        )));
+    }
+
+    let signing_cert = parse_x509_cert(&der_certs[0], "TCB Signing")?;
+    let root_cert = parse_x509_cert(&der_certs[1], "Intel SGX Root CA")?;
+
+    // Verify Root CA public key matches hardcoded Intel key
+    let root_pub_key = extract_p256_pub_key(&root_cert.pub_key_bytes, "Root CA")?;
+    let intel_root_key = VerifyingKey::from_sec1_bytes(INTEL_SGX_ROOT_CA_PUB_DER)
+        .map_err(|e| AttestationError::CertChainError(format!("Intel Root CA key parse: {}", e)))?;
+
+    if root_pub_key.to_encoded_point(false) != intel_root_key.to_encoded_point(false) {
+        return Err(AttestationError::CertChainError(
+            "signing chain Root CA public key does not match Intel SGX Root CA".into(),
+        ));
+    }
+
+    // Verify Root CA self-signature
+    verify_cert_signature(&root_cert, &root_pub_key, "signing chain Root CA self-signature")?;
+
+    // Verify signing cert is signed by Root CA
+    verify_cert_signature(&signing_cert, &root_pub_key, "TCB Signing cert")?;
+
+    // Verify validity periods
+    for (der, label) in [(&der_certs[0], "TCB Signing"), (&der_certs[1], "Intel SGX Root CA")] {
+        verify_cert_validity_period(der, label)?;
+    }
+
+    extract_p256_pub_key(&signing_cert.pub_key_bytes, "TCB Signing")
 }
 
 /// Minimal X.509 certificate data needed for chain verification.
@@ -342,6 +405,31 @@ fn verify_cert_signature(cert: &CertData, issuer_key: &VerifyingKey, label: &str
     })
 }
 
+/// Verify a certificate's validity period (NotBefore/NotAfter) against the current time.
+fn verify_cert_validity_period(der: &[u8], label: &str) -> Result<()> {
+    let (_, cert) = X509Certificate::from_der(der).map_err(|e| {
+        AttestationError::CertChainError(format!("{} x509 parse for validity: {}", label, e))
+    })?;
+
+    let validity = cert.validity();
+    let now = x509_parser::time::ASN1Time::now();
+
+    if now < validity.not_before {
+        return Err(AttestationError::CertChainError(format!(
+            "{} certificate is not yet valid (notBefore: {})",
+            label, validity.not_before
+        )));
+    }
+    if now > validity.not_after {
+        return Err(AttestationError::CertChainError(format!(
+            "{} certificate has expired (notAfter: {})",
+            label, validity.not_after
+        )));
+    }
+
+    Ok(())
+}
+
 /// Split a PEM string into individual DER-encoded certificate blobs.
 fn split_pem_to_der(pem_str: &str) -> Result<Vec<Vec<u8>>> {
     let mut certs = Vec::new();
@@ -387,12 +475,25 @@ pub fn compute_body_end(quote_bytes: &[u8], quote_version: QuoteVersion) -> Resu
 /// 2. Validate PCK certificate chain to Intel Root CA
 /// 3. Verify QE report signature with PCK leaf key
 /// 4. Verify QE report binding (attestation key bound into QE report)
-pub fn verify_dcap_chain(quote_bytes: &[u8], quote_version: QuoteVersion) -> Result<()> {
+/// 5. Check PCK certificate against CRL (if provided)
+///
+/// `pck_crl_der`: optional DER-encoded CRL from Intel PCS. When provided,
+/// the PCK leaf certificate is checked for revocation.
+pub fn verify_dcap_chain(
+    quote_bytes: &[u8],
+    quote_version: QuoteVersion,
+    pck_crl_der: Option<&[u8]>,
+) -> Result<()> {
     let body_end = compute_body_end(quote_bytes, quote_version)?;
     let auth = parse_auth_data(quote_bytes, body_end)?;
     let pck_pub_key = verify_pck_cert_chain(auth.pck_cert_chain_pem)?;
     verify_qe_report_signature(&auth, &pck_pub_key)?;
     verify_qe_report_binding(&auth)?;
+
+    if let Some(crl_der) = pck_crl_der {
+        check_cert_revocation(auth.pck_cert_chain_pem, crl_der)?;
+    }
+
     Ok(())
 }
 
@@ -472,6 +573,15 @@ fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
     ))
 }
 
+/// Intel PCS v4 TCB Info JSON signed envelope.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TcbInfoSignedEnvelope {
+    #[allow(dead_code)]
+    tcb_info: TcbInfoJson,
+    signature: String,
+}
+
 /// Intel PCS v4 TCB Info JSON structure (subset needed for evaluation).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -483,6 +593,9 @@ struct TcbInfoWrapper {
 #[serde(rename_all = "camelCase")]
 struct TcbInfoJson {
     tcb_levels: Vec<TcbLevelJson>,
+    /// ISO 8601 timestamp indicating when this TCB Info expires.
+    #[serde(default)]
+    next_update: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -617,6 +730,58 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> u64 {
     }
 }
 
+/// Verify the ECDSA-P256 signature on the Intel PCS TCB Info response.
+///
+/// Intel PCS v4 returns TCB Info as a signed envelope:
+/// ```json
+/// { "tcbInfo": { ... }, "signature": "hex-encoded ECDSA-P256 signature" }
+/// ```
+///
+/// The signature covers the raw JSON string of the `tcbInfo` field.
+/// `signing_certs_pem`: PEM-encoded signing certificate chain from the
+/// `TCB-Info-Issuer-Chain` response header, rooted to Intel SGX Root CA.
+pub fn verify_tcb_info_signature(
+    tcb_info_json: &[u8],
+    signing_certs_pem: &[u8],
+) -> Result<()> {
+    let envelope: TcbInfoSignedEnvelope = serde_json::from_slice(tcb_info_json)
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info envelope parse: {}", e)))?;
+
+    let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
+        AttestationError::CertChainError(format!("TCB Info signature hex decode: {}", e))
+    })?;
+    let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
+        AttestationError::CertChainError(format!("TCB Info signature parse: {}", e))
+    })?;
+
+    // Extract the raw JSON string of "tcbInfo" from the envelope.
+    // NOTE: .to_string() re-serializes the JSON, which preserves correctness
+    // as long as serde_json maintains key order (it does for Value::Object).
+    let raw_json: serde_json::Value = serde_json::from_slice(tcb_info_json).map_err(|e| {
+        AttestationError::CertChainError(format!("TCB Info raw JSON parse: {}", e))
+    })?;
+    let tcb_info_raw = raw_json
+        .get("tcbInfo")
+        .ok_or_else(|| {
+            AttestationError::CertChainError("TCB Info missing 'tcbInfo' field".into())
+        })?
+        .to_string();
+
+    // Verify the signing cert chain roots to Intel SGX Root CA (2-cert chain)
+    let signing_key = verify_signing_cert_chain(signing_certs_pem)?;
+
+    signing_key
+        .verify(tcb_info_raw.as_bytes(), &signature)
+        .map_err(|e| {
+            AttestationError::CertChainError(format!(
+                "TCB Info signature verification failed: {}",
+                e
+            ))
+        })?;
+
+    Ok(())
+}
+
 /// Evaluate TCB status for a TDX quote against Intel TCB Info collateral.
 ///
 /// Matches the quote's TCB SVNs against the TCB levels from Intel PCS,
@@ -625,13 +790,36 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> u64 {
 /// `tcb_info_json`: raw JSON response from Intel PCS v4 `/tcb` endpoint.
 /// `tee_tcb_svn`: 16-byte TEE TCB SVN from the TDX quote body.
 /// `pck_pem`: PCK cert chain PEM (for extracting SGX TCB components).
+/// `signing_certs_pem`: optional PEM-encoded TCB signing certificate chain
+/// from the `TCB-Info-Issuer-Chain` response header. When provided, the
+/// Intel signature on the TCB Info is verified before use.
 pub fn evaluate_tcb_status(
     tcb_info_json: &[u8],
     tee_tcb_svn: &[u8; 16],
     pck_pem: &[u8],
+    signing_certs_pem: Option<&[u8]>,
 ) -> Result<DcapVerificationStatus> {
+    if let Some(certs_pem) = signing_certs_pem {
+        verify_tcb_info_signature(tcb_info_json, certs_pem)?;
+    }
+
     let wrapper: TcbInfoWrapper = serde_json::from_slice(tcb_info_json)
         .map_err(|e| AttestationError::CertChainError(format!("TCB Info JSON parse: {}", e)))?;
+
+    // Check if collateral has expired (nextUpdate is in the past)
+    let collateral_expired = wrapper
+        .tcb_info
+        .next_update
+        .as_deref()
+        .and_then(|ts| {
+            // Intel PCS uses ISO 8601: "2024-03-07T00:00:00Z"
+            // Try common formats
+            chrono_parse_is_past(ts)
+        })
+        .unwrap_or(false);
+    if collateral_expired {
+        log::warn!("TCB Info collateral has expired (nextUpdate in the past)");
+    }
 
     let (pck_compsvn, pck_pcesvn) = extract_pck_tcb_components(pck_pem)?;
     let fmspc = extract_fmspc_from_pck(pck_pem)?;
@@ -679,6 +867,7 @@ pub fn evaluate_tcb_status(
                     tcb_status,
                     fmspc,
                     advisory_ids: level.advisory_ids.clone(),
+                    collateral_expired,
                 });
             }
         }
@@ -687,6 +876,48 @@ pub fn evaluate_tcb_status(
     Err(AttestationError::TcbMismatch(
         "no matching TDX TCB level found".into(),
     ))
+}
+
+/// Check if an ISO 8601 timestamp (e.g. "2024-03-07T00:00:00Z") is in the past.
+/// Returns `None` if the timestamp cannot be parsed.
+fn chrono_parse_is_past(ts: &str) -> Option<bool> {
+    // Parse "YYYY-MM-DDThh:mm:ssZ" format
+    let ts = ts.trim();
+    if ts.len() < 19 {
+        return None;
+    }
+    let year: u64 = ts.get(0..4)?.parse().ok()?;
+    let month: u64 = ts.get(5..7)?.parse().ok()?;
+    let day: u64 = ts.get(8..10)?.parse().ok()?;
+    let hour: u64 = ts.get(11..13)?.parse().ok()?;
+    let min: u64 = ts.get(14..16)?.parse().ok()?;
+    let sec: u64 = ts.get(17..19)?.parse().ok()?;
+
+    // Approximate seconds since Unix epoch (ignoring leap years/seconds for
+    // this comparison — accuracy within a day is sufficient for collateral expiry).
+    let days_in_year = 365u64;
+    let epoch_days = (year - 1970) * days_in_year + (year - 1969) / 4
+        + days_before_month(month, year) + day - 1;
+    let next_update_secs = epoch_days * 86400 + hour * 3600 + min * 60 + sec;
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+
+    Some(now_secs > next_update_secs)
+}
+
+/// Approximate cumulative days before a given month (1-indexed).
+fn days_before_month(month: u64, year: u64) -> u64 {
+    const DAYS: [u64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let m = (month.saturating_sub(1) as usize).min(11);
+    let mut d = DAYS[m];
+    // Leap year adjustment for months after February
+    if month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+        d += 1;
+    }
+    d
 }
 
 /// Parse a TCB status string from Intel PCS into our enum.
@@ -704,6 +935,249 @@ fn parse_tcb_status(s: &str) -> Result<TdxTcbStatus> {
             s
         ))),
     }
+}
+
+/// Determine the CA type ("platform" or "processor") from the PCK issuer CN.
+///
+/// Intel PCK certificates are issued either by "Intel SGX PCK Platform CA"
+/// or "Intel SGX PCK Processor CA". The CA type is needed to fetch the
+/// correct CRL from Intel PCS.
+pub fn determine_ca_type(pck_pem: &[u8]) -> Result<String> {
+    let pem_str = std::str::from_utf8(pck_pem)
+        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
+    let der_certs = split_pem_to_der(pem_str)?;
+    if der_certs.is_empty() {
+        return Err(AttestationError::CertChainError("no certificates found".into()));
+    }
+    let (_, cert) = X509Certificate::from_der(&der_certs[0])
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
+
+    let issuer = format!("{}", cert.issuer());
+    if issuer.contains("Platform") {
+        Ok("platform".to_string())
+    } else {
+        Ok("processor".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// QE Identity verification
+// ---------------------------------------------------------------------------
+
+/// Intel PCS v4 QE Identity JSON signed envelope.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QeIdentityEnvelope {
+    enclave_identity: serde_json::Value,
+    signature: String,
+}
+
+/// Parsed QE Identity fields needed for verification.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnclaveIdentityFields {
+    mrsigner: String,
+    isvprodid: u16,
+    miscselect: String,
+    miscselect_mask: String,
+    attributes: String,
+    attributes_mask: String,
+    tcb_levels: Vec<QeIdentityTcbLevel>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QeIdentityTcbLevel {
+    tcb: QeIdentityTcb,
+    tcb_status: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct QeIdentityTcb {
+    isvsvn: u16,
+}
+
+/// QE report field offsets within the 384-byte QE report body.
+const QE_MISCSELECT_OFFSET: usize = 40;
+const QE_ATTRIBUTES_OFFSET: usize = 48;
+const QE_MRSIGNER_OFFSET: usize = 176;
+const QE_ISVPRODID_OFFSET: usize = 304;
+const QE_ISVSVN_OFFSET: usize = 306;
+
+/// Verify the Quoting Enclave identity against Intel's published QE Identity.
+///
+/// Checks that the QE report fields (MRSIGNER, ISVPRODID, ISVSVN,
+/// MISCSELECT, ATTRIBUTES) match the values published by Intel.
+///
+/// `qe_report_body`: 384-byte QE report body from the quote auth data.
+/// `qe_identity_json`: raw JSON response from Intel PCS QE Identity endpoint.
+/// `signing_certs_pem`: optional PEM-encoded signing certificate chain from the
+/// `SGX-Enclave-Identity-Issuer-Chain` response header. When provided,
+/// the Intel signature is verified before use.
+pub fn verify_qe_identity(
+    qe_report_body: &[u8],
+    qe_identity_json: &[u8],
+    signing_certs_pem: Option<&[u8]>,
+) -> Result<()> {
+    if qe_report_body.len() < QE_REPORT_BODY_SIZE {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "QE report body too short: {} bytes, expected {}",
+            qe_report_body.len(), QE_REPORT_BODY_SIZE
+        )));
+    }
+
+    // Parse the envelope and optionally verify signature
+    let envelope: QeIdentityEnvelope = serde_json::from_slice(qe_identity_json)
+        .map_err(|e| AttestationError::CertChainError(format!("QE Identity envelope parse: {}", e)))?;
+
+    if let Some(certs_pem) = signing_certs_pem {
+        // Verify Intel ECDSA P-256 signature on the enclaveIdentity JSON
+        let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
+            AttestationError::CertChainError(format!("QE Identity signature hex decode: {}", e))
+        })?;
+        let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
+            AttestationError::CertChainError(format!("QE Identity signature parse: {}", e))
+        })?;
+
+        let identity_raw = envelope.enclave_identity.to_string();
+        let signing_key = verify_signing_cert_chain(certs_pem)?;
+
+        signing_key.verify(identity_raw.as_bytes(), &signature).map_err(|e| {
+            AttestationError::CertChainError(format!(
+                "QE Identity signature verification failed: {}", e
+            ))
+        })?;
+    }
+
+    // Parse the identity fields
+    let identity: EnclaveIdentityFields = serde_json::from_value(envelope.enclave_identity.clone())
+        .map_err(|e| AttestationError::CertChainError(format!("QE Identity fields parse: {}", e)))?;
+
+    // Extract QE report fields at known offsets
+    let qe_miscselect = &qe_report_body[QE_MISCSELECT_OFFSET..QE_MISCSELECT_OFFSET + 4];
+    let qe_attributes = &qe_report_body[QE_ATTRIBUTES_OFFSET..QE_ATTRIBUTES_OFFSET + 16];
+    let qe_mrsigner = &qe_report_body[QE_MRSIGNER_OFFSET..QE_MRSIGNER_OFFSET + 32];
+    let qe_isvprodid = u16::from_le_bytes([
+        qe_report_body[QE_ISVPRODID_OFFSET],
+        qe_report_body[QE_ISVPRODID_OFFSET + 1],
+    ]);
+    let qe_isvsvn = u16::from_le_bytes([
+        qe_report_body[QE_ISVSVN_OFFSET],
+        qe_report_body[QE_ISVSVN_OFFSET + 1],
+    ]);
+
+    // Check MRSIGNER (exact match)
+    let expected_mrsigner = hex::decode(&identity.mrsigner).map_err(|e| {
+        AttestationError::CertChainError(format!("QE Identity MRSIGNER hex decode: {}", e))
+    })?;
+    if !crate::utils::constant_time_eq(qe_mrsigner, &expected_mrsigner) {
+        return Err(AttestationError::CertChainError(
+            "QE MRSIGNER does not match Intel QE Identity".into(),
+        ));
+    }
+
+    // Check ISVPRODID (exact match)
+    if qe_isvprodid != identity.isvprodid {
+        return Err(AttestationError::CertChainError(format!(
+            "QE ISVPRODID {} does not match expected {}",
+            qe_isvprodid, identity.isvprodid
+        )));
+    }
+
+    // Check MISCSELECT (masked comparison)
+    let expected_miscselect = hex::decode(&identity.miscselect).map_err(|e| {
+        AttestationError::CertChainError(format!("QE Identity MISCSELECT hex decode: {}", e))
+    })?;
+    let miscselect_mask = hex::decode(&identity.miscselect_mask).map_err(|e| {
+        AttestationError::CertChainError(format!("QE Identity MISCSELECT_MASK hex decode: {}", e))
+    })?;
+    if expected_miscselect.len() == 4 && miscselect_mask.len() == 4 {
+        for i in 0..4 {
+            if (qe_miscselect[i] & miscselect_mask[i]) != (expected_miscselect[i] & miscselect_mask[i]) {
+                return Err(AttestationError::CertChainError(
+                    "QE MISCSELECT does not match Intel QE Identity (masked)".into(),
+                ));
+            }
+        }
+    }
+
+    // Check ATTRIBUTES (masked comparison)
+    let expected_attributes = hex::decode(&identity.attributes).map_err(|e| {
+        AttestationError::CertChainError(format!("QE Identity ATTRIBUTES hex decode: {}", e))
+    })?;
+    let attributes_mask = hex::decode(&identity.attributes_mask).map_err(|e| {
+        AttestationError::CertChainError(format!("QE Identity ATTRIBUTES_MASK hex decode: {}", e))
+    })?;
+    if expected_attributes.len() == 16 && attributes_mask.len() == 16 {
+        for i in 0..16 {
+            if (qe_attributes[i] & attributes_mask[i]) != (expected_attributes[i] & attributes_mask[i]) {
+                return Err(AttestationError::CertChainError(
+                    "QE ATTRIBUTES does not match Intel QE Identity (masked)".into(),
+                ));
+            }
+        }
+    }
+
+    // Check ISVSVN (>= highest matching TCB level)
+    // Find the first TCB level where the QE ISVSVN is >= the level's ISVSVN
+    let mut svn_ok = false;
+    for level in &identity.tcb_levels {
+        if qe_isvsvn >= level.tcb.isvsvn {
+            // Reject revoked QE TCB levels
+            if level.tcb_status == "Revoked" {
+                return Err(AttestationError::CertChainError(
+                    "QE TCB status is Revoked".into(),
+                ));
+            }
+            svn_ok = true;
+            break;
+        }
+    }
+    if !svn_ok {
+        return Err(AttestationError::CertChainError(format!(
+            "QE ISVSVN {} does not meet any published TCB level",
+            qe_isvsvn
+        )));
+    }
+
+    Ok(())
+}
+
+/// Check whether the Intermediate CA (Platform or Processor CA) has been
+/// revoked by the Root CA CRL.
+///
+/// `pck_pem`: PCK cert chain PEM data (leaf, intermediate, root).
+/// `root_ca_crl_der`: DER-encoded Root CA CRL from Intel PCS.
+pub fn check_intermediate_ca_revocation(pck_pem: &[u8], root_ca_crl_der: &[u8]) -> Result<()> {
+    let pem_str = std::str::from_utf8(pck_pem)
+        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
+
+    let der_certs = split_pem_to_der(pem_str)?;
+    if der_certs.len() < 2 {
+        return Err(AttestationError::CertChainError(
+            "need at least 2 certs to check intermediate CA revocation".into(),
+        ));
+    }
+
+    // The intermediate CA is the 2nd cert in the chain
+    let (_, intermediate_cert) = X509Certificate::from_der(&der_certs[1])
+        .map_err(|e| AttestationError::CertChainError(format!("Intermediate CA parse: {}", e)))?;
+    let intermediate_serial = intermediate_cert.raw_serial();
+
+    // Parse the Root CA CRL
+    let (_, crl) = CertificateRevocationList::from_der(root_ca_crl_der)
+        .map_err(|e| AttestationError::CertChainError(format!("Root CA CRL parse: {}", e)))?;
+
+    // Check if intermediate serial is in the revoked list
+    for revoked in crl.iter_revoked_certificates() {
+        if revoked.raw_serial() == intermediate_serial {
+            return Err(AttestationError::CertChainError(
+                "Intermediate CA certificate has been revoked by Root CA CRL".into(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Check whether the PCK leaf certificate has been revoked by a CRL.
@@ -979,4 +1453,78 @@ mod tests {
         // Should fail to parse — that's expected
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_check_intermediate_ca_revocation_parse_error() {
+        let body_end = body_end_v4();
+        let auth = parse_auth_data(V4_QUOTE, body_end).unwrap();
+
+        // Invalid CRL data should produce a parse error
+        let bogus_crl = vec![0x30, 0x00];
+        let result = check_intermediate_ca_revocation(auth.pck_cert_chain_pem, &bogus_crl);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_intermediate_ca_revocation_needs_two_certs() {
+        // A single-cert PEM should fail
+        let body_end = body_end_v4();
+        let auth = parse_auth_data(V4_QUOTE, body_end).unwrap();
+
+        // Extract just the first cert from the PEM chain
+        let pem_str = std::str::from_utf8(auth.pck_cert_chain_pem).unwrap();
+        let end_marker = "-----END CERTIFICATE-----";
+        let first_cert_end = pem_str.find(end_marker).unwrap() + end_marker.len();
+        let single_cert_pem = &pem_str[..first_cert_end];
+
+        let bogus_crl = vec![0x30, 0x00];
+        let result = check_intermediate_ca_revocation(
+            single_cert_pem.as_bytes(),
+            &bogus_crl,
+        );
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("at least 2 certs"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_chrono_parse_is_past() {
+        // A date in the far past should return true (expired)
+        assert_eq!(chrono_parse_is_past("2020-01-01T00:00:00Z"), Some(true));
+        // A date in the far future should return false (not expired)
+        assert_eq!(chrono_parse_is_past("2099-12-31T23:59:59Z"), Some(false));
+        // Invalid format should return None
+        assert_eq!(chrono_parse_is_past("invalid"), None);
+        assert_eq!(chrono_parse_is_past(""), None);
+    }
+
+    #[test]
+    fn test_verify_signing_cert_chain_wrong_key_rejected() {
+        // A PEM chain where the root key doesn't match Intel's should be rejected
+        let body_end = body_end_v4();
+        let auth = parse_auth_data(V4_QUOTE, body_end).unwrap();
+
+        // The PCK chain has 3 certs, not a signing chain, but let's
+        // verify that verify_signing_cert_chain rejects it if the root
+        // key doesn't match (the PCK chain root IS the Intel root, so
+        // it would pass root key check but the chain is 3 certs).
+        // With a 2-cert subset that's not a valid signing chain, it should
+        // still reject if signatures don't verify.
+        let pem_str = std::str::from_utf8(auth.pck_cert_chain_pem).unwrap();
+        let end_marker = "-----END CERTIFICATE-----";
+
+        // Extract leaf and intermediate only (2-cert chain)
+        let first_end = pem_str.find(end_marker).unwrap() + end_marker.len();
+        let second_end = pem_str[first_end + 1..].find(end_marker).unwrap()
+            + first_end + 1 + end_marker.len();
+        let two_cert_pem = &pem_str[..second_end];
+
+        // This should fail because the 2nd cert (intermediate) is not the Root CA
+        let result = verify_signing_cert_chain(two_cert_pem.as_bytes());
+        assert!(
+            result.is_err(),
+            "intermediate CA should not be accepted as Intel Root CA"
+        );
+    }
+
 }

@@ -122,6 +122,12 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
     let content = &hcl_report[content_start..content_start + bounded_len];
     let trimmed_len = content.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
 
+    if trimmed_len == 0 {
+        return Err(AttestationError::QuoteParseFailed(
+            "HCL var_data is empty after null trimming".to_string(),
+        ));
+    }
+
     Ok(HclReportData {
         tee_report,
         report_type,
@@ -379,7 +385,7 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Verify TPM nonce matches expected report_data.
-pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
+pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<()> {
     let nonce = extract_tpm_nonce(message)?;
     if nonce.len() != expected.len() {
         return Err(AttestationError::QuoteParseFailed(format!(
@@ -388,7 +394,10 @@ pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<bool> {
             expected.len()
         )));
     }
-    Ok(crate::utils::constant_time_eq(&nonce, expected))
+    if !crate::utils::constant_time_eq(&nonce, expected) {
+        return Err(AttestationError::ReportDataMismatch);
+    }
+    Ok(())
 }
 
 /// Verify TPM PCR digest integrity.
@@ -552,14 +561,15 @@ pub fn check_report_data(tpm_msg: &[u8], expected: Option<&[u8]>) -> Result<Opti
     let Some(expected) = expected else {
         return Ok(None);
     };
-    let matched = verify_tpm_nonce(tpm_msg, expected)?;
-    if !matched {
-        return Err(AttestationError::ReportDataMismatch);
-    }
+    verify_tpm_nonce(tpm_msg, expected)?;
     Ok(Some(true))
 }
 
 /// Check TPM PCR[8] against expected init_data_hash, returning `None` if no expectation was provided.
+///
+/// TPM PCR extend semantics: `PCR[8] = SHA256(zeros_32 || init_data_hash)`.
+/// The guest extends PCR[8] from its initial zero state with the init_data hash,
+/// so we must replicate that extend operation before comparing.
 pub fn check_init_data(tpm_pcrs: &[Vec<u8>], expected: Option<&[u8]>) -> Result<Option<bool>> {
     let Some(expected) = expected else {
         return Ok(None);
@@ -573,7 +583,9 @@ pub fn check_init_data(tpm_pcrs: &[Vec<u8>], expected: Option<&[u8]>) -> Result<
     if tpm_pcrs.len() <= 8 {
         return Err(AttestationError::InitDataMismatch);
     }
-    if !crate::utils::constant_time_eq(&tpm_pcrs[8], expected) {
+    // Compute TPM PCR extend: PCR[8] = SHA256(zeros_32 || init_data_hash)
+    let extended = crate::utils::sha256_two(&[0u8; 32], expected);
+    if !crate::utils::constant_time_eq(&tpm_pcrs[8], &extended) {
         return Err(AttestationError::InitDataMismatch);
     }
     Ok(Some(true))
@@ -607,6 +619,9 @@ pub fn build_tpm_verification_result(
     match extract_tpm_nonce(tpm_msg) {
         Ok(nonce) => {
             platform_data["tpm"]["nonce"] = serde_json::Value::String(hex::encode(&nonce));
+            // Safety: strip_trailing_nulls runs AFTER the constant-time comparison
+            // in check_report_data, so stripping here is not security-sensitive.
+            // The stripped nonce is only used in the public verification result.
             signed_data = strip_trailing_nulls(&nonce).to_vec();
         }
         Err(e) => {
@@ -626,6 +641,7 @@ pub fn build_tpm_verification_result(
         claims,
         report_data_match,
         init_data_match,
+        tcb_status: None,
     }
 }
 
@@ -712,8 +728,7 @@ mod tests {
         let report_data = b"hello world test nonce";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(report_data, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, report_data).unwrap();
-        assert!(result, "nonce should match via direct comparison");
+        assert!(verify_tpm_nonce(&msg, report_data).is_ok(), "nonce should match via direct comparison");
     }
 
     #[test]
@@ -721,8 +736,7 @@ mod tests {
         let nonce = b"correct data nonce value";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        let result = verify_tpm_nonce(&msg, b"wrong___data nonce value").unwrap();
-        assert!(!result, "nonce should not match for different data");
+        assert!(verify_tpm_nonce(&msg, b"wrong___data nonce value").is_err(), "nonce should not match for different data");
     }
 
     #[test]
@@ -1266,6 +1280,7 @@ mod tests {
                 tee: 0,
                 snp: 1,
                 microcode: 1,
+                fmc: None,
             },
             platform_data: serde_json::json!({}),
         };
@@ -1310,6 +1325,7 @@ mod tests {
                 tee: 0,
                 snp: 1,
                 microcode: 1,
+                fmc: None,
             },
             platform_data: serde_json::json!({}),
         };
@@ -1333,5 +1349,69 @@ mod tests {
             result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
             hex::encode(&padded_nonce),
         );
+    }
+
+    // --- check_init_data tests ---
+
+    #[test]
+    fn test_check_init_data_none_expected() {
+        let pcrs = vec![vec![0u8; 32]; 16];
+        let result = check_init_data(&pcrs, None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_check_init_data_pcr_extend_formula() {
+        // Simulate TPM PCR extend: PCR[8] = SHA256(zeros_32 || init_data_hash)
+        let init_data_hash = [0xAA; 32];
+        let extended = crate::utils::sha256_two(&[0u8; 32], &init_data_hash);
+
+        let mut pcrs = vec![vec![0u8; 32]; 16];
+        pcrs[8] = extended;
+
+        let result = check_init_data(&pcrs, Some(&init_data_hash));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(true));
+    }
+
+    #[test]
+    fn test_check_init_data_raw_hash_mismatch() {
+        // If PCR[8] contains the raw hash (not extended), it should NOT match.
+        // This is the bug this fix corrects.
+        let init_data_hash = [0xBB; 32];
+
+        let mut pcrs = vec![vec![0u8; 32]; 16];
+        pcrs[8] = init_data_hash.to_vec(); // raw, not extended
+
+        let result = check_init_data(&pcrs, Some(&init_data_hash));
+        assert!(result.is_err(), "raw hash should not match extended PCR value");
+    }
+
+    #[test]
+    fn test_check_init_data_wrong_hash() {
+        let init_data_hash = [0xCC; 32];
+        let wrong_hash = [0xDD; 32];
+        let extended = crate::utils::sha256_two(&[0u8; 32], &wrong_hash);
+
+        let mut pcrs = vec![vec![0u8; 32]; 16];
+        pcrs[8] = extended;
+
+        let result = check_init_data(&pcrs, Some(&init_data_hash));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_init_data_wrong_length() {
+        let pcrs = vec![vec![0u8; 32]; 16];
+        let result = check_init_data(&pcrs, Some(&[0u8; 16]));
+        assert!(result.is_err(), "non-32-byte hash should be rejected");
+    }
+
+    #[test]
+    fn test_check_init_data_too_few_pcrs() {
+        let pcrs = vec![vec![0u8; 32]; 8]; // only PCR[0..7]
+        let result = check_init_data(&pcrs, Some(&[0u8; 32]));
+        assert!(result.is_err(), "should fail with too few PCRs");
     }
 }

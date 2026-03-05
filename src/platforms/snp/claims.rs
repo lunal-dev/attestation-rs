@@ -40,6 +40,7 @@ pub fn extract_claims(report: &AttestationReport) -> Claims {
             tee: report.reported_tcb.tee,
             snp: report.reported_tcb.snp,
             microcode: report.reported_tcb.microcode,
+            fmc: report.reported_tcb.fmc,
         },
         platform_data,
     }
@@ -83,6 +84,7 @@ mod tests {
                 tee,
                 snp,
                 microcode,
+                ..
             } => {
                 assert_eq!(*bootloader, 3);
                 assert_eq!(*tee, 0);
