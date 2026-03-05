@@ -19,13 +19,10 @@ async fn capture_az_snp_evidence_fixture() {
     // Also verify it
     let params = attestation::types::VerifyParams::default();
     let provider = attestation::collateral::DefaultCertProvider::new();
-    let result = attestation::platforms::az_snp::verify::verify_evidence(
-        &evidence,
-        &params,
-        &provider,
-    )
-    .await
-    .expect("verify failed");
+    let result =
+        attestation::platforms::az_snp::verify::verify_evidence(&evidence, &params, &provider)
+            .await
+            .expect("verify failed");
     eprintln!(
         "Verified: signature_valid={}, platform={}",
         result.signature_valid, result.platform
@@ -49,10 +46,9 @@ async fn capture_az_tdx_evidence_fixture() {
 
     // Also verify it
     let params = attestation::types::VerifyParams::default();
-    let result =
-        attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params)
-            .await
-            .expect("verify failed");
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params)
+        .await
+        .expect("verify failed");
     eprintln!(
         "Verified: signature_valid={}, platform={}",
         result.signature_valid, result.platform

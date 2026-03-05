@@ -53,10 +53,12 @@ pub const MAX_EVIDENCE_FIELD_SIZE: usize = 1_048_576;
 /// Validate that an evidence field does not exceed the size limit.
 pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
     if len > MAX_EVIDENCE_FIELD_SIZE {
-        return Err(crate::error::AttestationError::EvidenceDeserialize(format!(
-            "field '{}' too large: {} bytes (max {})",
-            name, len, MAX_EVIDENCE_FIELD_SIZE
-        )));
+        return Err(crate::error::AttestationError::EvidenceDeserialize(
+            format!(
+                "field '{}' too large: {} bytes (max {})",
+                name, len, MAX_EVIDENCE_FIELD_SIZE
+            ),
+        ));
     }
     Ok(())
 }

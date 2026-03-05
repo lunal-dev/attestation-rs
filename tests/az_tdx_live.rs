@@ -19,8 +19,8 @@ use attestation::types::VerifyParams;
 /// Helper: check if we're running on an Azure TDX CVM with the required tools.
 fn is_az_tdx_cvm() -> bool {
     // Check for TPM device
-    let has_tpm = std::path::Path::new("/dev/tpmrm0").exists()
-        || std::path::Path::new("/dev/tpm0").exists();
+    let has_tpm =
+        std::path::Path::new("/dev/tpmrm0").exists() || std::path::Path::new("/dev/tpm0").exists();
 
     // Check for Azure environment via IMDS (more reliable than file checks)
     let is_azure = std::process::Command::new("curl")
@@ -92,8 +92,14 @@ async fn test_az_tdx_attest_generates_valid_evidence() {
 
     // Basic structural checks
     assert_eq!(evidence.version, 1);
-    assert!(!evidence.hcl_report.is_empty(), "HCL report should not be empty");
-    assert!(!evidence.td_quote.is_empty(), "TD quote should not be empty");
+    assert!(
+        !evidence.hcl_report.is_empty(),
+        "HCL report should not be empty"
+    );
+    assert!(
+        !evidence.td_quote.is_empty(),
+        "TD quote should not be empty"
+    );
     assert!(
         !evidence.tpm_quote.signature.is_empty(),
         "TPM signature should not be empty"
@@ -102,13 +108,21 @@ async fn test_az_tdx_attest_generates_valid_evidence() {
         !evidence.tpm_quote.message.is_empty(),
         "TPM message should not be empty"
     );
-    assert_eq!(evidence.tpm_quote.pcrs.len(), 24, "should have 24 PCR values");
+    assert_eq!(
+        evidence.tpm_quote.pcrs.len(),
+        24,
+        "should have 24 PCR values"
+    );
 
     // HCL report should decode and have HCLA magic
     let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(evidence.hcl_report.trim_end_matches('='))
         .expect("HCL report should be valid base64url");
-    assert_eq!(&hcl_bytes[..4], b"HCLA", "HCL report should have HCLA magic");
+    assert_eq!(
+        &hcl_bytes[..4],
+        b"HCLA",
+        "HCL report should have HCLA magic"
+    );
     assert_eq!(hcl_bytes.len(), 2600, "HCL report should be 2600 bytes");
 
     // TD quote should decode to valid bytes with TDX TEE type
@@ -202,8 +216,7 @@ async fn test_az_tdx_verify_with_expected_nonce() {
         ..Default::default()
     };
 
-    let result =
-        attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
 
     assert!(
         result.is_ok(),
@@ -349,8 +362,7 @@ async fn test_az_tdx_wrong_nonce_fails_verification() {
         ..Default::default()
     };
 
-    let result =
-        attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
 
     assert!(
         result.is_err(),
@@ -430,10 +442,7 @@ async fn test_az_tdx_top_level_api_wrong_nonce_fails() {
     };
     let result = attestation::verify(&evidence_json, &params).await;
 
-    assert!(
-        result.is_err(),
-        "verify() with wrong nonce should fail"
-    );
+    assert!(result.is_err(), "verify() with wrong nonce should fail");
 }
 
 #[tokio::test]

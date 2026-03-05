@@ -55,9 +55,8 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
     let tpm_quote = quote_to_tpm_quote(quote);
 
     // 3. Fetch VCEK certificate from Azure IMDS
-    let certs = imds::get_certs().map_err(|e| {
-        AttestationError::CertFetchError(format!("imds::get_certs failed: {}", e))
-    })?;
+    let certs = imds::get_certs()
+        .map_err(|e| AttestationError::CertFetchError(format!("imds::get_certs failed: {}", e)))?;
     let vcek_der = pem_to_der(&certs.vcek)?;
 
     // 4. Assemble evidence

@@ -101,9 +101,14 @@ pub async fn verify_evidence(
             log::warn!(
                 "could not determine processor generation from CPUID \
                  (family=0x{:02X}, model=0x{:02X}); trying all known generations",
-                cpuid_fam_id, cpuid_mod_id
+                cpuid_fam_id,
+                cpuid_mod_id
             );
-            vec![ProcessorGeneration::Milan, ProcessorGeneration::Genoa, ProcessorGeneration::Turin]
+            vec![
+                ProcessorGeneration::Milan,
+                ProcessorGeneration::Genoa,
+                ProcessorGeneration::Turin,
+            ]
         }
     };
     let mut last_err = None;
@@ -116,7 +121,8 @@ pub async fn verify_evidence(
         } else {
             crate::platforms::snp::certs::get_ask(*gen)
         };
-        match crate::platforms::snp::verify::verify_cert_chain(ark_der, intermediate_der, &vcek_der) {
+        match crate::platforms::snp::verify::verify_cert_chain(ark_der, intermediate_der, &vcek_der)
+        {
             Ok(()) => {
                 chain_ok = true;
                 break;
@@ -165,8 +171,14 @@ pub async fn verify_evidence(
         {
             return Err(AttestationError::TcbMismatch(format!(
                 "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
-                tcb.bootloader, tcb.tee, tcb.snp, tcb.microcode,
-                min_tcb.bootloader, min_tcb.tee, min_tcb.snp, min_tcb.microcode,
+                tcb.bootloader,
+                tcb.tee,
+                tcb.snp,
+                tcb.microcode,
+                min_tcb.bootloader,
+                min_tcb.tee,
+                min_tcb.snp,
+                min_tcb.microcode,
             )));
         }
     }
@@ -188,8 +200,8 @@ pub async fn verify_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
     use crate::platforms::tpm_common::TpmQuote;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
     /// Build a properly-formatted HCL report with HCLA magic, embedded SNP report,
     /// var_data header, and JSON content.
@@ -214,14 +226,10 @@ mod tests {
         let version: u32 = 1;
         let content_length = var_data_content.len() as u32;
 
-        hcl[tee_report_end..tee_report_end + 4]
-            .copy_from_slice(&total_remaining.to_le_bytes());
-        hcl[tee_report_end + 4..tee_report_end + 8]
-            .copy_from_slice(&count.to_le_bytes());
-        hcl[tee_report_end + 8..tee_report_end + 12]
-            .copy_from_slice(&report_type.to_le_bytes());
-        hcl[tee_report_end + 12..tee_report_end + 16]
-            .copy_from_slice(&version.to_le_bytes());
+        hcl[tee_report_end..tee_report_end + 4].copy_from_slice(&total_remaining.to_le_bytes());
+        hcl[tee_report_end + 4..tee_report_end + 8].copy_from_slice(&count.to_le_bytes());
+        hcl[tee_report_end + 8..tee_report_end + 12].copy_from_slice(&report_type.to_le_bytes());
+        hcl[tee_report_end + 12..tee_report_end + 16].copy_from_slice(&version.to_le_bytes());
         hcl[tee_report_end + 16..tee_report_end + 20]
             .copy_from_slice(&content_length.to_le_bytes());
 
@@ -307,7 +315,11 @@ mod tests {
         let result = rt.block_on(verify_evidence(&evidence, &params, &provider));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("base64") || err.contains("Base64"), "error: {}", err);
+        assert!(
+            err.contains("base64") || err.contains("Base64"),
+            "error: {}",
+            err
+        );
     }
 
     #[test]
@@ -351,7 +363,8 @@ mod tests {
         let extracted_report_data = &parsed.tee_report[0x50..0x50 + 32];
 
         assert_eq!(
-            extracted_report_data, &computed[..],
+            extracted_report_data,
+            &computed[..],
             "HCL var_data binding: report_data[..32] should equal SHA-256(var_data)"
         );
     }
@@ -396,7 +409,11 @@ mod tests {
     #[test]
     fn test_coco_hcl_report_parses() {
         let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT);
-        assert!(parsed.is_ok(), "CoCo HCL report should parse: {:?}", parsed.err());
+        assert!(
+            parsed.is_ok(),
+            "CoCo HCL report should parse: {:?}",
+            parsed.err()
+        );
 
         let parsed = parsed.unwrap();
         assert_eq!(parsed.tee_report.len(), 1184);
@@ -413,14 +430,17 @@ mod tests {
             "SNP report from CoCo HCL should parse: {:?}",
             report.err()
         );
-        assert_eq!(report.unwrap().version, 2, "CoCo fixture uses SNP report v2");
+        assert_eq!(
+            report.unwrap().version,
+            2,
+            "CoCo fixture uses SNP report v2"
+        );
     }
 
     #[test]
     fn test_coco_hcl_var_data_binding() {
         let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
-        let snp_report =
-            crate::platforms::snp::verify::parse_report(&parsed.tee_report).unwrap();
+        let snp_report = crate::platforms::snp::verify::parse_report(&parsed.tee_report).unwrap();
 
         let var_data_hash = crate::utils::sha256(&parsed.var_data);
 
@@ -435,8 +455,8 @@ mod tests {
         let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
 
         // var_data should be valid JSON with a "keys" array
-        let json: serde_json::Value = serde_json::from_slice(&parsed.var_data)
-            .expect("var_data should be valid JSON");
+        let json: serde_json::Value =
+            serde_json::from_slice(&parsed.var_data).expect("var_data should be valid JSON");
         assert!(json["keys"].is_array(), "JSON should contain 'keys' array");
 
         // Should contain an HCLAkPub RSA key

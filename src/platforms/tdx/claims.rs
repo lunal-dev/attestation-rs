@@ -57,8 +57,8 @@ pub fn extract_claims(quote: &TdxQuote) -> Claims {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::verify::parse_tdx_quote;
+    use super::*;
 
     const V4_QUOTE: &[u8] = include_bytes!("../../../test_data/tdx_quote_4.dat");
     const V5_QUOTE: &[u8] = include_bytes!("../../../test_data/tdx_quote_5.dat");
@@ -102,10 +102,7 @@ mod tests {
             claims.platform_data["quote_version"].as_str().unwrap(),
             "V4"
         );
-        assert_eq!(
-            claims.platform_data["tee_type"].as_str().unwrap(),
-            "0x81"
-        );
+        assert_eq!(claims.platform_data["tee_type"].as_str().unwrap(), "0x81");
 
         // RTMR values should be present as hex strings
         let rtmr0 = claims.platform_data["rtmr_0"].as_str().unwrap();
@@ -162,10 +159,7 @@ mod tests {
             claims.platform_data["quote_version"].as_str().unwrap(),
             "V5Tdx15"
         );
-        assert_eq!(
-            claims.platform_data["tee_type"].as_str().unwrap(),
-            "0x81"
-        );
+        assert_eq!(claims.platform_data["tee_type"].as_str().unwrap(), "0x81");
     }
 
     #[test]
@@ -234,7 +228,10 @@ mod tests {
         let claims = extract_claims(&quote);
 
         let parsed = &claims.platform_data["td_attributes_parsed"];
-        assert!(parsed.is_object(), "td_attributes_parsed should be an object");
+        assert!(
+            parsed.is_object(),
+            "td_attributes_parsed should be an object"
+        );
         assert!(parsed.get("debug").is_some(), "should have debug field");
         assert!(parsed.get("septve_disable").is_some());
         assert!(parsed.get("protection_keys").is_some());

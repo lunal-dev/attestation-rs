@@ -40,11 +40,10 @@ fn bench_roundtrip(c: &mut Criterion) {
 
     c.bench_function("az_snp_attest/roundtrip", |b| {
         b.to_async(&rt).iter(|| async {
-            let evidence = attestation::platforms::az_snp::attest::generate_evidence(
-                black_box(custom_data),
-            )
-            .await
-            .unwrap();
+            let evidence =
+                attestation::platforms::az_snp::attest::generate_evidence(black_box(custom_data))
+                    .await
+                    .unwrap();
             let result = attestation::platforms::az_snp::verify::verify_evidence(
                 black_box(&evidence),
                 black_box(&params),
