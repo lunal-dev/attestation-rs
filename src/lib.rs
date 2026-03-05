@@ -33,9 +33,15 @@ pub mod types;
 pub mod utils;
 
 pub use collateral::{
-    CertProvider, DefaultCertProvider, DefaultTdxCollateralProvider, TdxCollateralProvider,
+    snp_crl_url, CertProvider, DefaultCertProvider, DefaultTdxCollateralProvider,
+    TdxCollateralProvider, AMD_KDS_VCEK_BASE, AMD_KDS_VLEK_BASE, INTEL_CERTS_BASE,
+    INTEL_PCS_V4_BASE, INTEL_QE_IDENTITY_URL, INTEL_ROOT_CA_CRL_URL,
 };
 pub use error::{AttestationError, Result};
+#[cfg(feature = "tdx")]
+pub use platforms::tdx::dcap::{
+    check_cert_revocation, check_intermediate_ca_revocation, determine_ca_type,
+};
 pub use types::*;
 
 /// Detect the current TEE platform.

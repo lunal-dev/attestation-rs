@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use der::Decode;
+use x509_parser::prelude::{CertificateRevocationList, FromDer as X509FromDer, X509Certificate};
 
 use sev::certs::snp::{Certificate, Chain, Verifiable};
 use sev::firmware::guest::AttestationReport;
@@ -72,6 +73,11 @@ pub async fn verify_evidence(
 
     // 6b. Verify VCEK/VLEK certificate validity period
     verify_vek_validity_period(&vcek_der)?;
+
+    // 6c. CRL revocation check (if provider supplies CRL data)
+    if let Some(crl_der) = cert_provider.get_snp_crl(processor_gen).await? {
+        check_vcek_not_revoked(&vcek_der, &crl_der)?;
+    }
 
     // 7. Verify report signature against VEK
     let vek = Certificate::from_der(&vcek_der)
@@ -224,7 +230,6 @@ pub fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<(
 
 /// Verify a VEK (VCEK/VLEK) certificate's validity period (notBefore/notAfter).
 fn verify_vek_validity_period(vek_der: &[u8]) -> Result<()> {
-    use x509_parser::prelude::*;
     let (_, cert) = X509Certificate::from_der(vek_der).map_err(|e| {
         AttestationError::CertChainError(format!("VEK x509 parse for validity: {}", e))
     })?;
@@ -248,7 +253,6 @@ fn verify_vek_validity_period(vek_der: &[u8]) -> Result<()> {
 /// Check if a VEK certificate is a VLEK (versioned loaded endorsement key)
 /// by examining its Common Name.
 pub(crate) fn is_vlek_cert(vek_der: &[u8]) -> Result<bool> {
-    use x509_parser::prelude::*;
     let (_, cert) = X509Certificate::from_der(vek_der)
         .map_err(|e| AttestationError::CertChainError(format!("VEK x509 parse: {}", e)))?;
     let cn = cert
@@ -272,7 +276,7 @@ const FMC_SPL_OID: &str = "1.3.6.1.4.1.3704.1.3.9";
 /// Extract a u8 integer value from a DER-encoded extension value.
 /// AMD VCEK TCB extensions encode SPL values as DER INTEGERs.
 fn get_oid_int(ext_value: &[u8]) -> Option<u8> {
-    u8::from_der(ext_value).ok()
+    <u8 as Decode>::from_der(ext_value).ok()
 }
 
 /// Extract the chip_id bytes from the VCEK HW_ID extension value.
@@ -298,8 +302,6 @@ fn get_oid_octets(ext_value: &[u8]) -> Option<&[u8]> {
 /// - For "VCEK" certificates: validates chip_id and TCB SPL exact equality.
 /// - For "VLEK" certificates: skips chip_id check, only validates TCB SPLs.
 pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
-    use x509_parser::prelude::*;
-
     let (_, cert) = X509Certificate::from_der(vcek_der)
         .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse: {}", e)))?;
 
@@ -385,6 +387,29 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         }
         // If the cert doesn't have FMC OID but the report does, that's OK —
         // older VCEKs may not include it. Only validate when present.
+    }
+
+    Ok(())
+}
+
+/// Check whether a VCEK/VLEK certificate has been revoked by an AMD CRL.
+///
+/// `vcek_der`: DER-encoded VCEK/VLEK certificate.
+/// `crl_der`: DER-encoded CRL from AMD KDS.
+pub fn check_vcek_not_revoked(vcek_der: &[u8], crl_der: &[u8]) -> Result<()> {
+    let (_, cert) = X509Certificate::from_der(vcek_der)
+        .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse for CRL: {}", e)))?;
+    let cert_serial = cert.raw_serial();
+
+    let (_, crl) = CertificateRevocationList::from_der(crl_der)
+        .map_err(|e| AttestationError::CertChainError(format!("AMD CRL parse: {}", e)))?;
+
+    for revoked in crl.iter_revoked_certificates() {
+        if revoked.raw_serial() == cert_serial {
+            return Err(AttestationError::CertChainError(
+                "VCEK/VLEK certificate has been revoked by AMD CRL".into(),
+            ));
+        }
     }
 
     Ok(())

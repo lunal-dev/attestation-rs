@@ -7,6 +7,30 @@ use base64::Engine;
 use crate::error::Result;
 use crate::types::{ProcessorGeneration, SnpTcb};
 
+// ── AMD KDS (Key Distribution Service) ──
+/// Base URL for AMD VCEK certificate downloads.
+pub const AMD_KDS_VCEK_BASE: &str = "https://kdsintf.amd.com/vcek/v1";
+/// Base URL for AMD VLEK certificate downloads.
+pub const AMD_KDS_VLEK_BASE: &str = "https://kdsintf.amd.com/vlek/v1";
+
+// ── Intel PCS v4 (Provisioning Certification Service) ──
+/// Base URL for Intel SGX/TDX certification API v4.
+pub const INTEL_PCS_V4_BASE: &str =
+    "https://api.trustedservices.intel.com/sgx/certification/v4";
+/// Base URL for Intel SGX certificate infrastructure.
+pub const INTEL_CERTS_BASE: &str = "https://certificates.trustedservices.intel.com";
+/// Intel PCS v4 QE Identity endpoint.
+pub const INTEL_QE_IDENTITY_URL: &str =
+    "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity";
+/// Intel SGX Root CA CRL (DER format).
+pub const INTEL_ROOT_CA_CRL_URL: &str =
+    "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der";
+
+/// Build the AMD KDS CRL URL for a given processor generation.
+pub fn snp_crl_url(processor_gen: ProcessorGeneration) -> String {
+    format!("{}/{}/crl", AMD_KDS_VCEK_BASE, processor_gen.product_name())
+}
+
 /// HTTP request timeout (total).
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -34,6 +58,12 @@ pub trait CertProvider: Send + Sync {
         &self,
         processor_gen: ProcessorGeneration,
     ) -> Result<(Vec<u8>, Vec<u8>)>;
+
+    /// Fetch the AMD CRL for a processor generation (DER-encoded).
+    /// Returns `None` if CRL is not available (revocation check will be skipped).
+    async fn get_snp_crl(&self, _processor_gen: ProcessorGeneration) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
 
 /// Default implementation: try cache first, fetch from vendor on miss.
@@ -102,7 +132,8 @@ impl DefaultCertProvider {
             hex::encode(chip_id)
         };
         let mut url = format!(
-            "https://kdsintf.amd.com/vcek/v1/{}/{}?blSPL={:02}&teeSPL={:02}&snpSPL={:02}&ucodeSPL={:02}",
+            "{}/{}/{}?blSPL={:02}&teeSPL={:02}&snpSPL={:02}&ucodeSPL={:02}",
+            AMD_KDS_VCEK_BASE,
             processor_gen.product_name(),
             chip_id_hex,
             tcb.bootloader,
@@ -120,7 +151,8 @@ impl DefaultCertProvider {
     /// Build AMD KDS URL for cert chain (ARK + ASK).
     pub fn cert_chain_url(processor_gen: ProcessorGeneration) -> String {
         format!(
-            "https://kdsintf.amd.com/vcek/v1/{}/cert_chain",
+            "{}/{}/cert_chain",
+            AMD_KDS_VCEK_BASE,
             processor_gen.product_name()
         )
     }
@@ -327,6 +359,23 @@ pub trait TdxCollateralProvider: Send + Sync {
     async fn get_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
+
+    /// Check PCK cert chain against CRLs (leaf + intermediate CA revocation).
+    ///
+    /// Default implementation fetches CRL data via `get_pck_crl` + `get_root_ca_crl`
+    /// and checks both the PCK leaf and Intermediate CA certificates.
+    /// Override to use pre-cached CRL data in a service context.
+    async fn check_pck_revocation(&self, pck_cert_chain_pem: &[u8]) -> Result<()> {
+        let ca_type = crate::platforms::tdx::dcap::determine_ca_type(pck_cert_chain_pem)?;
+        let pck_crl_der = self.get_pck_crl(&ca_type).await?;
+        crate::platforms::tdx::dcap::check_cert_revocation(pck_cert_chain_pem, &pck_crl_der)?;
+        let root_crl_der = self.get_root_ca_crl().await?;
+        crate::platforms::tdx::dcap::check_intermediate_ca_revocation(
+            pck_cert_chain_pem,
+            &root_crl_der,
+        )?;
+        Ok(())
+    }
 }
 
 /// Default TDX collateral provider: fetches from Intel PCS v4 with caching.
@@ -374,28 +423,22 @@ impl DefaultTdxCollateralProvider {
 
     /// Intel PCS v4 TDX TCB Info URL.
     pub fn tcb_info_url(fmspc: &str) -> String {
-        format!(
-            "https://api.trustedservices.intel.com/sgx/certification/v4/tcb?fmspc={}",
-            fmspc
-        )
+        format!("{}/tcb?fmspc={}", INTEL_PCS_V4_BASE, fmspc)
     }
 
     /// Intel PCS v4 QE Identity URL.
     pub fn qe_identity_url() -> String {
-        "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity".to_string()
+        INTEL_QE_IDENTITY_URL.to_string()
     }
 
     /// Intel SGX Root CA CRL URL (DER format).
     pub fn root_ca_crl_url() -> String {
-        "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der".to_string()
+        INTEL_ROOT_CA_CRL_URL.to_string()
     }
 
     /// Intel PCS v4 PCK CRL URL.
     pub fn pck_crl_url(ca: &str) -> String {
-        format!(
-            "https://api.trustedservices.intel.com/sgx/certification/v4/pckcrl?ca={}",
-            ca
-        )
+        format!("{}/pckcrl?ca={}", INTEL_PCS_V4_BASE, ca)
     }
 }
 
@@ -887,5 +930,46 @@ mod tests {
 
         // Different key should miss
         assert!(provider.get_cached("other").is_none());
+    }
+
+    // --- URL constants tests ---
+
+    #[test]
+    fn test_snp_crl_url() {
+        assert_eq!(
+            snp_crl_url(ProcessorGeneration::Milan),
+            "https://kdsintf.amd.com/vcek/v1/Milan/crl"
+        );
+        assert_eq!(
+            snp_crl_url(ProcessorGeneration::Genoa),
+            "https://kdsintf.amd.com/vcek/v1/Genoa/crl"
+        );
+        assert_eq!(
+            snp_crl_url(ProcessorGeneration::Turin),
+            "https://kdsintf.amd.com/vcek/v1/Turin/crl"
+        );
+    }
+
+    #[test]
+    fn test_url_constants_match_existing() {
+        // Ensure constants match the previously-hardcoded values
+        assert_eq!(AMD_KDS_VCEK_BASE, "https://kdsintf.amd.com/vcek/v1");
+        assert_eq!(AMD_KDS_VLEK_BASE, "https://kdsintf.amd.com/vlek/v1");
+        assert_eq!(
+            INTEL_PCS_V4_BASE,
+            "https://api.trustedservices.intel.com/sgx/certification/v4"
+        );
+        assert_eq!(
+            INTEL_CERTS_BASE,
+            "https://certificates.trustedservices.intel.com"
+        );
+        assert_eq!(
+            INTEL_QE_IDENTITY_URL,
+            "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity"
+        );
+        assert_eq!(
+            INTEL_ROOT_CA_CRL_URL,
+            "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der"
+        );
     }
 }
