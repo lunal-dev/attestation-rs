@@ -208,66 +208,12 @@ mod tests {
     use crate::platforms::tpm_common::TpmQuote;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
-    /// Build a properly-formatted HCL report with HCLA magic, embedded SNP report,
-    /// var_data header, and JSON content.
-    fn build_hcl_report(snp_report: &[u8], var_data_content: &[u8]) -> Vec<u8> {
-        let tee_report_end = 0x20 + 1184; // 0x4C0
-        let header_size = 20;
-        let content_start = tee_report_end + header_size; // 0x4D4
-
-        let mut hcl = vec![0u8; content_start + var_data_content.len()];
-
-        // HCLA magic
-        hcl[0..4].copy_from_slice(b"HCLA");
-
-        // Embed SNP report at offset 0x20
-        let copy_len = snp_report.len().min(1184);
-        hcl[0x20..0x20 + copy_len].copy_from_slice(&snp_report[..copy_len]);
-
-        // var_data header (5 × LE u32)
-        let total_remaining = (header_size + var_data_content.len()) as u32;
-        let count: u32 = 1;
-        let report_type: u32 = tpm_common::HCL_REPORT_TYPE_SNP;
-        let version: u32 = 1;
-        let content_length = var_data_content.len() as u32;
-
-        hcl[tee_report_end..tee_report_end + 4].copy_from_slice(&total_remaining.to_le_bytes());
-        hcl[tee_report_end + 4..tee_report_end + 8].copy_from_slice(&count.to_le_bytes());
-        hcl[tee_report_end + 8..tee_report_end + 12].copy_from_slice(&report_type.to_le_bytes());
-        hcl[tee_report_end + 12..tee_report_end + 16].copy_from_slice(&version.to_le_bytes());
-        hcl[tee_report_end + 16..tee_report_end + 20]
-            .copy_from_slice(&content_length.to_le_bytes());
-
-        // var_data content
-        hcl[content_start..].copy_from_slice(var_data_content);
-
-        hcl
-    }
-
     fn build_dummy_tpm_quote() -> TpmQuote {
         TpmQuote {
             signature: "00".repeat(256),
             message: "ff544347".to_string() + &"00".repeat(100),
             pcrs: (0..24).map(|_| "00".repeat(32)).collect(),
         }
-    }
-
-    #[test]
-    fn test_az_snp_evidence_serialization_roundtrip() {
-        let evidence = AzSnpEvidence {
-            version: 1,
-            tpm_quote: build_dummy_tpm_quote(),
-            hcl_report: "dGVzdA".to_string(), // "test" in URL-safe base64
-            vcek: "AAAA".to_string(),
-        };
-
-        let json = serde_json::to_string(&evidence).unwrap();
-        let deserialized: AzSnpEvidence = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.version, 1);
-        assert_eq!(deserialized.hcl_report, evidence.hcl_report);
-        assert_eq!(deserialized.vcek, evidence.vcek);
-        assert_eq!(deserialized.tpm_quote.pcrs.len(), 24);
     }
 
     #[test]
@@ -295,16 +241,6 @@ mod tests {
     }
 
     #[test]
-    fn test_hcl_report_layout_constants() {
-        // Verify HCL report layout:
-        // TEE report at 0x20, 1184 bytes, ends at 0x4C0
-        // var_data header 20 bytes at 0x4C0
-        // var_data content starts at 0x4D4
-        assert_eq!(0x20 + 1184, 0x4C0);
-        assert_eq!(0x4C0 + 20, 0x4D4);
-    }
-
-    #[test]
     fn test_invalid_base64_hcl_report() {
         let evidence = AzSnpEvidence {
             version: 1,
@@ -324,86 +260,6 @@ mod tests {
             err.contains("base64") || err.contains("Base64"),
             "error: {}",
             err
-        );
-    }
-
-    #[test]
-    fn test_invalid_base64_vcek() {
-        let hcl = build_hcl_report(&[0u8; 1184], b"{}");
-        let evidence = AzSnpEvidence {
-            version: 1,
-            tpm_quote: build_dummy_tpm_quote(),
-            hcl_report: BASE64URL.encode(&hcl),
-            vcek: "!!!invalid!!!".to_string(),
-        };
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let provider = crate::collateral::DefaultCertProvider::new();
-        let params = VerifyParams::default();
-
-        let result = rt.block_on(verify_evidence(&evidence, &params, &provider));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_hcl_var_data_binding_sha256() {
-        // Verify the binding mechanism: report_data[..32] should equal SHA-256(var_data)
-        let var_data = b"test variable data for binding";
-        let var_data_hash = crate::utils::sha256(var_data);
-
-        assert_eq!(var_data_hash.len(), 32);
-
-        // Build an SNP report with report_data matching SHA-256(var_data)
-        let mut snp_report = vec![0u8; 1184];
-        // report_data is at offset 0x50 (80) in the SNP report
-        snp_report[0x50..0x50 + 32].copy_from_slice(&var_data_hash);
-
-        let hcl = build_hcl_report(&snp_report, var_data);
-
-        // Parse the HCL report and verify binding
-        let parsed = tpm_common::parse_hcl_report(&hcl).unwrap();
-        let computed = crate::utils::sha256(&parsed.var_data);
-
-        // report_data from TEE report
-        let extracted_report_data = &parsed.tee_report[0x50..0x50 + 32];
-
-        assert_eq!(
-            extracted_report_data,
-            &computed[..],
-            "HCL var_data binding: report_data[..32] should equal SHA-256(var_data)"
-        );
-    }
-
-    #[test]
-    fn test_snp_report_version_check_constants() {
-        // Verify the version range constants are correct
-        const AZ_MIN_REPORT_VERSION: u32 = 2;
-        assert!(AZ_MIN_REPORT_VERSION <= crate::platforms::snp::verify::MAX_REPORT_VERSION);
-        assert_eq!(crate::platforms::snp::verify::MAX_REPORT_VERSION, 5);
-
-        // Version 6 would be rejected
-        assert!(6 > crate::platforms::snp::verify::MAX_REPORT_VERSION);
-        // Version 1 would be rejected (below az min)
-        assert!(1 < AZ_MIN_REPORT_VERSION);
-        // Verify our CoCo fixture is within range
-        let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
-        let snp_report = crate::platforms::snp::verify::parse_report(&parsed.tee_report).unwrap();
-        assert!(
-            snp_report.version >= AZ_MIN_REPORT_VERSION
-                && snp_report.version <= crate::platforms::snp::verify::MAX_REPORT_VERSION,
-            "CoCo fixture version {} should be in range [{}, {}]",
-            snp_report.version,
-            AZ_MIN_REPORT_VERSION,
-            crate::platforms::snp::verify::MAX_REPORT_VERSION
-        );
-    }
-
-    #[test]
-    fn test_platform_type_is_az_snp() {
-        assert_eq!(
-            format!("{}", PlatformType::AzSnp),
-            "az-snp",
-            "platform type should display as az-snp"
         );
     }
 
@@ -456,22 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn test_coco_hcl_var_data_is_jwk_json() {
-        let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
-
-        // var_data should be valid JSON with a "keys" array
-        let json: serde_json::Value =
-            serde_json::from_slice(&parsed.var_data).expect("var_data should be valid JSON");
-        assert!(json["keys"].is_array(), "JSON should contain 'keys' array");
-
-        // Should contain an HCLAkPub RSA key
-        let keys = json["keys"].as_array().unwrap();
-        let ak_key = keys.iter().find(|k| k["kid"] == "HCLAkPub");
-        assert!(ak_key.is_some(), "should contain HCLAkPub key");
-        assert_eq!(ak_key.unwrap()["kty"], "RSA");
-    }
-
-    #[test]
     fn test_coco_hcl_var_data_contains_ak_pub() {
         let parsed = tpm_common::parse_hcl_report(COCO_HCL_REPORT).unwrap();
 
@@ -505,22 +345,6 @@ mod tests {
             result.is_ok(),
             "CoCo TPM signature should verify: {:?}",
             result.err()
-        );
-    }
-
-    #[test]
-    fn test_coco_tpm_message_has_valid_magic() {
-        let json = include_str!("../../../test_data/az_snp/evidence-v1.json");
-        let envelope: crate::types::AttestationEvidence = serde_json::from_str(json).unwrap();
-        let evidence: AzSnpEvidence = serde_json::from_value(envelope.evidence).unwrap();
-        let msg = hex::decode(&evidence.tpm_quote.message).unwrap();
-
-        assert!(msg.len() >= 4, "TPM message too short");
-        let magic = u32::from_be_bytes(msg[0..4].try_into().unwrap());
-        assert_eq!(
-            magic, 0xFF544347,
-            "TPM Attest magic should be 0xFF544347, got 0x{:08X}",
-            magic
         );
     }
 

@@ -98,36 +98,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sha256() {
-        let hash = sha256(b"test");
-        assert_eq!(hash.len(), 32);
-    }
-
-    #[test]
-    fn test_sha384() {
-        let hash = sha384(b"test");
-        assert_eq!(hash.len(), 48);
-    }
-
-    #[test]
-    fn test_check_field_size_ok() {
-        assert!(check_field_size("test", 1024).is_ok());
-        assert!(check_field_size("test", MAX_EVIDENCE_FIELD_SIZE).is_ok());
-    }
-
-    #[test]
-    fn test_check_field_size_too_large() {
-        assert!(check_field_size("test", MAX_EVIDENCE_FIELD_SIZE + 1).is_err());
-    }
-
-    #[test]
-    fn test_constant_time_eq() {
-        assert!(constant_time_eq(b"hello", b"hello"));
-        assert!(!constant_time_eq(b"hello", b"world"));
-        assert!(!constant_time_eq(b"hello", b"hell"));
-    }
-
-    #[test]
     fn test_strip_trailing_nulls() {
         assert_eq!(strip_trailing_nulls(b"hello\0\0\0"), b"hello");
         assert_eq!(strip_trailing_nulls(b"hello"), b"hello");

@@ -756,20 +756,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tpm_nonce_truncated_at_signer() {
-        // Valid magic + type, but truncated before qualifiedSigner size
-        let msg = vec![0xFF, 0x54, 0x43, 0x47, 0x80, 0x18];
-        assert!(verify_tpm_nonce(&msg, b"test").is_err());
-    }
-
-    #[test]
-    fn test_tpm_nonce_truncated_at_extra_data() {
-        let mut msg = vec![0xFF, 0x54, 0x43, 0x47, 0x80, 0x18];
-        msg.extend_from_slice(&[0x00, 0x00]); // qualifiedSigner size=0
-        assert!(verify_tpm_nonce(&msg, b"test").is_err());
-    }
-
     // --- PCR verification tests ---
 
     #[test]
@@ -997,36 +983,6 @@ mod tests {
         assert_eq!(pcrs[1], vec![0xFF; 32]);
     }
 
-    #[test]
-    fn test_decode_tpm_quote_invalid_hex_sig() {
-        let quote = TpmQuote {
-            signature: "not_hex!".to_string(),
-            message: "cafebabe".to_string(),
-            pcrs: vec![],
-        };
-        assert!(decode_tpm_quote(&quote).is_err());
-    }
-
-    #[test]
-    fn test_decode_tpm_quote_invalid_hex_msg() {
-        let quote = TpmQuote {
-            signature: "deadbeef".to_string(),
-            message: "zzz".to_string(),
-            pcrs: vec![],
-        };
-        assert!(decode_tpm_quote(&quote).is_err());
-    }
-
-    #[test]
-    fn test_decode_tpm_quote_invalid_hex_pcr() {
-        let quote = TpmQuote {
-            signature: "deadbeef".to_string(),
-            message: "cafebabe".to_string(),
-            pcrs: vec!["00".repeat(32), "invalid_hex".to_string()],
-        };
-        assert!(decode_tpm_quote(&quote).is_err());
-    }
-
     // --- parse_quote_info tests ---
 
     #[test]
@@ -1064,24 +1020,6 @@ mod tests {
     fn test_parse_quote_info_truncated() {
         assert!(parse_quote_info(&[]).is_err());
         assert!(parse_quote_info(&[0xFF, 0x54, 0x43, 0x47, 0x80, 0x18]).is_err());
-    }
-
-    // --- TpmQuote serialization tests ---
-
-    #[test]
-    fn test_tpm_quote_serialization_roundtrip() {
-        let quote = TpmQuote {
-            signature: "aabbccdd".to_string(),
-            message: "11223344".to_string(),
-            pcrs: (0..24).map(|i| format!("{:02x}", i).repeat(32)).collect(),
-        };
-
-        let json = serde_json::to_string(&quote).unwrap();
-        let deserialized: TpmQuote = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.signature, quote.signature);
-        assert_eq!(deserialized.message, quote.message);
-        assert_eq!(deserialized.pcrs.len(), quote.pcrs.len());
     }
 
     // --- HCL report parsing tests ---

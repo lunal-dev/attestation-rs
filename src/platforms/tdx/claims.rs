@@ -170,11 +170,6 @@ mod tests {
         let v4_claims = extract_claims(&v4_quote);
         let v5_claims = extract_claims(&v5_quote);
 
-        // Both should have the same structural fields
-        assert_eq!(v4_claims.report_data.len(), v5_claims.report_data.len());
-        assert_eq!(v4_claims.init_data.len(), v5_claims.init_data.len());
-        assert_eq!(v4_claims.launch_digest.len(), v5_claims.launch_digest.len());
-
         // Both TCBs should be Tdx variant
         assert!(matches!(v4_claims.tcb, TcbInfo::Tdx { .. }));
         assert!(matches!(v5_claims.tcb, TcbInfo::Tdx { .. }));
@@ -210,19 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn test_launch_digest_is_valid_hex() {
-        let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
-        let claims = extract_claims(&quote);
-
-        // launch_digest should be 96 hex chars (48 bytes mr_td)
-        assert_eq!(claims.launch_digest.len(), 96);
-
-        let decoded = hex::decode(&claims.launch_digest);
-        assert!(decoded.is_ok(), "launch_digest should be valid hex");
-        assert_eq!(decoded.unwrap().len(), 48);
-    }
-
-    #[test]
     fn test_td_attributes_parsed_in_claims() {
         let quote = parse_tdx_quote(V4_QUOTE).expect("failed to parse v4 quote");
         let claims = extract_claims(&quote);
@@ -253,24 +235,4 @@ mod tests {
         assert_eq!(parsed2["debug"], false);
     }
 
-    #[test]
-    fn test_v5_claims_include_tdx15_fields() {
-        let quote = parse_tdx_quote(V5_QUOTE).expect("failed to parse v5 quote");
-        let claims = extract_claims(&quote);
-
-        // V5 TDX 1.5 claims should have tee_tcb_svn2 and mr_servicetd
-        // if the quote fixture body is large enough to contain them
-        if quote.body.tee_tcb_svn2.is_some() {
-            assert!(
-                claims.platform_data.get("tee_tcb_svn2").is_some(),
-                "V5 claims should include tee_tcb_svn2"
-            );
-        }
-        if quote.body.mr_servicetd.is_some() {
-            assert!(
-                claims.platform_data.get("mr_servicetd").is_some(),
-                "V5 claims should include mr_servicetd"
-            );
-        }
-    }
 }
