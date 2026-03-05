@@ -27,17 +27,13 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .build()
-        .map_err(|e| {
-            AttestationError::HardwareAccessFailed(format!("build HTTP client: {}", e))
-        })?;
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("build HTTP client: {}", e)))?;
     let response = client
         .post(IMDS_QUOTE_URL)
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            AttestationError::HardwareAccessFailed(format!("IMDS POST failed: {}", e))
-        })?;
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("IMDS POST failed: {}", e)))?;
 
     if !response.status().is_success() {
         let status = response.status();

@@ -1,13 +1,13 @@
-use std::io::{self, Read};
 #[cfg(all(feature = "attest", target_os = "linux"))]
 use std::io::Write;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use clap::{Parser, Subcommand};
 #[cfg(all(feature = "attest", target_os = "linux"))]
 use clap::ValueEnum;
+use clap::{Parser, Subcommand};
 
 use attestation::types::VerifyParams;
 
@@ -211,7 +211,11 @@ async fn cmd_attest(args: AttestArgs) {
     };
     let elapsed = t0.elapsed();
 
-    eprintln!("Evidence generated in {:?} ({} bytes)", elapsed, evidence_json.len());
+    eprintln!(
+        "Evidence generated in {:?} ({} bytes)",
+        elapsed,
+        evidence_json.len()
+    );
 
     if let Some(ref path) = args.output {
         if let Err(e) = std::fs::write(path, &evidence_json) {

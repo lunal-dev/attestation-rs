@@ -10,7 +10,11 @@ async fn main() {
     if custom_data.is_empty() {
         eprintln!("[mode] empty report_data");
     } else {
-        eprintln!("[mode] custom report_data ({} bytes): {:?}", custom_data.len(), String::from_utf8_lossy(&custom_data));
+        eprintln!(
+            "[mode] custom report_data ({} bytes): {:?}",
+            custom_data.len(),
+            String::from_utf8_lossy(&custom_data)
+        );
     }
 
     // Step 1: generate evidence
@@ -31,19 +35,19 @@ async fn main() {
     let t2 = Instant::now();
     let params = attestation::types::VerifyParams::default();
     let provider = attestation::collateral::DefaultCertProvider::new();
-    let result = attestation::platforms::az_snp::verify::verify_evidence(
-        &evidence,
-        &params,
-        &provider,
-    )
-    .await
-    .expect("verify failed");
+    let result =
+        attestation::platforms::az_snp::verify::verify_evidence(&evidence, &params, &provider)
+            .await
+            .expect("verify failed");
     let t_verify = t2.elapsed();
     eprintln!("[verify]  {:?}", t_verify);
 
     let total = t0.elapsed();
     eprintln!("[total]   {:?}", total);
-    eprintln!("[result]  sig_valid={} platform={}", result.signature_valid, result.platform);
+    eprintln!(
+        "[result]  sig_valid={} platform={}",
+        result.signature_valid, result.platform
+    );
 
     // Print JSON to stdout
     println!("{json}");

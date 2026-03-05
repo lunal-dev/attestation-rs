@@ -47,8 +47,7 @@ fn bench_hcl_report_parse(c: &mut Criterion) {
 }
 
 fn bench_jwk_ak_extraction(c: &mut Criterion) {
-    let parsed =
-        attestation::platforms::tpm_common::parse_hcl_report(AZ_SNP_HCL_REPORT).unwrap();
+    let parsed = attestation::platforms::tpm_common::parse_hcl_report(AZ_SNP_HCL_REPORT).unwrap();
     c.bench_function("az_snp/jwk_ak_extraction", |b| {
         b.iter(|| {
             let result = attestation::platforms::tpm_common::extract_ak_pub_from_jwk_json(

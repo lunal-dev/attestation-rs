@@ -19,14 +19,23 @@ use attestation::types::VerifyParams;
 /// Helper: check if we're running on an Azure SNP CVM with the required tools.
 fn is_az_snp_cvm() -> bool {
     // Check for TPM device
-    let has_tpm = std::path::Path::new("/dev/tpmrm0").exists()
-        || std::path::Path::new("/dev/tpm0").exists();
+    let has_tpm =
+        std::path::Path::new("/dev/tpmrm0").exists() || std::path::Path::new("/dev/tpm0").exists();
 
     // Check for Azure environment via IMDS (more reliable than file checks)
     let is_azure = std::process::Command::new("curl")
-        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2",
-               "-H", "Metadata:true",
-               "http://169.254.169.254/metadata/instance?api-version=2021-02-01"])
+        .args([
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--max-time",
+            "2",
+            "-H",
+            "Metadata:true",
+            "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+        ])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
         .unwrap_or(false);
@@ -83,7 +92,10 @@ async fn test_az_snp_attest_generates_valid_evidence() {
 
     // Basic structural checks
     assert_eq!(evidence.version, 1);
-    assert!(!evidence.hcl_report.is_empty(), "HCL report should not be empty");
+    assert!(
+        !evidence.hcl_report.is_empty(),
+        "HCL report should not be empty"
+    );
     assert!(!evidence.vcek.is_empty(), "VCEK should not be empty");
     assert!(
         !evidence.tpm_quote.signature.is_empty(),
@@ -93,13 +105,21 @@ async fn test_az_snp_attest_generates_valid_evidence() {
         !evidence.tpm_quote.message.is_empty(),
         "TPM message should not be empty"
     );
-    assert_eq!(evidence.tpm_quote.pcrs.len(), 24, "should have 24 PCR values");
+    assert_eq!(
+        evidence.tpm_quote.pcrs.len(),
+        24,
+        "should have 24 PCR values"
+    );
 
     // HCL report should decode and have HCLA magic
     let hcl_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(evidence.hcl_report.trim_end_matches('='))
         .expect("HCL report should be valid base64url");
-    assert_eq!(&hcl_bytes[..4], b"HCLA", "HCL report should have HCLA magic");
+    assert_eq!(
+        &hcl_bytes[..4],
+        b"HCLA",
+        "HCL report should have HCLA magic"
+    );
     assert_eq!(hcl_bytes.len(), 2600, "HCL report should be 2600 bytes");
 
     // VCEK should be valid DER
@@ -133,12 +153,9 @@ async fn test_az_snp_attest_then_verify_roundtrip() {
     // Verify without expected values (just check structure)
     let params = VerifyParams::default();
     let provider = attestation::collateral::DefaultCertProvider::new();
-    let result = attestation::platforms::az_snp::verify::verify_evidence(
-        &evidence,
-        &params,
-        &provider,
-    )
-    .await;
+    let result =
+        attestation::platforms::az_snp::verify::verify_evidence(&evidence, &params, &provider)
+            .await;
 
     assert!(
         result.is_ok(),
@@ -197,13 +214,10 @@ async fn test_az_snp_verify_with_expected_nonce() {
     };
 
     let provider = attestation::collateral::DefaultCertProvider::new();
-    let result = attestation::platforms::az_snp::verify::verify_evidence(
-        &evidence,
-        &params,
-        &provider,
-    )
-    .await
-    .expect("verify should succeed");
+    let result =
+        attestation::platforms::az_snp::verify::verify_evidence(&evidence, &params, &provider)
+            .await
+            .expect("verify should succeed");
 
     assert!(result.signature_valid);
 }
@@ -239,9 +253,8 @@ async fn test_az_snp_hcl_report_contains_snp_report() {
     assert_eq!(hcl.tee_report.len(), 1184);
 
     // Should parse as a valid SNP report
-    let snp_report =
-        attestation::platforms::snp::verify::SnpReport::from_bytes(&hcl.tee_report)
-            .expect("should parse as SNP report");
+    let snp_report = attestation::platforms::snp::verify::SnpReport::from_bytes(&hcl.tee_report)
+        .expect("should parse as SNP report");
 
     // Version should be >= 3
     assert!(
@@ -284,12 +297,9 @@ async fn test_az_snp_cross_process_serialization() {
     // Verify the deserialized evidence
     let params = VerifyParams::default();
     let provider = attestation::collateral::DefaultCertProvider::new();
-    let result = attestation::platforms::az_snp::verify::verify_evidence(
-        &evidence_back,
-        &params,
-        &provider,
-    )
-    .await;
+    let result =
+        attestation::platforms::az_snp::verify::verify_evidence(&evidence_back, &params, &provider)
+            .await;
 
     assert!(
         result.is_ok(),

@@ -31,13 +31,16 @@ fn check_tsm_provider() -> bool {
         Ok(d) => d,
         Err(_) => return false,
     };
-    let provider = std::fs::read_to_string(temp_dir.path().join("provider"))
-        .unwrap_or_default();
+    let provider = std::fs::read_to_string(temp_dir.path().join("provider")).unwrap_or_default();
     let is_tdx = provider.trim().contains("tdx_guest");
     // ConfigFS dirs need rmdir, not recursive delete
     let path = temp_dir.keep();
     if let Err(e) = std::fs::remove_dir(&path) {
-        log::warn!("failed to clean up ConfigFS TSM report dir {:?}: {}", path, e);
+        log::warn!(
+            "failed to clean up ConfigFS TSM report dir {:?}: {}",
+            path,
+            e
+        );
     }
     is_tdx
 }
@@ -45,9 +48,9 @@ fn check_tsm_provider() -> bool {
 /// Generate TDX attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
     let padded = pad_report_data(report_data, 64)?;
-    let padded_arr: [u8; 64] = padded.try_into().map_err(|_| {
-        AttestationError::ReportDataTooLarge { max: 64 }
-    })?;
+    let padded_arr: [u8; 64] = padded
+        .try_into()
+        .map_err(|_| AttestationError::ReportDataTooLarge { max: 64 })?;
 
     // Try ConfigFS TSM first, fall back to ioctl
     let quote_bytes = match generate_quote_tsm(&padded_arr) {
@@ -80,9 +83,8 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     let report_path = temp_dir.path();
 
     // Check provider is tdx_guest
-    let provider = fs::read_to_string(report_path.join("provider")).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("read TSM provider: {}", e))
-    })?;
+    let provider = fs::read_to_string(report_path.join("provider"))
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("read TSM provider: {}", e)))?;
 
     if !provider.trim().contains("tdx_guest") {
         // Clean up and leave the temp dir (will be cleaned by Drop)
@@ -93,23 +95,21 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     }
 
     // Write report_data to inblob
-    fs::write(report_path.join("inblob"), report_data).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("write inblob: {}", e))
-    })?;
+    fs::write(report_path.join("inblob"), report_data)
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("write inblob: {}", e)))?;
 
     // Read quote from outblob
-    let quote = fs::read(report_path.join("outblob")).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("read outblob: {}", e))
-    })?;
+    let quote = fs::read(report_path.join("outblob"))
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("read outblob: {}", e)))?;
 
     // Check generation counter for race detection
-    let gen_str = fs::read_to_string(report_path.join("generation")).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("read generation: {}", e))
-    })?;
+    let gen_str = fs::read_to_string(report_path.join("generation"))
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("read generation: {}", e)))?;
 
-    let generation: u32 = gen_str.trim().parse().map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("parse generation: {}", e))
-    })?;
+    let generation: u32 = gen_str
+        .trim()
+        .parse()
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("parse generation: {}", e)))?;
 
     if generation > 1 {
         return Err(AttestationError::HardwareAccessFailed(format!(
@@ -122,7 +122,11 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     // But ConfigFS dirs need rmdir, not recursive delete
     let path = temp_dir.keep();
     if let Err(e) = std::fs::remove_dir(&path) {
-        log::warn!("failed to clean up ConfigFS TSM report dir {:?}: {}", path, e);
+        log::warn!(
+            "failed to clean up ConfigFS TSM report dir {:?}: {}",
+            path,
+            e
+        );
     }
 
     Ok(quote)
@@ -153,9 +157,7 @@ fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     };
     req.report_data.copy_from_slice(report_data);
 
-    let ret = unsafe {
-        libc::ioctl(dev.as_raw_fd(), TDX_CMD_GET_REPORT0, &mut req as *mut _)
-    };
+    let ret = unsafe { libc::ioctl(dev.as_raw_fd(), TDX_CMD_GET_REPORT0, &mut req as *mut _) };
 
     if ret != 0 {
         return Err(AttestationError::HardwareAccessFailed(format!(
@@ -173,9 +175,8 @@ fn read_eventlog() -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let data = std::fs::read(CCEL_DATA_PATH).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("read CCEL: {}", e))
-    })?;
+    let data = std::fs::read(CCEL_DATA_PATH)
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("read CCEL: {}", e)))?;
 
     if data.is_empty() {
         return Ok(None);

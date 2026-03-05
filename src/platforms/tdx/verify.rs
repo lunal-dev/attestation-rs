@@ -72,11 +72,14 @@ impl QuoteHeader {
             )));
         }
 
-        let version = data.pread_with::<u16>(0, scroll::LE)
+        let version = data
+            .pread_with::<u16>(0, scroll::LE)
             .map_err(|e| AttestationError::QuoteParseFailed(format!("version: {}", e)))?;
-        let att_key_type = data.pread_with::<u16>(2, scroll::LE)
+        let att_key_type = data
+            .pread_with::<u16>(2, scroll::LE)
             .map_err(|e| AttestationError::QuoteParseFailed(format!("att_key_type: {}", e)))?;
-        let tee_type = data.pread_with::<u32>(4, scroll::LE)
+        let tee_type = data
+            .pread_with::<u32>(4, scroll::LE)
             .map_err(|e| AttestationError::QuoteParseFailed(format!("tee_type: {}", e)))?;
 
         let mut reserved = [0u8; 2];
@@ -210,17 +213,19 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
                 ));
             }
 
-            let body_type = data.pread_with::<u16>(QUOTE_HEADER_SIZE, scroll::LE)
+            let body_type = data
+                .pread_with::<u16>(QUOTE_HEADER_SIZE, scroll::LE)
                 .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 type: {}", e)))?;
-            let body_size = data.pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
+            let body_size = data
+                .pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
                 .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 size: {}", e)))?
                 as usize;
 
             // Validate body_size matches expected size for the body type
             let expected_body_size = match body_type {
-                2 => REPORT_BODY_SIZE,       // TDX 1.0: 584 bytes
-                3 => REPORT_BODY_SIZE + 64,  // TDX 1.5: 648 bytes (584 + 64 for TEE_TCB_SVN2)
-                _ => 0, // will be caught below
+                2 => REPORT_BODY_SIZE,      // TDX 1.0: 584 bytes
+                3 => REPORT_BODY_SIZE + 64, // TDX 1.5: 648 bytes (584 + 64 for TEE_TCB_SVN2)
+                _ => 0,                     // will be caught below
             };
             if expected_body_size > 0 && body_size != expected_body_size {
                 return Err(AttestationError::QuoteParseFailed(format!(
@@ -241,8 +246,8 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
             let body = TdxReportBody::from_bytes(&data[body_offset..body_offset + body_size])?;
 
             let quote_version = match body_type {
-                2 => QuoteVersion::V5Tdx10,  // TDX 1.0
-                3 => QuoteVersion::V5Tdx15,  // TDX 1.5
+                2 => QuoteVersion::V5Tdx10, // TDX 1.0
+                3 => QuoteVersion::V5Tdx15, // TDX 1.5
                 _ => {
                     return Err(AttestationError::QuoteParseFailed(format!(
                         "unknown v5 body type: {}",
@@ -317,13 +322,11 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
     let mut s_arr = [0u8; 32];
     r_arr.copy_from_slice(sig_r);
     s_arr.copy_from_slice(sig_s);
-    let signature = Signature::from_scalars(
-        p256::FieldBytes::from(r_arr),
-        p256::FieldBytes::from(s_arr),
-    )
-    .map_err(|e| {
-        AttestationError::SignatureVerificationFailed(format!("construct P-256 sig: {}", e))
-    })?;
+    let signature =
+        Signature::from_scalars(p256::FieldBytes::from(r_arr), p256::FieldBytes::from(s_arr))
+            .map_err(|e| {
+                AttestationError::SignatureVerificationFailed(format!("construct P-256 sig: {}", e))
+            })?;
 
     // Construct the verifying key from the uncompressed public key point
     // SEC1 uncompressed point format: 0x04 || X || Y
@@ -390,10 +393,7 @@ pub async fn verify_evidence(
 
         // Root CA CRL check (Intermediate CA not revoked)
         let root_ca_crl_der = provider.get_root_ca_crl().await?;
-        super::dcap::check_intermediate_ca_revocation(
-            auth.pck_cert_chain_pem,
-            &root_ca_crl_der,
-        )?;
+        super::dcap::check_intermediate_ca_revocation(auth.pck_cert_chain_pem, &root_ca_crl_der)?;
 
         // TCB status evaluation
         let fmspc = super::dcap::extract_fmspc_from_pck(auth.pck_cert_chain_pem)?;
@@ -697,7 +697,10 @@ mod tests {
         // A quote with only the header (48 bytes) but no body should fail
         let truncated = &V4_QUOTE[..QUOTE_HEADER_SIZE];
         let result = parse_tdx_quote(truncated);
-        assert!(result.is_err(), "truncated quote with header only should fail");
+        assert!(
+            result.is_err(),
+            "truncated quote with header only should fail"
+        );
     }
 
     #[test]
@@ -743,10 +746,7 @@ mod tests {
         // Truncate to just the header
         let truncated = &V5_QUOTE[..QUOTE_HEADER_SIZE + 2]; // Has type but no size
         let result = parse_tdx_quote(truncated);
-        assert!(
-            result.is_err(),
-            "v5 quote without size field should fail"
-        );
+        assert!(result.is_err(), "v5 quote without size field should fail");
     }
 
     #[test]
@@ -754,10 +754,7 @@ mod tests {
         // V5 header + type + size but no body
         let truncated = &V5_QUOTE[..QUOTE_HEADER_SIZE + 6];
         let result = parse_tdx_quote(truncated);
-        assert!(
-            result.is_err(),
-            "v5 quote without body should fail"
-        );
+        assert!(result.is_err(), "v5 quote without body should fail");
     }
 
     #[test]
@@ -805,12 +802,14 @@ mod tests {
         // v4 fixture has debug bit set, v5 does not
         let v4 = parse_tdx_quote(V4_QUOTE).unwrap();
         assert_eq!(
-            v4.body.td_attributes[0] & 0x01, 1,
+            v4.body.td_attributes[0] & 0x01,
+            1,
             "v4 fixture has debug bit set"
         );
         let v5 = parse_tdx_quote(V5_QUOTE).unwrap();
         assert_eq!(
-            v5.body.td_attributes[0] & 0x01, 0,
+            v5.body.td_attributes[0] & 0x01,
+            0,
             "v5 fixture should not have debug bit set"
         );
     }
@@ -841,7 +840,11 @@ mod tests {
         let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_err(), "debug TD should not pass verification");
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("DebugPolicyViolation"), "should be DebugPolicyViolation, got: {}", err);
+        assert!(
+            err.contains("DebugPolicyViolation"),
+            "should be DebugPolicyViolation, got: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -855,7 +858,11 @@ mod tests {
             ..Default::default()
         };
         let result = verify_evidence(&evidence, &params, None).await;
-        assert!(result.is_ok(), "debug TD with allow_debug should pass: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "debug TD with allow_debug should pass: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -939,12 +946,18 @@ mod tests {
     async fn test_verify_evidence_v4_no_expected_report_data() {
         let evidence = make_tdx_evidence(V4_QUOTE);
         // v4 fixture has debug bit set, so allow_debug must be true
-        let params = VerifyParams { allow_debug: true, ..Default::default() };
+        let params = VerifyParams {
+            allow_debug: true,
+            ..Default::default()
+        };
         let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_ok(), "verify should succeed: {:?}", result.err());
         let result = result.unwrap();
         assert!(result.signature_valid);
-        assert!(result.report_data_match.is_none(), "should be None when no expected value");
+        assert!(
+            result.report_data_match.is_none(),
+            "should be None when no expected value"
+        );
     }
 
     #[tokio::test]
@@ -958,7 +971,11 @@ mod tests {
             ..Default::default()
         };
         let result = verify_evidence(&evidence, &params, None).await;
-        assert!(result.is_ok(), "verify with matching report_data should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "verify with matching report_data should succeed: {:?}",
+            result.err()
+        );
         assert_eq!(result.unwrap().report_data_match, Some(true));
     }
 
@@ -974,7 +991,11 @@ mod tests {
         let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_err(), "verify with wrong report_data should fail");
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("ReportDataMismatch"), "error should be ReportDataMismatch, got: {}", err);
+        assert!(
+            err.contains("ReportDataMismatch"),
+            "error should be ReportDataMismatch, got: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -993,7 +1014,11 @@ mod tests {
                     ..Default::default()
                 };
                 let result = verify_evidence(&evidence, &params, None).await;
-                assert!(result.is_ok(), "padded partial report_data should match: {:?}", result.err());
+                assert!(
+                    result.is_ok(),
+                    "padded partial report_data should match: {:?}",
+                    result.err()
+                );
             }
         }
     }
@@ -1008,7 +1033,11 @@ mod tests {
             ..Default::default()
         };
         let result = verify_evidence(&evidence, &params, None).await;
-        assert!(result.is_ok(), "v5 verify with matching report_data should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "v5 verify with matching report_data should succeed: {:?}",
+            result.err()
+        );
         assert_eq!(result.unwrap().report_data_match, Some(true));
     }
 
@@ -1021,7 +1050,10 @@ mod tests {
             ..Default::default()
         };
         let result = verify_evidence(&evidence, &params, None).await;
-        assert!(result.is_err(), "v5 verify with wrong report_data should fail");
+        assert!(
+            result.is_err(),
+            "v5 verify with wrong report_data should fail"
+        );
     }
 
     #[tokio::test]

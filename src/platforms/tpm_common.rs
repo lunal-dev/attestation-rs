@@ -108,11 +108,10 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
             .try_into()
             .map_err(|_| AttestationError::QuoteParseFailed("HCL header slice".to_string()))?,
     );
-    let content_length = u32::from_le_bytes(
-        header[16..20]
-            .try_into()
-            .map_err(|_| AttestationError::QuoteParseFailed("HCL content_length slice".to_string()))?,
-    ) as usize;
+    let content_length =
+        u32::from_le_bytes(header[16..20].try_into().map_err(|_| {
+            AttestationError::QuoteParseFailed("HCL content_length slice".to_string())
+        })?) as usize;
 
     // Validate content_length against available data
     let available = hcl_report.len() - content_start;
@@ -728,7 +727,10 @@ mod tests {
         let report_data = b"hello world test nonce";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(report_data, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        assert!(verify_tpm_nonce(&msg, report_data).is_ok(), "nonce should match via direct comparison");
+        assert!(
+            verify_tpm_nonce(&msg, report_data).is_ok(),
+            "nonce should match via direct comparison"
+        );
     }
 
     #[test]
@@ -736,7 +738,10 @@ mod tests {
         let nonce = b"correct data nonce value";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
-        assert!(verify_tpm_nonce(&msg, b"wrong___data nonce value").is_err(), "nonce should not match for different data");
+        assert!(
+            verify_tpm_nonce(&msg, b"wrong___data nonce value").is_err(),
+            "nonce should not match for different data"
+        );
     }
 
     #[test]
@@ -745,7 +750,10 @@ mod tests {
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
         let result = verify_tpm_nonce(&msg, b"much longer expected data");
-        assert!(result.is_err(), "different length nonce should return error");
+        assert!(
+            result.is_err(),
+            "different length nonce should return error"
+        );
     }
 
     #[test]
@@ -1215,7 +1223,11 @@ mod tests {
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
 
         let result = check_report_data(&msg, Some(b"hello"));
-        assert!(result.is_ok(), "unpadded nonce should match: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "unpadded nonce should match: {:?}",
+            result.err()
+        );
         assert_eq!(result.unwrap(), Some(true));
     }
 
@@ -1232,7 +1244,10 @@ mod tests {
         padded_expected[..5].copy_from_slice(b"hello");
 
         let result = check_report_data(&msg, Some(&padded_expected));
-        assert!(result.is_err(), "padded expected should not match unpadded nonce");
+        assert!(
+            result.is_err(),
+            "padded expected should not match unpadded nonce"
+        );
     }
 
     #[test]
@@ -1294,10 +1309,19 @@ mod tests {
             None,
         );
 
-        assert_eq!(result.claims.signed_data, nonce, "signed_data should be the TPM nonce");
-        assert_eq!(result.claims.report_data, vec![0xFF; 64], "report_data should be unchanged");
         assert_eq!(
-            result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
+            result.claims.signed_data, nonce,
+            "signed_data should be the TPM nonce"
+        );
+        assert_eq!(
+            result.claims.report_data,
+            vec![0xFF; 64],
+            "report_data should be unchanged"
+        );
+        assert_eq!(
+            result.claims.platform_data["tpm"]["nonce"]
+                .as_str()
+                .unwrap(),
             hex::encode(&nonce),
         );
     }
@@ -1346,7 +1370,9 @@ mod tests {
         );
         // platform_data nonce should still contain the full padded value
         assert_eq!(
-            result.claims.platform_data["tpm"]["nonce"].as_str().unwrap(),
+            result.claims.platform_data["tpm"]["nonce"]
+                .as_str()
+                .unwrap(),
             hex::encode(&padded_nonce),
         );
     }
@@ -1385,7 +1411,10 @@ mod tests {
         pcrs[8] = init_data_hash.to_vec(); // raw, not extended
 
         let result = check_init_data(&pcrs, Some(&init_data_hash));
-        assert!(result.is_err(), "raw hash should not match extended PCR value");
+        assert!(
+            result.is_err(),
+            "raw hash should not match extended PCR value"
+        );
     }
 
     #[test]

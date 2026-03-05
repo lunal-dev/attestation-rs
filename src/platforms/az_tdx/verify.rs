@@ -7,10 +7,7 @@ use crate::utils::decode_base64url;
 
 use super::evidence::AzTdxEvidence;
 
-fn verify_hcl_var_data_binding(
-    tdx_quote: &tdx_verify::TdxQuote,
-    var_data: &[u8],
-) -> Result<()> {
+fn verify_hcl_var_data_binding(tdx_quote: &tdx_verify::TdxQuote, var_data: &[u8]) -> Result<()> {
     let hash = crate::utils::sha256(var_data);
     if !crate::utils::constant_time_eq(&tdx_quote.body.report_data[..32], &hash) {
         return Err(AttestationError::SignatureVerificationFailed(
@@ -156,8 +153,8 @@ pub async fn verify_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
     use crate::platforms::tpm_common::TpmQuote;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
     fn build_dummy_tpm_quote() -> TpmQuote {
         TpmQuote {
@@ -215,7 +212,11 @@ mod tests {
         let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("base64") || err.contains("Base64"), "error: {}", err);
+        assert!(
+            err.contains("base64") || err.contains("Base64"),
+            "error: {}",
+            err
+        );
     }
 
     #[test]
@@ -251,7 +252,11 @@ mod tests {
         let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("version"), "error should mention version: {}", err);
+        assert!(
+            err.contains("version"),
+            "error should mention version: {}",
+            err
+        );
     }
 
     #[test]
@@ -271,7 +276,11 @@ mod tests {
         let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("report_type") || err.contains("expected"), "error: {}", err);
+        assert!(
+            err.contains("report_type") || err.contains("expected"),
+            "error: {}",
+            err
+        );
     }
 
     #[test]
@@ -291,7 +300,11 @@ mod tests {
         let result = rt.block_on(verify_evidence(&evidence, &params, None));
         assert!(result.is_err());
         let err = format!("{:?}", result.err().unwrap());
-        assert!(err.contains("too short"), "error should mention too short: {}", err);
+        assert!(
+            err.contains("too short"),
+            "error should mention too short: {}",
+            err
+        );
     }
 
     #[test]
@@ -300,13 +313,19 @@ mod tests {
             &(0..24).map(|_| vec![0u8; 32]).collect::<Vec<_>>(),
             Some(&vec![0u8; 31]),
         );
-        assert!(result_31.is_err(), "31-byte init data hash should be rejected");
+        assert!(
+            result_31.is_err(),
+            "31-byte init data hash should be rejected"
+        );
 
         let result_64 = tpm_common::check_init_data(
             &(0..24).map(|_| vec![0u8; 32]).collect::<Vec<_>>(),
             Some(&vec![0u8; 64]),
         );
-        assert!(result_64.is_err(), "64-byte init data hash should be rejected");
+        assert!(
+            result_64.is_err(),
+            "64-byte init data hash should be rejected"
+        );
     }
 
     #[test]
@@ -340,7 +359,11 @@ mod tests {
     #[test]
     fn test_coco_tdx_hcl_report_parses() {
         let parsed = tpm_common::parse_hcl_report(COCO_TDX_HCL_REPORT);
-        assert!(parsed.is_ok(), "TDX HCL report should parse: {:?}", parsed.err());
+        assert!(
+            parsed.is_ok(),
+            "TDX HCL report should parse: {:?}",
+            parsed.err()
+        );
 
         let parsed = parsed.unwrap();
         assert_eq!(parsed.tee_report.len(), 1184);
@@ -352,8 +375,8 @@ mod tests {
     fn test_coco_tdx_hcl_var_data_is_jwk_json() {
         let parsed = tpm_common::parse_hcl_report(COCO_TDX_HCL_REPORT).unwrap();
 
-        let json: serde_json::Value = serde_json::from_slice(&parsed.var_data)
-            .expect("TDX var_data should be valid JSON");
+        let json: serde_json::Value =
+            serde_json::from_slice(&parsed.var_data).expect("TDX var_data should be valid JSON");
         assert!(json["keys"].is_array(), "JSON should contain 'keys' array");
 
         let keys = json["keys"].as_array().unwrap();

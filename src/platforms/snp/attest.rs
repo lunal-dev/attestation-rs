@@ -31,19 +31,15 @@ fn certs_to_chain(certs: Vec<CertTableEntry>) -> Option<SnpCertChain> {
         }
     }
 
-    vcek.map(|v| SnpCertChain {
-        vcek: v,
-        ask,
-        ark,
-    })
+    vcek.map(|v| SnpCertChain { vcek: v, ask, ark })
 }
 
 /// Generate SNP attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<SnpEvidence> {
     let padded = pad_report_data(report_data, 64)?;
-    let data: [u8; 64] = padded.try_into().map_err(|_| {
-        AttestationError::ReportDataTooLarge { max: 64 }
-    })?;
+    let data: [u8; 64] = padded
+        .try_into()
+        .map_err(|_| AttestationError::ReportDataTooLarge { max: 64 })?;
 
     // Open the /dev/sev-guest device via the sev crate
     let mut firmware = Firmware::open().map_err(|e| {
@@ -51,11 +47,12 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<SnpEvidence> {
     })?;
 
     // Get the extended report (attestation report + certificate table)
-    let (report_bytes, certs) = firmware
-        .get_ext_report(None, Some(data), Some(0))
-        .map_err(|e| {
-            AttestationError::HardwareAccessFailed(format!("get_ext_report failed: {}", e))
-        })?;
+    let (report_bytes, certs) =
+        firmware
+            .get_ext_report(None, Some(data), Some(0))
+            .map_err(|e| {
+                AttestationError::HardwareAccessFailed(format!("get_ext_report failed: {}", e))
+            })?;
 
     let cert_chain = certs.and_then(certs_to_chain);
 

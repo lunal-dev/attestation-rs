@@ -325,13 +325,20 @@ pub fn verify_signing_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     }
 
     // Verify Root CA self-signature
-    verify_cert_signature(&root_cert, &root_pub_key, "signing chain Root CA self-signature")?;
+    verify_cert_signature(
+        &root_cert,
+        &root_pub_key,
+        "signing chain Root CA self-signature",
+    )?;
 
     // Verify signing cert is signed by Root CA
     verify_cert_signature(&signing_cert, &root_pub_key, "TCB Signing cert")?;
 
     // Verify validity periods
-    for (der, label) in [(&der_certs[0], "TCB Signing"), (&der_certs[1], "Intel SGX Root CA")] {
+    for (der, label) in [
+        (&der_certs[0], "TCB Signing"),
+        (&der_certs[1], "Intel SGX Root CA"),
+    ] {
         verify_cert_validity_period(der, label)?;
     }
 
@@ -694,7 +701,7 @@ fn parse_tcb_sequence(obj: &x509_parser::der_parser::ber::BerObject) -> Result<(
                     if let Some(suffix) = oid_str.strip_prefix("1.2.840.113741.1.13.1.2.") {
                         if let Ok(idx) = suffix.parse::<usize>() {
                             let val = extract_integer_value(&inner[1]);
-                            if idx >= 1 && idx <= 16 {
+                            if (1..=16).contains(&idx) {
                                 compsvn[idx - 1] = val as u8;
                             } else if idx == 17 {
                                 pcesvn = val as u16;
@@ -740,10 +747,7 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> u64 {
 /// The signature covers the raw JSON string of the `tcbInfo` field.
 /// `signing_certs_pem`: PEM-encoded signing certificate chain from the
 /// `TCB-Info-Issuer-Chain` response header, rooted to Intel SGX Root CA.
-pub fn verify_tcb_info_signature(
-    tcb_info_json: &[u8],
-    signing_certs_pem: &[u8],
-) -> Result<()> {
+pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8]) -> Result<()> {
     let envelope: TcbInfoSignedEnvelope = serde_json::from_slice(tcb_info_json)
         .map_err(|e| AttestationError::CertChainError(format!("TCB Info envelope parse: {}", e)))?;
 
@@ -757,14 +761,11 @@ pub fn verify_tcb_info_signature(
     // Extract the raw JSON string of "tcbInfo" from the envelope.
     // NOTE: .to_string() re-serializes the JSON, which preserves correctness
     // as long as serde_json maintains key order (it does for Value::Object).
-    let raw_json: serde_json::Value = serde_json::from_slice(tcb_info_json).map_err(|e| {
-        AttestationError::CertChainError(format!("TCB Info raw JSON parse: {}", e))
-    })?;
+    let raw_json: serde_json::Value = serde_json::from_slice(tcb_info_json)
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info raw JSON parse: {}", e)))?;
     let tcb_info_raw = raw_json
         .get("tcbInfo")
-        .ok_or_else(|| {
-            AttestationError::CertChainError("TCB Info missing 'tcbInfo' field".into())
-        })?
+        .ok_or_else(|| AttestationError::CertChainError("TCB Info missing 'tcbInfo' field".into()))?
         .to_string();
 
     // Verify the signing cert chain roots to Intel SGX Root CA (2-cert chain)
@@ -896,8 +897,8 @@ fn chrono_parse_is_past(ts: &str) -> Option<bool> {
     // Approximate seconds since Unix epoch (ignoring leap years/seconds for
     // this comparison — accuracy within a day is sufficient for collateral expiry).
     let days_in_year = 365u64;
-    let epoch_days = (year - 1970) * days_in_year + (year - 1969) / 4
-        + days_before_month(month, year) + day - 1;
+    let epoch_days =
+        (year - 1970) * days_in_year + (year - 1969) / 4 + days_before_month(month, year) + day - 1;
     let next_update_secs = epoch_days * 86400 + hour * 3600 + min * 60 + sec;
 
     let now_secs = std::time::SystemTime::now()
@@ -914,7 +915,7 @@ fn days_before_month(month: u64, year: u64) -> u64 {
     let m = (month.saturating_sub(1) as usize).min(11);
     let mut d = DAYS[m];
     // Leap year adjustment for months after February
-    if month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+    if month > 2 && year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) {
         d += 1;
     }
     d
@@ -947,7 +948,9 @@ pub fn determine_ca_type(pck_pem: &[u8]) -> Result<String> {
         .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
     let der_certs = split_pem_to_der(pem_str)?;
     if der_certs.is_empty() {
-        return Err(AttestationError::CertChainError("no certificates found".into()));
+        return Err(AttestationError::CertChainError(
+            "no certificates found".into(),
+        ));
     }
     let (_, cert) = X509Certificate::from_der(&der_certs[0])
         .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
@@ -1022,13 +1025,15 @@ pub fn verify_qe_identity(
     if qe_report_body.len() < QE_REPORT_BODY_SIZE {
         return Err(AttestationError::QuoteParseFailed(format!(
             "QE report body too short: {} bytes, expected {}",
-            qe_report_body.len(), QE_REPORT_BODY_SIZE
+            qe_report_body.len(),
+            QE_REPORT_BODY_SIZE
         )));
     }
 
     // Parse the envelope and optionally verify signature
-    let envelope: QeIdentityEnvelope = serde_json::from_slice(qe_identity_json)
-        .map_err(|e| AttestationError::CertChainError(format!("QE Identity envelope parse: {}", e)))?;
+    let envelope: QeIdentityEnvelope = serde_json::from_slice(qe_identity_json).map_err(|e| {
+        AttestationError::CertChainError(format!("QE Identity envelope parse: {}", e))
+    })?;
 
     if let Some(certs_pem) = signing_certs_pem {
         // Verify Intel ECDSA P-256 signature on the enclaveIdentity JSON
@@ -1042,16 +1047,21 @@ pub fn verify_qe_identity(
         let identity_raw = envelope.enclave_identity.to_string();
         let signing_key = verify_signing_cert_chain(certs_pem)?;
 
-        signing_key.verify(identity_raw.as_bytes(), &signature).map_err(|e| {
-            AttestationError::CertChainError(format!(
-                "QE Identity signature verification failed: {}", e
-            ))
-        })?;
+        signing_key
+            .verify(identity_raw.as_bytes(), &signature)
+            .map_err(|e| {
+                AttestationError::CertChainError(format!(
+                    "QE Identity signature verification failed: {}",
+                    e
+                ))
+            })?;
     }
 
     // Parse the identity fields
     let identity: EnclaveIdentityFields = serde_json::from_value(envelope.enclave_identity.clone())
-        .map_err(|e| AttestationError::CertChainError(format!("QE Identity fields parse: {}", e)))?;
+        .map_err(|e| {
+            AttestationError::CertChainError(format!("QE Identity fields parse: {}", e))
+        })?;
 
     // Extract QE report fields at known offsets
     let qe_miscselect = &qe_report_body[QE_MISCSELECT_OFFSET..QE_MISCSELECT_OFFSET + 4];
@@ -1093,7 +1103,9 @@ pub fn verify_qe_identity(
     })?;
     if expected_miscselect.len() == 4 && miscselect_mask.len() == 4 {
         for i in 0..4 {
-            if (qe_miscselect[i] & miscselect_mask[i]) != (expected_miscselect[i] & miscselect_mask[i]) {
+            if (qe_miscselect[i] & miscselect_mask[i])
+                != (expected_miscselect[i] & miscselect_mask[i])
+            {
                 return Err(AttestationError::CertChainError(
                     "QE MISCSELECT does not match Intel QE Identity (masked)".into(),
                 ));
@@ -1110,7 +1122,9 @@ pub fn verify_qe_identity(
     })?;
     if expected_attributes.len() == 16 && attributes_mask.len() == 16 {
         for i in 0..16 {
-            if (qe_attributes[i] & attributes_mask[i]) != (expected_attributes[i] & attributes_mask[i]) {
+            if (qe_attributes[i] & attributes_mask[i])
+                != (expected_attributes[i] & attributes_mask[i])
+            {
                 return Err(AttestationError::CertChainError(
                     "QE ATTRIBUTES does not match Intel QE Identity (masked)".into(),
                 ));
@@ -1478,10 +1492,7 @@ mod tests {
         let single_cert_pem = &pem_str[..first_cert_end];
 
         let bogus_crl = vec![0x30, 0x00];
-        let result = check_intermediate_ca_revocation(
-            single_cert_pem.as_bytes(),
-            &bogus_crl,
-        );
+        let result = check_intermediate_ca_revocation(single_cert_pem.as_bytes(), &bogus_crl);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(err.contains("at least 2 certs"), "error: {}", err);
@@ -1515,8 +1526,8 @@ mod tests {
 
         // Extract leaf and intermediate only (2-cert chain)
         let first_end = pem_str.find(end_marker).unwrap() + end_marker.len();
-        let second_end = pem_str[first_end + 1..].find(end_marker).unwrap()
-            + first_end + 1 + end_marker.len();
+        let second_end =
+            pem_str[first_end + 1..].find(end_marker).unwrap() + first_end + 1 + end_marker.len();
         let two_cert_pem = &pem_str[..second_end];
 
         // This should fail because the 2nd cert (intermediate) is not the Root CA
@@ -1526,5 +1537,4 @@ mod tests {
             "intermediate CA should not be accepted as Intel Root CA"
         );
     }
-
 }
