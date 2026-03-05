@@ -386,14 +386,8 @@ pub async fn verify_evidence(
         let body_end = super::dcap::compute_body_end(&quote_bytes, quote.quote_version)?;
         let auth = super::dcap::parse_auth_data(&quote_bytes, body_end)?;
 
-        // PCK CRL revocation check
-        let ca_type = super::dcap::determine_ca_type(auth.pck_cert_chain_pem)?;
-        let pck_crl_der = provider.get_pck_crl(&ca_type).await?;
-        super::dcap::check_cert_revocation(auth.pck_cert_chain_pem, &pck_crl_der)?;
-
-        // Root CA CRL check (Intermediate CA not revoked)
-        let root_ca_crl_der = provider.get_root_ca_crl().await?;
-        super::dcap::check_intermediate_ca_revocation(auth.pck_cert_chain_pem, &root_ca_crl_der)?;
+        // PCK CRL revocation check (leaf + intermediate CA)
+        provider.check_pck_revocation(auth.pck_cert_chain_pem).await?;
 
         // TCB status evaluation
         let fmspc = super::dcap::extract_fmspc_from_pck(auth.pck_cert_chain_pem)?;

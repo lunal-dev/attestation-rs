@@ -23,7 +23,7 @@ fn verify_hcl_var_data_binding(
 pub async fn verify_evidence(
     evidence: &AzSnpEvidence,
     params: &VerifyParams,
-    _cert_provider: &dyn CertProvider,
+    cert_provider: &dyn CertProvider,
 ) -> Result<VerificationResult> {
     if evidence.version != 1 {
         return Err(AttestationError::EvidenceDeserialize(format!(
@@ -112,7 +112,7 @@ pub async fn verify_evidence(
         }
     };
     let mut last_err = None;
-    let mut chain_ok = false;
+    let mut matched_gen = None;
     for gen in &gens {
         let ark_der = crate::platforms::snp::certs::get_ark(*gen);
         // VLEK chain: ARK → ASVK → VLEK; VCEK chain: ARK → ASK → VCEK
@@ -124,7 +124,7 @@ pub async fn verify_evidence(
         match crate::platforms::snp::verify::verify_cert_chain(ark_der, intermediate_der, &vcek_der)
         {
             Ok(()) => {
-                chain_ok = true;
+                matched_gen = Some(*gen);
                 break;
             }
             Err(e) => {
@@ -133,10 +133,15 @@ pub async fn verify_evidence(
             }
         }
     }
-    if !chain_ok {
-        return Err(last_err.unwrap_or_else(|| {
+    let matched_gen = matched_gen.ok_or_else(|| {
+        last_err.unwrap_or_else(|| {
             AttestationError::CertChainError("no matching AMD root cert found".to_string())
-        }));
+        })
+    })?;
+
+    // CRL revocation check (if provider supplies CRL data)
+    if let Some(crl_der) = cert_provider.get_snp_crl(matched_gen).await? {
+        crate::platforms::snp::verify::check_vcek_not_revoked(&vcek_der, &crl_der)?;
     }
 
     // SNP report signature against VCEK
