@@ -94,11 +94,7 @@ impl DefaultCertProvider {
     }
 
     /// Build AMD KDS URL for VCEK certificate.
-    fn vcek_url(
-        processor_gen: ProcessorGeneration,
-        chip_id: &[u8; 64],
-        tcb: &SnpTcb,
-    ) -> String {
+    fn vcek_url(processor_gen: ProcessorGeneration, chip_id: &[u8; 64], tcb: &SnpTcb) -> String {
         // Turin uses only the first 8 bytes of chip_id for KDS lookup
         let chip_id_hex = if processor_gen == ProcessorGeneration::Turin {
             hex::encode(&chip_id[..8])
@@ -174,7 +170,8 @@ impl DefaultCertProvider {
         if bytes.len() > MAX_RESPONSE_SIZE {
             return Err(crate::error::AttestationError::CertFetchError(format!(
                 "response body too large: {} bytes exceeds {} byte limit",
-                bytes.len(), MAX_RESPONSE_SIZE
+                bytes.len(),
+                MAX_RESPONSE_SIZE
             )));
         }
 
@@ -442,7 +439,8 @@ impl DefaultTdxCollateralProvider {
         if bytes.len() > MAX_RESPONSE_SIZE {
             return Err(crate::error::AttestationError::CertFetchError(format!(
                 "response body too large: {} bytes exceeds {} byte limit",
-                bytes.len(), MAX_RESPONSE_SIZE
+                bytes.len(),
+                MAX_RESPONSE_SIZE
             )));
         }
 
@@ -506,7 +504,8 @@ impl DefaultTdxCollateralProvider {
         if body.len() > MAX_RESPONSE_SIZE {
             return Err(crate::error::AttestationError::CertFetchError(format!(
                 "response body too large: {} bytes exceeds {} byte limit",
-                body.len(), MAX_RESPONSE_SIZE
+                body.len(),
+                MAX_RESPONSE_SIZE
             )));
         }
 
@@ -543,10 +542,7 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
             )
             .await?;
         if let Some(ref chain_pem) = chain {
-            self.set_cached(
-                "qe_identity_signing_chain".to_string(),
-                chain_pem.clone(),
-            );
+            self.set_cached("qe_identity_signing_chain".to_string(), chain_pem.clone());
         }
         Ok(body)
     }
@@ -712,7 +708,10 @@ mod tests {
         assert!(url.starts_with("https://kdsintf.amd.com/vcek/v1/Turin/"));
         // Turin uses only first 8 bytes of chip_id
         assert!(url.contains(&hex::encode(&chip_id[..8])));
-        assert!(!url.contains(&hex::encode(chip_id)), "Turin should NOT use full 64-byte chip_id");
+        assert!(
+            !url.contains(&hex::encode(chip_id)),
+            "Turin should NOT use full 64-byte chip_id"
+        );
         assert!(url.contains("blSPL=00"));
         assert!(url.contains("teeSPL=00"));
         assert!(url.contains("snpSPL=00"));
