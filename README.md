@@ -9,7 +9,7 @@ A Rust library providing a unified interface for TEE (Trusted Execution Environm
 | AMD SEV-SNP (bare-metal) | Yes | Yes | Yes |
 | Intel TDX (bare-metal) | Yes | Yes | Yes |
 | Azure SEV-SNP (vTPM) | Yes | Yes | Yes |
-| Azure TDX (vTPM) | Stub | Yes | Yes |
+| Azure TDX (vTPM) | Yes | Yes | Yes |
 
 ## Feature Flags
 
@@ -24,36 +24,29 @@ attestation = { path = ".", features = ["snp", "tdx"] }
 | `tdx` | Intel TDX support |
 | `az-snp` | Azure SEV-SNP vTPM support (implies `snp`) |
 | `az-tdx` | Azure TDX vTPM support (implies `tdx`) |
-| `all-platforms` | Enable all platform features |
 | `attest` | Enable guest-side evidence generation (Linux-only, requires TEE hardware) |
+| `cli` | Build the `attestation-cli` binary |
 
-Verification is always compiled when a platform feature is enabled. The `attest` feature gates all guest-side code that requires hardware access.
+All four platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates all guest-side code that requires hardware access.
 
 ## Usage
 
 ### Verifier (Server-Side or WASM)
 
 ```rust
-use attestation::platforms::snp::Snp;
-use attestation::platforms::Platform;
-use attestation::types::VerifyParams;
+use attestation::{VerifyParams, VerificationResult};
 
 #[tokio::main]
 async fn main() {
-    // Deserialize evidence received from the TEE guest
-    let evidence_json = r#"{"attestation_report":"...","cert_chain":null}"#;
-    let evidence: attestation::platforms::snp::evidence::SnpEvidence =
-        serde_json::from_str(evidence_json).unwrap();
+    // evidence_json is a self-describing AttestationEvidence envelope
+    let evidence_json: &[u8] = b"...";
 
-    // Set up verification parameters
     let params = VerifyParams {
-        expected_report_data: Some(vec![0xAA; 64]),  // expected nonce
-        expected_init_data_hash: None,
+        expected_report_data: Some(vec![0xAA; 64]),
+        ..Default::default()
     };
 
-    // Verify
-    let snp = Snp::with_default_provider();
-    let result = snp.verify(&evidence, &params).await.unwrap();
+    let result = attestation::verify(evidence_json, &params).await.unwrap();
 
     println!("Signature valid: {}", result.signature_valid);
     println!("Platform: {}", result.platform);
@@ -62,104 +55,76 @@ async fn main() {
 }
 ```
 
+### Verifier with Custom Providers
+
+```rust
+use attestation::{Verifier, VerifyParams};
+
+#[tokio::main]
+async fn main() {
+    let verifier = Verifier::new();
+    // Or with custom cert/collateral providers:
+    // let verifier = Verifier::new()
+    //     .with_cert_provider(my_cert_provider)
+    //     .with_tdx_provider(my_tdx_provider);
+
+    let result = verifier
+        .verify(evidence_json, &VerifyParams::default())
+        .await
+        .unwrap();
+}
+```
+
 ### Attester (Guest-Side Agent)
 
 ```rust
-use attestation::platforms::Platform;
-
 #[tokio::main]
 async fn main() {
     // Auto-detect the TEE platform
     let platform = attestation::detect().expect("no TEE platform detected");
-    println!("Detected platform: {}", platform.platform_type());
+    println!("Detected platform: {}", platform);
 
     // Generate evidence with a challenge nonce
     let nonce = b"server-provided-challenge-nonce";
-    let evidence_json = platform.attest_json(nonce).await.unwrap();
+    let evidence_json = attestation::attest(platform, nonce).await.unwrap();
 
-    // Send evidence_json to the verifier
-    println!("Evidence: {}", evidence_json);
+    // Send evidence_json to the verifier — it's a self-describing envelope
+    println!("Evidence: {} bytes", evidence_json.len());
 }
 ```
 
-### Azure SNP CVM (Full Roundtrip)
+## Examples
 
-```rust
-use attestation::platforms::az_snp::AzSnp;
-use attestation::platforms::Platform;
-use attestation::types::VerifyParams;
+Each platform has a dedicated example. Run on the appropriate hardware:
 
-#[tokio::main]
-async fn main() {
-    let az_snp = AzSnp::with_default_provider();
-
-    // Generate evidence (requires tpm2-tools on Azure CVM)
-    let evidence = az_snp.attest(b"my-nonce").await.unwrap();
-
-    // Verify the evidence
-    let params = VerifyParams::default();
-    let result = az_snp.verify(&evidence, &params).await.unwrap();
-
-    assert!(result.signature_valid);
-    println!("Claims: {}", serde_json::to_string_pretty(&result.claims).unwrap());
-}
+```bash
+cargo run --example snp    --features "snp,attest"
+cargo run --example tdx    --features "tdx,attest"
+cargo run --example az_snp --features "az-snp,attest"
+cargo run --example az_tdx --features "az-tdx,attest"
 ```
 
-## Architecture
+Azure examples accept an optional nonce argument:
 
-```
-attestation/
-├── src/
-│   ├── lib.rs           # Public API: detect(), re-exports
-│   ├── error.rs         # AttestationError enum
-│   ├── types.rs         # PlatformType, VerifyParams, VerificationResult, Claims, TcbInfo
-│   ├── collateral.rs    # CertProvider trait + DefaultCertProvider (HTTP + cache)
-│   ├── utils.rs         # SHA-256/384, padding, constant-time comparison
-│   └── platforms/
-│       ├── mod.rs       # Platform trait
-│       ├── snp/         # AMD SEV-SNP: report parsing, ECDSA P-384 sig, cert chain
-│       ├── tdx/         # Intel TDX: quote parsing (v4/v5), ECDSA P-256 sig
-│       ├── az_snp/      # Azure SNP: TPM sig, HCL report, var_data binding
-│       ├── az_tdx/      # Azure TDX: TPM sig, HCL report, TDX DCAP
-│       └── tpm_common.rs # Shared TPM/HCL: quote decode, PCR verify, JWK AK extraction
-├── benches/
-│   └── verification.rs  # 18 criterion benchmarks
-├── tests/
-│   └── az_snp_live.rs   # Live Azure SNP CVM integration tests
-└── test_data/           # Fixtures from CoCo trustee repo
+```bash
+cargo run --example az_snp --features "az-snp,attest" -- "my-custom-nonce"
 ```
 
-## Verification Pipeline
+## CLI
 
-### SNP (Bare-Metal)
-1. Parse 1184-byte attestation report
-2. Determine processor generation (Milan/Genoa/Turin) from CPUID
-3. Validate cert chain: ARK (bundled) -> ASK -> VCEK/VLEK (RSA-PSS SHA-384)
-4. Verify report ECDSA P-384 signature against VCEK public key
-5. Check VMPL == 0, report_data binding, host_data binding
-6. Extract claims (measurement, TCB, policy flags, chip_id)
+A CLI binary is available for attestation and verification from the command line:
 
-### TDX (Bare-Metal)
-1. Parse TDX quote (v4: 48B header + 584B body, or v5 format)
-2. Verify ECDSA P-256 signature (DCAP)
-3. Check report_data binding, MRCONFIGID binding
-4. Extract claims (MRTD, RTMRs, MRSEAM, TCB SVN, attributes)
+```bash
+# Build the CLI
+cargo build --release --features cli
 
-### Azure SNP (vTPM)
-1. Parse HCL report -> extract SNP report + JWK var_data
-2. Verify TPM RSA signature (AK from JWK JSON)
-3. Verify TPM nonce and PCR digest integrity
-4. Validate HCL binding: SHA-256(var_data) == report_data[0:32]
-5. Verify SNP report signature + cert chain
-6. Check PCR[8] for init_data binding
-7. Extract SNP claims + TPM PCR values
+# Generate evidence (on TEE hardware, Linux only)
+cargo build --release --features "cli,attest"
+./target/release/attestation-cli attest --report-data "my-nonce"
 
-### Azure TDX (vTPM)
-1. Parse HCL report -> extract TDX report + JWK var_data
-2. Verify TPM RSA signature + nonce + PCR integrity
-3. Parse and verify TDX DCAP quote
-4. Validate HCL binding: SHA-256(var_data) == td_quote.report_data[0:32]
-5. Extract TDX claims + TPM PCR values
+# Verify evidence (works anywhere)
+echo "$EVIDENCE" | ./target/release/attestation-cli verify
+```
 
 ## Evidence JSON Schemas
 
@@ -220,10 +185,11 @@ attestation/
 ```json
 {
   "signature_valid": true,
-  "platform": "Snp",
+  "platform": "snp",
   "claims": {
     "launch_digest": "<96-char hex string (48 bytes)>",
     "report_data": "<128-char hex string (64 bytes)>",
+    "signed_data": "<hex-encoded bytes>",
     "init_data": "<hex-encoded bytes>",
     "tcb": {
       "type": "Snp",
@@ -247,13 +213,22 @@ attestation/
 
 ```bash
 # Unit tests (no hardware needed)
-cargo test --features all-platforms
+cargo test --features snp
+cargo test --features tdx
+cargo test --features az-snp
+cargo test --features az-tdx
 
-# Integration tests on Azure SNP CVM (requires tpm2-tools + TPM access)
-cargo test --test az_snp_live --features "all-platforms,attest" -- --ignored
+# Integration tests on Azure SNP CVM
+cargo test --test az_snp_live --features "az-snp,attest" -- --ignored
+
+# Integration tests on Azure TDX CVM
+cargo test --test az_tdx_live --features "az-tdx,attest" -- --ignored
 
 # Benchmarks
-cargo bench --features all-platforms
+cargo bench --features snp
+cargo bench --features tdx
+cargo bench --features az-snp
+cargo bench --features az-tdx
 ```
 
 ## WASM Support
@@ -261,7 +236,7 @@ cargo bench --features all-platforms
 The library compiles to `wasm32-unknown-unknown` for verifier-only use:
 
 ```bash
-cargo check --target wasm32-unknown-unknown --features all-platforms
+cargo check --target wasm32-unknown-unknown --no-default-features --features snp,tdx,az-snp,az-tdx
 ```
 
 The `attest` feature is automatically excluded on WASM. All verification uses pure-Rust crypto (no OpenSSL dependency).
