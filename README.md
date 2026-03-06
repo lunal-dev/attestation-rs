@@ -1,15 +1,15 @@
-# attestation
+# Attestation
 
 A Rust library providing a unified interface for TEE (Trusted Execution Environment) attestation evidence generation and verification.
 
 ## Supported Platforms
 
-| Platform | Attest | Verify | WASM Verify |
-|----------|--------|--------|-------------|
-| AMD SEV-SNP (bare-metal) | Yes | Yes | Yes |
-| Intel TDX (bare-metal) | Yes | Yes | Yes |
-| Azure SEV-SNP (vTPM) | Yes | Yes | Yes |
-| Azure TDX (vTPM) | Yes | Yes | Yes |
+| Platform                 | Attest | Verify | WASM Verify |
+| ------------------------ | ------ | ------ | ----------- |
+| AMD SEV-SNP (bare-metal) | Yes    | Yes    | Yes         |
+| Intel TDX (bare-metal)   | Yes    | Yes    | Yes         |
+| Azure SEV-SNP (vTPM)     | Yes    | Yes    | Yes         |
+| Azure TDX (vTPM)         | Yes    | Yes    | Yes         |
 
 ## Feature Flags
 
@@ -18,14 +18,14 @@ A Rust library providing a unified interface for TEE (Trusted Execution Environm
 attestation = { path = ".", features = ["snp", "tdx"] }
 ```
 
-| Feature | Description |
-|---------|-------------|
-| `snp` | AMD SEV-SNP support (verify always, attest when `attest` also enabled) |
-| `tdx` | Intel TDX support |
-| `az-snp` | Azure SEV-SNP vTPM support (implies `snp`) |
-| `az-tdx` | Azure TDX vTPM support (implies `tdx`) |
+| Feature  | Description                                                               |
+| -------- | ------------------------------------------------------------------------- |
+| `snp`    | AMD SEV-SNP support (verify always, attest when `attest` also enabled)    |
+| `tdx`    | Intel TDX support                                                         |
+| `az-snp` | Azure SEV-SNP vTPM support (implies `snp`)                                |
+| `az-tdx` | Azure TDX vTPM support (implies `tdx`)                                    |
 | `attest` | Enable guest-side evidence generation (Linux-only, requires TEE hardware) |
-| `cli` | Build the `attestation-cli` binary |
+| `cli`    | Build the `attestation-cli` binary                                        |
 
 All four platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates all guest-side code that requires hardware access.
 
