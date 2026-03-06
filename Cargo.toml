@@ -103,12 +103,20 @@ harness = false
 required-features = ["az-snp", "attest"]
 
 [[example]]
-name = "attest"
-required-features = ["attest"]
+name = "snp"
+required-features = ["snp", "attest"]
 
 [[example]]
-name = "az_snp_attest_cli"
-required-features = ["attest"]
+name = "tdx"
+required-features = ["tdx", "attest"]
+
+[[example]]
+name = "az_snp"
+required-features = ["az-snp", "attest"]
+
+[[example]]
+name = "az_tdx"
+required-features = ["az-tdx", "attest"]
 
 [[bin]]
 name = "attestation-cli"

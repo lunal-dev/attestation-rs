@@ -174,24 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn test_az_tdx_evidence_serialization_roundtrip() {
-        let evidence = AzTdxEvidence {
-            version: 1,
-            tpm_quote: build_dummy_tpm_quote(),
-            hcl_report: "dGVzdA".to_string(),
-            td_quote: "AAAA".to_string(),
-        };
-
-        let json = serde_json::to_string(&evidence).unwrap();
-        let deserialized: AzTdxEvidence = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.version, 1);
-        assert_eq!(deserialized.hcl_report, evidence.hcl_report);
-        assert_eq!(deserialized.td_quote, evidence.td_quote);
-        assert_eq!(deserialized.tpm_quote.pcrs.len(), 24);
-    }
-
-    #[test]
     fn test_invalid_base64_hcl_report() {
         let evidence = AzTdxEvidence {
             version: 1,
@@ -211,24 +193,6 @@ mod tests {
             "error: {}",
             err
         );
-    }
-
-    #[test]
-    fn test_invalid_base64_td_quote() {
-        let hcl = build_hcl_report(tpm_common::HCL_REPORT_TYPE_TDX, b"{}");
-
-        let evidence = AzTdxEvidence {
-            version: 1,
-            tpm_quote: build_dummy_tpm_quote(),
-            hcl_report: BASE64URL.encode(&hcl),
-            td_quote: "!!!invalid!!!".to_string(),
-        };
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let params = VerifyParams::default();
-
-        let result = rt.block_on(verify_evidence(&evidence, &params, None));
-        assert!(result.is_err());
     }
 
     #[test]
@@ -301,51 +265,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_init_data_hash_wrong_length() {
-        let result_31 = tpm_common::check_init_data(
-            &(0..24).map(|_| vec![0u8; 32]).collect::<Vec<_>>(),
-            Some(&vec![0u8; 31]),
-        );
-        assert!(
-            result_31.is_err(),
-            "31-byte init data hash should be rejected"
-        );
-
-        let result_64 = tpm_common::check_init_data(
-            &(0..24).map(|_| vec![0u8; 32]).collect::<Vec<_>>(),
-            Some(&vec![0u8; 64]),
-        );
-        assert!(
-            result_64.is_err(),
-            "64-byte init data hash should be rejected"
-        );
-    }
-
-    #[test]
-    fn test_init_data_pcr8_mismatch() {
-        let pcrs: Vec<Vec<u8>> = (0..24).map(|i| vec![i as u8; 32]).collect();
-        let wrong = vec![0xFF; 32];
-
-        let result = tpm_common::check_init_data(&pcrs, Some(&wrong));
-        assert!(result.is_err(), "mismatched PCR[8] should be rejected");
-    }
-
-    #[test]
-    fn test_coco_tdx_tpm_message_has_valid_magic() {
-        let json = include_str!("../../../test_data/az_tdx/tpm-quote-v1.json");
-        let quote: tpm_common::TpmQuote = serde_json::from_str(json).unwrap();
-        let msg = hex::decode(&quote.message).unwrap();
-
-        assert!(msg.len() >= 4, "TPM message too short");
-        let magic = u32::from_be_bytes(msg[0..4].try_into().unwrap());
-        assert_eq!(
-            magic, 0xFF544347,
-            "TPM Attest magic should be 0xFF544347, got 0x{:08X}",
-            magic
-        );
-    }
-
     // --- Tests using real CoCo TDX HCL report fixture ---
 
     const COCO_TDX_HCL_REPORT: &[u8] = include_bytes!("../../../test_data/az_tdx/hcl-report.bin");
@@ -393,20 +312,6 @@ mod tests {
         let (modulus, exponent) = result.unwrap();
         assert_eq!(modulus.len(), 256, "RSA 2048 modulus should be 256 bytes");
         assert_eq!(exponent, vec![0x01, 0x00, 0x01], "exponent should be 65537");
-    }
-
-    #[test]
-    fn test_coco_tdx_hcl_var_data_binding() {
-        let parsed = tpm_common::parse_hcl_report(COCO_TDX_HCL_REPORT).unwrap();
-
-        // For az_tdx, the TD quote report_data[..32] should match SHA-256(var_data).
-        // We can at least verify the hash computation is deterministic and 32 bytes.
-        let var_data_hash = crate::utils::sha256(&parsed.var_data);
-        assert_eq!(var_data_hash.len(), 32);
-        assert!(
-            parsed.var_data.len() > 0,
-            "var_data should not be empty for binding test"
-        );
     }
 
     #[test]

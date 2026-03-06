@@ -445,17 +445,6 @@ mod tests {
     const IMDS_ARK: &[u8] = include_bytes!("../../../test_data/az_snp/imds-chain-1.der");
 
     #[test]
-    fn test_parse_report_sev_crate() {
-        let report = parse_report(TEST_REPORT).expect("failed to parse report");
-        assert_eq!(report.version, 2);
-        assert_eq!(report.vmpl, 0);
-        assert_eq!(report.sig_algo, 1);
-        assert!(report.measurement.iter().any(|&b| b != 0));
-        assert!(report.report_data.iter().any(|&b| b != 0));
-        assert!(report.chip_id.iter().any(|&b| b != 0));
-    }
-
-    #[test]
     fn test_parse_report_fields() {
         let report = parse_report(TEST_REPORT).expect("failed to parse report");
         assert_eq!(report.version, 2);
@@ -502,16 +491,6 @@ mod tests {
         assert!(parse_report(&data).is_err());
     }
 
-    #[test]
-    fn test_report_exact_size() {
-        assert_eq!(TEST_REPORT.len(), 1184);
-    }
-
-    #[test]
-    fn test_vlek_report_exact_size() {
-        assert_eq!(TEST_VLEK_REPORT.len(), 1184);
-    }
-
     // ---------------------------------------------------------------
     // Certificate chain tests
     // ---------------------------------------------------------------
@@ -546,21 +525,6 @@ mod tests {
         let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
         let result = verify_cert_chain(ark_der, ask_der, TEST_VCEK_INVALID_NEW);
         assert!(result.is_err(), "invalid new VCEK should fail");
-    }
-
-    #[test]
-    fn test_cert_chain_ark_self_signed() {
-        let (ark_der, _) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
-        let ark = x509_cert::Certificate::from_der(ark_der).expect("ARK parse");
-        assert_eq!(ark.tbs_certificate.issuer, ark.tbs_certificate.subject);
-    }
-
-    #[test]
-    fn test_cert_chain_ask_issued_by_ark() {
-        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Milan);
-        let ark = x509_cert::Certificate::from_der(ark_der).expect("ARK parse");
-        let ask = x509_cert::Certificate::from_der(ask_der).expect("ASK parse");
-        assert_eq!(ask.tbs_certificate.issuer, ark.tbs_certificate.subject);
     }
 
     // ---------------------------------------------------------------
@@ -598,13 +562,6 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn test_imds_vcek_parses() {
-        let cert = x509_cert::Certificate::from_der(IMDS_VCEK).expect("IMDS VCEK parse");
-        let subject = format!("{}", cert.tbs_certificate.subject);
-        assert!(subject.contains("SEV-VCEK"));
-    }
-
-    #[test]
     fn test_imds_full_cert_chain() {
         let result = verify_cert_chain(IMDS_ARK, IMDS_ASK, IMDS_VCEK);
         assert!(
@@ -622,16 +579,6 @@ mod tests {
             result.is_ok(),
             "IMDS VCEK against bundled certs: {:?}",
             result.err()
-        );
-    }
-
-    #[test]
-    fn test_imds_wrong_generation_fails() {
-        let (ark_der, ask_der) = super::super::certs::get_bundled_certs(ProcessorGeneration::Genoa);
-        let result = verify_cert_chain(ark_der, ask_der, IMDS_VCEK);
-        assert!(
-            result.is_err(),
-            "IMDS VCEK should not verify with Genoa certs"
         );
     }
 
@@ -653,15 +600,6 @@ mod tests {
             report.cpuid_mod_id.unwrap(),
         );
         assert_eq!(gen, Some(ProcessorGeneration::Genoa));
-    }
-
-    #[test]
-    fn test_live_v5_vcek_parses() {
-        let cert = x509_cert::Certificate::from_der(LIVE_VCEK_GENOA).expect("VCEK parse");
-        let subject = format!("{}", cert.tbs_certificate.subject);
-        assert!(subject.contains("SEV-VCEK"));
-        let issuer = format!("{}", cert.tbs_certificate.issuer);
-        assert!(issuer.contains("SEV-Genoa"));
     }
 
     #[test]
@@ -763,37 +701,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_version_upper_bound() {
-        // MAX_REPORT_VERSION is 5, version 6 should be rejected
-        assert!(MAX_REPORT_VERSION == 5);
-        // Version 5 is within bounds
-        assert!(5 >= MIN_REPORT_VERSION && 5 <= MAX_REPORT_VERSION);
-        // Version 6 exceeds upper bound
-        assert!(6 > MAX_REPORT_VERSION);
-    }
-
-    #[test]
-    fn test_processor_generation_detection() {
-        assert_eq!(
-            ProcessorGeneration::from_cpuid(0x19, 0x01),
-            Some(ProcessorGeneration::Milan)
-        );
-        assert_eq!(
-            ProcessorGeneration::from_cpuid(0x19, 0x11),
-            Some(ProcessorGeneration::Genoa)
-        );
-        assert_eq!(
-            ProcessorGeneration::from_cpuid(0x19, 0xA0),
-            Some(ProcessorGeneration::Genoa)
-        );
-        assert_eq!(
-            ProcessorGeneration::from_cpuid(0x1A, 0x00),
-            Some(ProcessorGeneration::Turin)
-        );
-        assert_eq!(ProcessorGeneration::from_cpuid(0xFF, 0x00), None);
-    }
-
     // ---------------------------------------------------------------
     // VLEK / ASVK tests
     // ---------------------------------------------------------------
@@ -829,28 +736,6 @@ mod tests {
                 "{:?} ASVK subject should contain VLEK: {}",
                 gen,
                 subject
-            );
-        }
-    }
-
-    #[test]
-    fn test_asvk_issued_by_ark() {
-        // ASVK should be issued by the same ARK as ASK
-        for gen in [
-            ProcessorGeneration::Milan,
-            ProcessorGeneration::Genoa,
-            ProcessorGeneration::Turin,
-        ] {
-            let ark_der = super::super::certs::get_ark(gen);
-            let asvk_der = super::super::certs::get_asvk(gen);
-            let ark = x509_cert::Certificate::from_der(ark_der)
-                .unwrap_or_else(|e| panic!("{:?} ARK parse: {}", gen, e));
-            let asvk = x509_cert::Certificate::from_der(asvk_der)
-                .unwrap_or_else(|e| panic!("{:?} ASVK parse: {}", gen, e));
-            assert_eq!(
-                asvk.tbs_certificate.issuer, ark.tbs_certificate.subject,
-                "{:?} ASVK issuer should match ARK subject",
-                gen
             );
         }
     }

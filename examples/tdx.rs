@@ -1,0 +1,35 @@
+//! Bare-metal Intel TDX attestation example.
+//!
+//! Run on a TDX-enabled machine:
+//!   cargo run --example tdx --features "tdx,attest"
+
+use attestation::{PlatformType, VerifyParams};
+
+#[tokio::main]
+async fn main() {
+    let nonce = b"example-tdx-nonce";
+
+    eprintln!("Generating TDX attestation evidence...");
+    let evidence_json = attestation::attest(PlatformType::Tdx, nonce)
+        .await
+        .expect("attestation failed");
+
+    eprintln!("Evidence: {} bytes", evidence_json.len());
+
+    eprintln!("Verifying...");
+    let params = VerifyParams::default();
+    let result = attestation::verify(&evidence_json, &params)
+        .await
+        .expect("verification failed");
+
+    eprintln!("Signature valid: {}", result.signature_valid);
+    eprintln!("Platform: {}", result.platform);
+    eprintln!("Launch digest: {}", result.claims.launch_digest);
+
+    if let Some(tcb_status) = &result.tcb_status {
+        eprintln!("TCB status: {:?}", tcb_status.tcb_status);
+        eprintln!("FMSPC: {}", tcb_status.fmspc);
+    }
+
+    println!("{}", String::from_utf8_lossy(&evidence_json));
+}

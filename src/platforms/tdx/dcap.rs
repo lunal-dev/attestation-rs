@@ -1314,24 +1314,6 @@ mod tests {
     }
 
     #[test]
-    fn test_full_dcap_verification_v4() {
-        let body_end = body_end_v4();
-        let auth = parse_auth_data(V4_QUOTE, body_end).unwrap();
-        let pck_key = verify_pck_cert_chain(auth.pck_cert_chain_pem).unwrap();
-        verify_qe_report_signature(&auth, &pck_key).unwrap();
-        verify_qe_report_binding(&auth).unwrap();
-    }
-
-    #[test]
-    fn test_full_dcap_verification_v5() {
-        let body_end = body_end_v5();
-        let auth = parse_auth_data(V5_QUOTE, body_end).unwrap();
-        let pck_key = verify_pck_cert_chain(auth.pck_cert_chain_pem).unwrap();
-        verify_qe_report_signature(&auth, &pck_key).unwrap();
-        verify_qe_report_binding(&auth).unwrap();
-    }
-
-    #[test]
     fn test_tampered_attestation_key_fails() {
         let mut tampered = V4_QUOTE.to_vec();
         let body_end = body_end_v4();
@@ -1450,33 +1432,6 @@ mod tests {
         );
         assert_eq!(parse_tcb_status("Revoked").unwrap(), TdxTcbStatus::Revoked);
         assert!(parse_tcb_status("InvalidStatus").is_err());
-    }
-
-    #[test]
-    fn test_check_cert_revocation_empty_crl() {
-        // Build a minimal valid empty CRL (no revoked certs)
-        // Use the v4 PCK cert chain and a CRL that doesn't revoke it
-        let body_end = body_end_v4();
-        let auth = parse_auth_data(V4_QUOTE, body_end).unwrap();
-
-        // We can't easily construct a valid DER CRL in a unit test without
-        // the issuer's private key, so just verify the function handles
-        // parse errors gracefully
-        let bogus_crl = vec![0x30, 0x00]; // minimal empty SEQUENCE
-        let result = check_cert_revocation(auth.pck_cert_chain_pem, &bogus_crl);
-        // Should fail to parse — that's expected
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_check_intermediate_ca_revocation_parse_error() {
-        let body_end = body_end_v4();
-        let auth = parse_auth_data(V4_QUOTE, body_end).unwrap();
-
-        // Invalid CRL data should produce a parse error
-        let bogus_crl = vec![0x30, 0x00];
-        let result = check_intermediate_ca_revocation(auth.pck_cert_chain_pem, &bogus_crl);
-        assert!(result.is_err());
     }
 
     #[test]

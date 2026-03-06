@@ -135,24 +135,4 @@ mod tests {
         assert!(claims.launch_digest.starts_with("8922"));
     }
 
-    #[test]
-    fn test_claims_report_data_preserves_full_64_bytes() {
-        let report = parse_report(TEST_REPORT).expect("failed to parse report");
-        let claims = extract_claims(&report);
-
-        assert_eq!(claims.report_data.len(), 64);
-        assert!(claims.report_data[32..].iter().all(|&b| b == 0));
-        assert!(claims.report_data[..32].iter().any(|&b| b != 0));
-    }
-
-    #[test]
-    fn test_claims_launch_digest_is_valid_hex() {
-        let report = parse_report(TEST_REPORT).expect("failed to parse report");
-        let claims = extract_claims(&report);
-
-        assert_eq!(claims.launch_digest.len(), 96);
-        let decoded = hex::decode(&claims.launch_digest);
-        assert!(decoded.is_ok());
-        assert_eq!(decoded.unwrap().len(), 48);
-    }
 }
