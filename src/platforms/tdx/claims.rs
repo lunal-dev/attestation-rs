@@ -234,5 +234,4 @@ mod tests {
         let parsed2 = parse_td_attributes(&td_attrs_no_debug);
         assert_eq!(parsed2["debug"], false);
     }
-
 }

@@ -134,5 +134,4 @@ mod tests {
         assert_eq!(claims.launch_digest, hex::encode(&report.measurement[..]));
         assert!(claims.launch_digest.starts_with("8922"));
     }
-
 }

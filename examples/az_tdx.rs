@@ -23,7 +23,11 @@ async fn main() {
     let evidence_json = attestation::attest(PlatformType::AzTdx, &nonce)
         .await
         .expect("attestation failed");
-    eprintln!("[attest]  {:?} ({} bytes)", t0.elapsed(), evidence_json.len());
+    eprintln!(
+        "[attest]  {:?} ({} bytes)",
+        t0.elapsed(),
+        evidence_json.len()
+    );
 
     eprintln!("Verifying...");
     let t1 = Instant::now();
