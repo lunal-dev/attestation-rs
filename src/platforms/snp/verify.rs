@@ -259,8 +259,13 @@ pub(crate) fn is_vlek_cert(vek_der: &[u8]) -> Result<bool> {
         .subject()
         .iter_common_name()
         .next()
-        .and_then(|cn| cn.as_str().ok())
-        .unwrap_or("");
+        .ok_or_else(|| {
+            AttestationError::CertChainError("VEK certificate has no Common Name".to_string())
+        })?
+        .as_str()
+        .map_err(|e| {
+            AttestationError::CertChainError(format!("VEK Common Name is not valid UTF-8: {}", e))
+        })?;
     Ok(cn.contains("VLEK"))
 }
 
@@ -310,8 +315,16 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         .subject()
         .iter_common_name()
         .next()
-        .and_then(|cn| cn.as_str().ok())
-        .unwrap_or("");
+        .ok_or_else(|| {
+            AttestationError::CertChainError("VCEK certificate has no Common Name".to_string())
+        })?
+        .as_str()
+        .map_err(|e| {
+            AttestationError::CertChainError(format!(
+                "VCEK Common Name is not valid UTF-8: {}",
+                e
+            ))
+        })?;
 
     let is_vcek = !cn.contains("VLEK");
 

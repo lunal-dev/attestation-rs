@@ -1,7 +1,7 @@
 use crate::collateral::CertProvider;
 use crate::error::{AttestationError, Result};
 use crate::platforms::tpm_common;
-use crate::types::{PlatformType, VerificationResult, VerifyParams};
+use crate::types::{PlatformType, ProcessorGeneration, VerificationResult, VerifyParams};
 use crate::utils::decode_base64url;
 
 use super::evidence::AzSnpEvidence;
@@ -11,7 +11,15 @@ fn verify_hcl_var_data_binding(
     var_data: &[u8],
 ) -> Result<()> {
     let hash = crate::utils::sha256(var_data);
-    if !crate::utils::constant_time_eq(&snp_report.report_data[..32], &hash) {
+    let report_data_prefix = snp_report
+        .report_data
+        .get(..32)
+        .ok_or_else(|| {
+            AttestationError::QuoteParseFailed(
+                "SNP report_data shorter than 32 bytes".to_string(),
+            )
+        })?;
+    if !crate::utils::constant_time_eq(report_data_prefix, &hash) {
         return Err(AttestationError::SignatureVerificationFailed(
             "HCL var_data binding failed: SNP report_data != SHA-256(var_data)".to_string(),
         ));
@@ -90,7 +98,6 @@ pub async fn verify_evidence(
     verify_hcl_var_data_binding(&snp_report, &hcl.var_data)?;
 
     // VCEK/VLEK validation against bundled AMD CA chain
-    use crate::types::ProcessorGeneration;
     let is_vlek = crate::platforms::snp::verify::is_vlek_cert(&vcek_der)?;
     let cpuid_fam_id = snp_report.cpuid_fam_id.unwrap_or(0);
     let cpuid_mod_id = snp_report.cpuid_mod_id.unwrap_or(0);
@@ -306,7 +313,10 @@ mod tests {
         let var_data_hash = crate::utils::sha256(&parsed.var_data);
 
         assert!(
-            crate::utils::constant_time_eq(&snp_report.report_data[..32], &var_data_hash),
+            crate::utils::constant_time_eq(
+                snp_report.report_data.get(..32).expect("report_data >= 32 bytes"),
+                &var_data_hash
+            ),
             "HCL var_data binding: report_data[..32] == SHA-256(null-trimmed var_data)"
         );
     }

@@ -224,10 +224,16 @@ async fn cmd_attest(args: AttestArgs) {
         }
         eprintln!("Written to {}", path.display());
     } else {
-        io::stdout().write_all(&evidence_json).unwrap();
+        if let Err(e) = io::stdout().write_all(&evidence_json) {
+            eprintln!("Failed to write to stdout: {e}");
+            process::exit(1);
+        }
         // Ensure trailing newline for terminal readability
         if !evidence_json.ends_with(b"\n") {
-            println!();
+            if let Err(e) = writeln!(io::stdout()) {
+                eprintln!("Failed to write to stdout: {e}");
+                process::exit(1);
+            }
         }
     }
 }
