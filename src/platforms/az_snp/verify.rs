@@ -6,27 +6,6 @@ use crate::utils::decode_base64url;
 
 use super::evidence::AzSnpEvidence;
 
-fn verify_hcl_var_data_binding(
-    snp_report: &sev::firmware::guest::AttestationReport,
-    var_data: &[u8],
-) -> Result<()> {
-    let hash = crate::utils::sha256(var_data);
-    let report_data_prefix = snp_report
-        .report_data
-        .get(..32)
-        .ok_or_else(|| {
-            AttestationError::QuoteParseFailed(
-                "SNP report_data shorter than 32 bytes".to_string(),
-            )
-        })?;
-    if !crate::utils::constant_time_eq(report_data_prefix, &hash) {
-        return Err(AttestationError::SignatureVerificationFailed(
-            "HCL var_data binding failed: SNP report_data != SHA-256(var_data)".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// Verify Azure SNP vTPM attestation evidence.
 pub async fn verify_evidence(
     evidence: &AzSnpEvidence,
@@ -95,7 +74,7 @@ pub async fn verify_evidence(
     tpm_common::verify_tpm_pcrs(&tpm_msg, &tpm_pcrs)?;
 
     // HCL binding
-    verify_hcl_var_data_binding(&snp_report, &hcl.var_data)?;
+    tpm_common::verify_hcl_var_data_binding(snp_report.report_data.as_ref(), &hcl.var_data)?;
 
     // VCEK/VLEK validation against bundled AMD CA chain
     let is_vlek = crate::platforms::snp::verify::is_vlek_cert(&vcek_der)?;
@@ -131,6 +110,9 @@ pub async fn verify_evidence(
         match crate::platforms::snp::verify::verify_cert_chain(ark_der, intermediate_der, &vcek_der)
         {
             Ok(()) => {
+                if gens.len() > 1 {
+                    log::warn!("az-snp: processor generation fallback matched {:?}", gen);
+                }
                 matched_gen = Some(*gen);
                 break;
             }
@@ -149,6 +131,10 @@ pub async fn verify_evidence(
     // CRL revocation check (if provider supplies CRL data)
     if let Some(crl_der) = cert_provider.get_snp_crl(matched_gen).await? {
         crate::platforms::snp::verify::check_vcek_not_revoked(&vcek_der, &crl_der)?;
+    } else {
+        log::warn!(
+            "az-snp: SNP CRL data not available from cert provider; skipping revocation check"
+        );
     }
 
     // SNP report signature against VCEK
@@ -169,30 +155,7 @@ pub async fn verify_evidence(
 
     // Minimum TCB enforcement (including FMC for Turin)
     if let Some(ref min_tcb) = params.min_tcb {
-        let tcb = &snp_report.reported_tcb;
-        let fmc_below = match (min_tcb.fmc, tcb.fmc) {
-            (Some(min_fmc), Some(report_fmc)) => report_fmc < min_fmc,
-            (Some(_), None) => true, // min requires FMC but report doesn't have it
-            _ => false,
-        };
-        if tcb.bootloader < min_tcb.bootloader
-            || tcb.tee < min_tcb.tee
-            || tcb.snp < min_tcb.snp
-            || tcb.microcode < min_tcb.microcode
-            || fmc_below
-        {
-            return Err(AttestationError::TcbMismatch(format!(
-                "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
-                tcb.bootloader,
-                tcb.tee,
-                tcb.snp,
-                tcb.microcode,
-                min_tcb.bootloader,
-                min_tcb.tee,
-                min_tcb.snp,
-                min_tcb.microcode,
-            )));
-        }
+        crate::platforms::snp::verify::enforce_min_tcb(&snp_report.reported_tcb, min_tcb)?;
     }
 
     // Init data and result
@@ -314,7 +277,10 @@ mod tests {
 
         assert!(
             crate::utils::constant_time_eq(
-                snp_report.report_data.get(..32).expect("report_data >= 32 bytes"),
+                snp_report
+                    .report_data
+                    .get(..32)
+                    .expect("report_data >= 32 bytes"),
                 &var_data_hash
             ),
             "HCL var_data binding: report_data[..32] == SHA-256(null-trimmed var_data)"
