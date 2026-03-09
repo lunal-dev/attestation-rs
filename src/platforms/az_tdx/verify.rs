@@ -9,7 +9,16 @@ use super::evidence::AzTdxEvidence;
 
 fn verify_hcl_var_data_binding(tdx_quote: &tdx_verify::TdxQuote, var_data: &[u8]) -> Result<()> {
     let hash = crate::utils::sha256(var_data);
-    if !crate::utils::constant_time_eq(&tdx_quote.body.report_data[..32], &hash) {
+    let report_data_prefix = tdx_quote
+        .body
+        .report_data
+        .get(..32)
+        .ok_or_else(|| {
+            AttestationError::QuoteParseFailed(
+                "TDX quote report_data shorter than 32 bytes".to_string(),
+            )
+        })?;
+    if !crate::utils::constant_time_eq(report_data_prefix, &hash) {
         return Err(AttestationError::SignatureVerificationFailed(
             "HCL var_data binding failed: TDX quote report_data != SHA-256(var_data)".to_string(),
         ));
@@ -89,11 +98,14 @@ pub async fn verify_evidence(
         let body_end = dcap::compute_body_end(&td_quote_bytes, tdx_quote.quote_version)?;
         let auth = dcap::parse_auth_data(&td_quote_bytes, body_end)?;
 
+        // Preparse PCK cert chain PEM once for reuse across checks
+        let pck_der_certs = dcap::parse_pem_to_der(auth.pck_cert_chain_pem)?;
+
         // PCK CRL revocation check (leaf + intermediate CA)
         provider.check_pck_revocation(auth.pck_cert_chain_pem).await?;
 
         // TCB status evaluation
-        let fmspc = dcap::extract_fmspc_from_pck(auth.pck_cert_chain_pem)?;
+        let fmspc = dcap::extract_fmspc_from_pck_der(&pck_der_certs)?;
         let tcb_info_json = provider.get_tcb_info(&fmspc).await?;
         let tcb_signing_chain = provider.get_tcb_signing_chain().await?;
         let status = dcap::evaluate_tcb_status(

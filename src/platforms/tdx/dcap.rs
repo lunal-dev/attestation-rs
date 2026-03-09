@@ -437,6 +437,17 @@ fn verify_cert_validity_period(der: &[u8], label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parse a PEM-encoded certificate chain into individual DER-encoded blobs.
+///
+/// Use this to preparse PEM data once, then pass the result to `_from_der`
+/// variants of functions like [`extract_fmspc_from_pck_der`],
+/// [`determine_ca_type_from_der`], etc.
+pub fn parse_pem_to_der(pem_data: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let pem_str = std::str::from_utf8(pem_data)
+        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {e}")))?;
+    split_pem_to_der(pem_str)
+}
+
 /// Split a PEM string into individual DER-encoded certificate blobs.
 fn split_pem_to_der(pem_str: &str) -> Result<Vec<Vec<u8>>> {
     let mut certs = Vec::new();
@@ -519,11 +530,13 @@ const FMSPC_OID: &[u64] = &[1, 2, 840, 113741, 1, 13, 1, 4];
 /// The FMSPC is a 6-byte value embedded in the SGX extensions of the PCK certificate,
 /// under OID 1.2.840.113741.1.13.1.4. It identifies the platform for TCB Info lookup.
 pub fn extract_fmspc_from_pck(pem_data: &[u8]) -> Result<String> {
-    let pem_str = std::str::from_utf8(pem_data)
-        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
+    let der_certs = parse_pem_to_der(pem_data)?;
+    extract_fmspc_from_pck_der(&der_certs)
+}
 
-    // Get just the first (leaf) cert
-    let der_certs = split_pem_to_der(pem_str)?;
+/// Extract the FMSPC from pre-parsed DER certificate chain.
+/// See [`extract_fmspc_from_pck`] for details.
+pub fn extract_fmspc_from_pck_der(der_certs: &[Vec<u8>]) -> Result<String> {
     if der_certs.is_empty() {
         return Err(AttestationError::CertChainError(
             "no certificates found in PEM data".into(),
@@ -634,10 +647,11 @@ struct SvnComponent {
 /// The PCK certificate contains 16 TCB component SVNs under OID
 /// 1.2.840.113741.1.13.1.2.{1..16} and a PCESVN under 1.2.840.113741.1.13.1.2.17.
 fn extract_pck_tcb_components(pem_data: &[u8]) -> Result<([u8; 16], u16)> {
-    let pem_str = std::str::from_utf8(pem_data)
-        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
+    let der_certs = parse_pem_to_der(pem_data)?;
+    extract_pck_tcb_components_from_der(&der_certs)
+}
 
-    let der_certs = split_pem_to_der(pem_str)?;
+fn extract_pck_tcb_components_from_der(der_certs: &[Vec<u8>]) -> Result<([u8; 16], u16)> {
     if der_certs.is_empty() {
         return Err(AttestationError::CertChainError(
             "no certificates found".into(),
@@ -944,9 +958,13 @@ fn parse_tcb_status(s: &str) -> Result<TdxTcbStatus> {
 /// or "Intel SGX PCK Processor CA". The CA type is needed to fetch the
 /// correct CRL from Intel PCS.
 pub fn determine_ca_type(pck_pem: &[u8]) -> Result<String> {
-    let pem_str = std::str::from_utf8(pck_pem)
-        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
-    let der_certs = split_pem_to_der(pem_str)?;
+    let der_certs = parse_pem_to_der(pck_pem)?;
+    determine_ca_type_from_der(&der_certs)
+}
+
+/// Determine the CA type from pre-parsed DER certificate chain.
+/// See [`determine_ca_type`] for details.
+pub fn determine_ca_type_from_der(der_certs: &[Vec<u8>]) -> Result<String> {
     if der_certs.is_empty() {
         return Err(AttestationError::CertChainError(
             "no certificates found".into(),
@@ -1163,10 +1181,16 @@ pub fn verify_qe_identity(
 /// `pck_pem`: PCK cert chain PEM data (leaf, intermediate, root).
 /// `root_ca_crl_der`: DER-encoded Root CA CRL from Intel PCS.
 pub fn check_intermediate_ca_revocation(pck_pem: &[u8], root_ca_crl_der: &[u8]) -> Result<()> {
-    let pem_str = std::str::from_utf8(pck_pem)
-        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
+    let der_certs = parse_pem_to_der(pck_pem)?;
+    check_intermediate_ca_revocation_from_der(&der_certs, root_ca_crl_der)
+}
 
-    let der_certs = split_pem_to_der(pem_str)?;
+/// Check intermediate CA revocation from pre-parsed DER certificate chain.
+/// See [`check_intermediate_ca_revocation`] for details.
+pub fn check_intermediate_ca_revocation_from_der(
+    der_certs: &[Vec<u8>],
+    root_ca_crl_der: &[u8],
+) -> Result<()> {
     if der_certs.len() < 2 {
         return Err(AttestationError::CertChainError(
             "need at least 2 certs to check intermediate CA revocation".into(),
@@ -1199,10 +1223,13 @@ pub fn check_intermediate_ca_revocation(pck_pem: &[u8], root_ca_crl_der: &[u8]) 
 /// `pck_pem`: PCK cert chain PEM data.
 /// `crl_der`: DER-encoded CRL (from Intel PCS PCK CRL endpoint).
 pub fn check_cert_revocation(pck_pem: &[u8], crl_der: &[u8]) -> Result<()> {
-    let pem_str = std::str::from_utf8(pck_pem)
-        .map_err(|e| AttestationError::CertChainError(format!("PEM not UTF-8: {}", e)))?;
+    let der_certs = parse_pem_to_der(pck_pem)?;
+    check_cert_revocation_from_der(&der_certs, crl_der)
+}
 
-    let der_certs = split_pem_to_der(pem_str)?;
+/// Check PCK leaf revocation from pre-parsed DER certificate chain.
+/// See [`check_cert_revocation`] for details.
+pub fn check_cert_revocation_from_der(der_certs: &[Vec<u8>], crl_der: &[u8]) -> Result<()> {
     if der_certs.is_empty() {
         return Err(AttestationError::CertChainError(
             "no certificates found".into(),

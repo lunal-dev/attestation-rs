@@ -33,7 +33,7 @@ pub mod types;
 pub mod utils;
 
 pub use collateral::{
-    snp_crl_url, CertProvider, DefaultCertProvider, DefaultTdxCollateralProvider,
+    snp_crl_url, CertProvider, DefaultCertProvider, DefaultTdxCollateralProvider, HttpTimeouts,
     TdxCollateralProvider, AMD_KDS_VCEK_BASE, AMD_KDS_VLEK_BASE, INTEL_CERTS_BASE,
     INTEL_PCS_V4_BASE, INTEL_QE_IDENTITY_URL, INTEL_ROOT_CA_CRL_URL,
 };

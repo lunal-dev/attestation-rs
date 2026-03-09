@@ -31,14 +31,32 @@ pub fn snp_crl_url(processor_gen: ProcessorGeneration) -> String {
     format!("{}/{}/crl", AMD_KDS_VCEK_BASE, processor_gen.product_name())
 }
 
-/// HTTP request timeout (total).
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default HTTP request timeout (total).
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// HTTP connection timeout.
-const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default HTTP connection timeout.
+const DEFAULT_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum allowed HTTP response body size (5 MiB).
 const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024;
+
+/// Configuration for HTTP client timeouts.
+#[derive(Debug, Clone)]
+pub struct HttpTimeouts {
+    /// Total HTTP request timeout. Default: 30s.
+    pub request_timeout: Duration,
+    /// TCP connection timeout. Default: 10s.
+    pub connect_timeout: Duration,
+}
+
+impl Default for HttpTimeouts {
+    fn default() -> Self {
+        Self {
+            request_timeout: DEFAULT_HTTP_TIMEOUT,
+            connect_timeout: DEFAULT_HTTP_CONNECT_TIMEOUT,
+        }
+    }
+}
 
 /// Trait for providing platform vendor certificates.
 /// The library ships a default impl that does HTTP fetch with in-memory caching.
@@ -89,11 +107,16 @@ const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600); // 
 
 impl DefaultCertProvider {
     pub fn new() -> Self {
+        Self::with_timeouts(HttpTimeouts::default())
+    }
+
+    /// Create a new provider with custom HTTP timeouts.
+    pub fn with_timeouts(timeouts: HttpTimeouts) -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             client: reqwest::Client::builder()
-                .timeout(HTTP_TIMEOUT)
-                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .timeout(timeouts.request_timeout)
+                .connect_timeout(timeouts.connect_timeout)
                 .build()
                 .expect("failed to build HTTP client"),
             cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
@@ -158,58 +181,63 @@ impl DefaultCertProvider {
     }
 }
 
+/// Read response body with size limit enforcement.
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_response_with_limit(response: reqwest::Response) -> Result<Vec<u8>> {
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_RESPONSE_SIZE {
+            return Err(crate::error::AttestationError::CertFetchError(format!(
+                "response too large: Content-Length {len} exceeds {MAX_RESPONSE_SIZE} byte limit",
+            )));
+        }
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| {
+            crate::error::AttestationError::CertFetchError(format!("read body: {e}"))
+        })?
+        .to_vec();
+
+    if bytes.len() > MAX_RESPONSE_SIZE {
+        let len = bytes.len();
+        return Err(crate::error::AttestationError::CertFetchError(format!(
+            "response body too large: {len} bytes exceeds {MAX_RESPONSE_SIZE} byte limit",
+        )));
+    }
+
+    Ok(bytes)
+}
+
+/// Send a GET request and return the response with status check.
+#[cfg(not(target_arch = "wasm32"))]
+async fn send_get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response> {
+    client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| {
+            crate::error::AttestationError::CertFetchError(format!("HTTP request: {e}"))
+        })?
+        .error_for_status()
+        .map_err(|e| {
+            crate::error::AttestationError::CertFetchError(format!("HTTP status: {e}"))
+        })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl DefaultCertProvider {
     /// Fetch a certificate from AMD KDS, with cache lookup first.
     async fn fetch_cert(&self, url: &str) -> Result<Vec<u8>> {
-        // Try cache first
         if let Some(cached) = self.get_cached(url) {
             return Ok(cached);
         }
 
-        // Fetch from network
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("HTTP request: {}", e))
-            })?
-            .error_for_status()
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
-            })?;
+        let response = send_get(&self.client, url).await?;
+        let bytes = read_response_with_limit(response).await?;
 
-        // Check Content-Length header before reading body
-        if let Some(len) = response.content_length() {
-            if len as usize > MAX_RESPONSE_SIZE {
-                return Err(crate::error::AttestationError::CertFetchError(format!(
-                    "response too large: Content-Length {} exceeds {} byte limit",
-                    len, MAX_RESPONSE_SIZE
-                )));
-            }
-        }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
-            })?
-            .to_vec();
-
-        if bytes.len() > MAX_RESPONSE_SIZE {
-            return Err(crate::error::AttestationError::CertFetchError(format!(
-                "response body too large: {} bytes exceeds {} byte limit",
-                bytes.len(),
-                MAX_RESPONSE_SIZE
-            )));
-        }
-
-        // Cache the result
         self.set_cached(url.to_string(), bytes.clone());
-
         Ok(bytes)
     }
 }
@@ -366,12 +394,14 @@ pub trait TdxCollateralProvider: Send + Sync {
     /// and checks both the PCK leaf and Intermediate CA certificates.
     /// Override to use pre-cached CRL data in a service context.
     async fn check_pck_revocation(&self, pck_cert_chain_pem: &[u8]) -> Result<()> {
-        let ca_type = crate::platforms::tdx::dcap::determine_ca_type(pck_cert_chain_pem)?;
+        // Preparse PEM once to avoid redundant parsing across multiple checks
+        let der_certs = crate::platforms::tdx::dcap::parse_pem_to_der(pck_cert_chain_pem)?;
+        let ca_type = crate::platforms::tdx::dcap::determine_ca_type_from_der(&der_certs)?;
         let pck_crl_der = self.get_pck_crl(&ca_type).await?;
-        crate::platforms::tdx::dcap::check_cert_revocation(pck_cert_chain_pem, &pck_crl_der)?;
+        crate::platforms::tdx::dcap::check_cert_revocation_from_der(&der_certs, &pck_crl_der)?;
         let root_crl_der = self.get_root_ca_crl().await?;
-        crate::platforms::tdx::dcap::check_intermediate_ca_revocation(
-            pck_cert_chain_pem,
+        crate::platforms::tdx::dcap::check_intermediate_ca_revocation_from_der(
+            &der_certs,
             &root_crl_der,
         )?;
         Ok(())
@@ -387,11 +417,16 @@ pub struct DefaultTdxCollateralProvider {
 
 impl DefaultTdxCollateralProvider {
     pub fn new() -> Self {
+        Self::with_timeouts(HttpTimeouts::default())
+    }
+
+    /// Create a new provider with custom HTTP timeouts.
+    pub fn with_timeouts(timeouts: HttpTimeouts) -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             client: reqwest::Client::builder()
-                .timeout(HTTP_TIMEOUT)
-                .connect_timeout(HTTP_CONNECT_TIMEOUT)
+                .timeout(timeouts.request_timeout)
+                .connect_timeout(timeouts.connect_timeout)
                 .build()
                 .expect("failed to build HTTP client"),
             cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
@@ -449,43 +484,8 @@ impl DefaultTdxCollateralProvider {
             return Ok(cached);
         }
 
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("HTTP request: {}", e))
-            })?
-            .error_for_status()
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
-            })?;
-
-        if let Some(len) = response.content_length() {
-            if len as usize > MAX_RESPONSE_SIZE {
-                return Err(crate::error::AttestationError::CertFetchError(format!(
-                    "response too large: Content-Length {} exceeds {} byte limit",
-                    len, MAX_RESPONSE_SIZE
-                )));
-            }
-        }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
-            })?
-            .to_vec();
-
-        if bytes.len() > MAX_RESPONSE_SIZE {
-            return Err(crate::error::AttestationError::CertFetchError(format!(
-                "response body too large: {} bytes exceeds {} byte limit",
-                bytes.len(),
-                MAX_RESPONSE_SIZE
-            )));
-        }
+        let response = send_get(&self.client, url).await?;
+        let bytes = read_response_with_limit(response).await?;
 
         self.set_cached(url.to_string(), bytes.clone());
         Ok(bytes)
@@ -501,33 +501,12 @@ impl DefaultTdxCollateralProvider {
         header_name: &str,
         chain_cache_key: &str,
     ) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
-        // Check body cache
         if let Some(cached_body) = self.get_cached(url) {
             let chain = self.get_cached(chain_cache_key);
             return Ok((cached_body, chain));
         }
 
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("HTTP request: {}", e))
-            })?
-            .error_for_status()
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("HTTP status: {}", e))
-            })?;
-
-        if let Some(len) = response.content_length() {
-            if len as usize > MAX_RESPONSE_SIZE {
-                return Err(crate::error::AttestationError::CertFetchError(format!(
-                    "response too large: Content-Length {} exceeds {} byte limit",
-                    len, MAX_RESPONSE_SIZE
-                )));
-            }
-        }
+        let response = send_get(&self.client, url).await?;
 
         // Extract signing chain from response header (URL-encoded PEM)
         let chain_pem = response
@@ -536,21 +515,7 @@ impl DefaultTdxCollateralProvider {
             .and_then(|v| v.to_str().ok())
             .map(|v| percent_decode(v).into_bytes());
 
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                crate::error::AttestationError::CertFetchError(format!("read body: {}", e))
-            })?
-            .to_vec();
-
-        if body.len() > MAX_RESPONSE_SIZE {
-            return Err(crate::error::AttestationError::CertFetchError(format!(
-                "response body too large: {} bytes exceeds {} byte limit",
-                body.len(),
-                MAX_RESPONSE_SIZE
-            )));
-        }
+        let body = read_response_with_limit(response).await?;
 
         self.set_cached(url.to_string(), body.clone());
         if let Some(ref chain) = chain_pem {

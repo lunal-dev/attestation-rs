@@ -64,6 +64,11 @@ pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
 }
 
 /// Compare two byte slices in constant time.
+///
+/// **Timing note:** The length check early-return leaks whether the lengths
+/// differ, but this is necessary because `ct_eq` panics on mismatched lengths.
+/// In all call sites the expected length is either fixed or publicly known
+/// (e.g. 32-byte hashes, 64-byte report_data), so the length is not secret.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
