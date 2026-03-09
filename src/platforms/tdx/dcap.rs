@@ -469,6 +469,12 @@ fn split_pem_to_der(pem_str: &str) -> Result<Vec<Vec<u8>>> {
         }
     }
 
+    if certs.is_empty() {
+        return Err(AttestationError::CertChainError(
+            "PEM data contains no certificate blocks".into(),
+        ));
+    }
+
     Ok(certs)
 }
 
@@ -714,7 +720,7 @@ fn parse_tcb_sequence(obj: &x509_parser::der_parser::ber::BerObject) -> Result<(
                     // PCESVN: 1.2.840.113741.1.13.1.2.17
                     if let Some(suffix) = oid_str.strip_prefix("1.2.840.113741.1.13.1.2.") {
                         if let Ok(idx) = suffix.parse::<usize>() {
-                            let val = extract_integer_value(&inner[1]);
+                            let val = extract_integer_value(&inner[1])?;
                             if (1..=16).contains(&idx) {
                                 compsvn[idx - 1] = val as u8;
                             } else if idx == 17 {
@@ -731,23 +737,25 @@ fn parse_tcb_sequence(obj: &x509_parser::der_parser::ber::BerObject) -> Result<(
 }
 
 /// Extract an integer value from a BER object (handles INTEGER and OCTET STRING).
-fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> u64 {
+fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> Result<u64> {
     match &obj.content {
         BerObjectContent::Integer(bytes) => {
             let mut val: u64 = 0;
             for &b in *bytes {
                 val = (val << 8) | b as u64;
             }
-            val
+            Ok(val)
         }
         BerObjectContent::OctetString(bytes) => {
             let mut val: u64 = 0;
             for &b in *bytes {
                 val = (val << 8) | b as u64;
             }
-            val
+            Ok(val)
         }
-        _ => 0,
+        _ => Err(AttestationError::CertChainError(
+            "unexpected ASN.1 type in TCB extension (expected INTEGER or OCTET STRING)".into(),
+        )),
     }
 }
 
@@ -816,6 +824,8 @@ pub fn evaluate_tcb_status(
 ) -> Result<DcapVerificationStatus> {
     if let Some(certs_pem) = signing_certs_pem {
         verify_tcb_info_signature(tcb_info_json, certs_pem)?;
+    } else {
+        log::warn!("TCB Info signing chain not available; skipping signature verification on TCB collateral");
     }
 
     let wrapper: TcbInfoWrapper = serde_json::from_slice(tcb_info_json)
@@ -929,7 +939,7 @@ fn days_before_month(month: u64, year: u64) -> u64 {
     let m = (month.saturating_sub(1) as usize).min(11);
     let mut d = DAYS[m];
     // Leap year adjustment for months after February
-    if month > 2 && year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) {
+    if month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
         d += 1;
     }
     d
@@ -976,8 +986,13 @@ pub fn determine_ca_type_from_der(der_certs: &[Vec<u8>]) -> Result<String> {
     let issuer = format!("{}", cert.issuer());
     if issuer.contains("Platform") {
         Ok("platform".to_string())
-    } else {
+    } else if issuer.contains("Processor") {
         Ok("processor".to_string())
+    } else {
+        Err(AttestationError::CertChainError(format!(
+            "unrecognized PCK issuer CA type: {}",
+            issuer
+        )))
     }
 }
 
@@ -1073,6 +1088,8 @@ pub fn verify_qe_identity(
                     e
                 ))
             })?;
+    } else {
+        log::warn!("QE Identity signing chain not available; skipping signature verification on QE Identity collateral");
     }
 
     // Parse the identity fields
@@ -1119,15 +1136,19 @@ pub fn verify_qe_identity(
     let miscselect_mask = hex::decode(&identity.miscselect_mask).map_err(|e| {
         AttestationError::CertChainError(format!("QE Identity MISCSELECT_MASK hex decode: {}", e))
     })?;
-    if expected_miscselect.len() == 4 && miscselect_mask.len() == 4 {
-        for i in 0..4 {
-            if (qe_miscselect[i] & miscselect_mask[i])
-                != (expected_miscselect[i] & miscselect_mask[i])
-            {
-                return Err(AttestationError::CertChainError(
-                    "QE MISCSELECT does not match Intel QE Identity (masked)".into(),
-                ));
-            }
+    if expected_miscselect.len() != 4 || miscselect_mask.len() != 4 {
+        return Err(AttestationError::CertChainError(format!(
+            "QE Identity MISCSELECT/mask unexpected length: {}/{}",
+            expected_miscselect.len(),
+            miscselect_mask.len()
+        )));
+    }
+    for i in 0..4 {
+        if (qe_miscselect[i] & miscselect_mask[i]) != (expected_miscselect[i] & miscselect_mask[i])
+        {
+            return Err(AttestationError::CertChainError(
+                "QE MISCSELECT does not match Intel QE Identity (masked)".into(),
+            ));
         }
     }
 
@@ -1138,15 +1159,19 @@ pub fn verify_qe_identity(
     let attributes_mask = hex::decode(&identity.attributes_mask).map_err(|e| {
         AttestationError::CertChainError(format!("QE Identity ATTRIBUTES_MASK hex decode: {}", e))
     })?;
-    if expected_attributes.len() == 16 && attributes_mask.len() == 16 {
-        for i in 0..16 {
-            if (qe_attributes[i] & attributes_mask[i])
-                != (expected_attributes[i] & attributes_mask[i])
-            {
-                return Err(AttestationError::CertChainError(
-                    "QE ATTRIBUTES does not match Intel QE Identity (masked)".into(),
-                ));
-            }
+    if expected_attributes.len() != 16 || attributes_mask.len() != 16 {
+        return Err(AttestationError::CertChainError(format!(
+            "QE Identity ATTRIBUTES/mask unexpected length: {}/{}",
+            expected_attributes.len(),
+            attributes_mask.len()
+        )));
+    }
+    for i in 0..16 {
+        if (qe_attributes[i] & attributes_mask[i]) != (expected_attributes[i] & attributes_mask[i])
+        {
+            return Err(AttestationError::CertChainError(
+                "QE ATTRIBUTES does not match Intel QE Identity (masked)".into(),
+            ));
         }
     }
 
