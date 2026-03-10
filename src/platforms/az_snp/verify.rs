@@ -27,7 +27,7 @@ pub async fn verify_evidence(
 
     // Decode
     let hcl_report_bytes = decode_base64url(&evidence.hcl_report)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("HCL report base64: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("HCL report base64: {e}")))?;
     let hcl = tpm_common::parse_hcl_report(&hcl_report_bytes)?;
     if hcl.report_type != tpm_common::HCL_REPORT_TYPE_SNP {
         return Err(AttestationError::QuoteParseFailed(format!(
@@ -37,7 +37,7 @@ pub async fn verify_evidence(
         )));
     }
     let vcek_der = decode_base64url(&evidence.vcek)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("VCEK base64: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("VCEK base64: {e}")))?;
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
     let snp_report = crate::platforms::snp::verify::parse_report(&hcl.tee_report)?;
 
@@ -86,9 +86,7 @@ pub async fn verify_evidence(
         None => {
             log::warn!(
                 "could not determine processor generation from CPUID \
-                 (family=0x{:02X}, model=0x{:02X}); trying all known generations",
-                cpuid_fam_id,
-                cpuid_mod_id
+                 (family=0x{cpuid_fam_id:02X}, model=0x{cpuid_mod_id:02X}); trying all known generations"
             );
             vec![
                 ProcessorGeneration::Milan,
@@ -111,13 +109,13 @@ pub async fn verify_evidence(
         {
             Ok(()) => {
                 if gens.len() > 1 {
-                    log::warn!("az-snp: processor generation fallback matched {:?}", gen);
+                    log::warn!("az-snp: processor generation fallback matched {gen:?}");
                 }
                 matched_gen = Some(*gen);
                 break;
             }
             Err(e) => {
-                log::debug!("VEK chain check failed for {:?}: {}", gen, e);
+                log::debug!("VEK chain check failed for {gen:?}: {e}");
                 last_err = Some(e);
             }
         }

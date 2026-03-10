@@ -74,13 +74,13 @@ impl QuoteHeader {
 
         let version = data
             .pread_with::<u16>(0, scroll::LE)
-            .map_err(|e| AttestationError::QuoteParseFailed(format!("version: {}", e)))?;
+            .map_err(|e| AttestationError::QuoteParseFailed(format!("version: {e}")))?;
         let att_key_type = data
             .pread_with::<u16>(2, scroll::LE)
-            .map_err(|e| AttestationError::QuoteParseFailed(format!("att_key_type: {}", e)))?;
+            .map_err(|e| AttestationError::QuoteParseFailed(format!("att_key_type: {e}")))?;
         let tee_type = data
             .pread_with::<u32>(4, scroll::LE)
-            .map_err(|e| AttestationError::QuoteParseFailed(format!("tee_type: {}", e)))?;
+            .map_err(|e| AttestationError::QuoteParseFailed(format!("tee_type: {e}")))?;
 
         let mut reserved = [0u8; 2];
         reserved.copy_from_slice(&data[8..10]);
@@ -215,10 +215,10 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
 
             let body_type = data
                 .pread_with::<u16>(QUOTE_HEADER_SIZE, scroll::LE)
-                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 type: {}", e)))?;
+                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 type: {e}")))?;
             let body_size = data
                 .pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
-                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 size: {}", e)))?
+                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 size: {e}")))?
                 as usize;
 
             // Validate body_size matches expected size for the body type
@@ -229,8 +229,7 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
             };
             if expected_body_size > 0 && body_size != expected_body_size {
                 return Err(AttestationError::QuoteParseFailed(format!(
-                    "v5 body_size {} does not match expected {} for type {}",
-                    body_size, expected_body_size, body_type
+                    "v5 body_size {body_size} does not match expected {expected_body_size} for type {body_type}"
                 )));
             }
 
@@ -250,8 +249,7 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
                 3 => QuoteVersion::V5Tdx15, // TDX 1.5
                 _ => {
                     return Err(AttestationError::QuoteParseFailed(format!(
-                        "unknown v5 body type: {}",
-                        body_type
+                        "unknown v5 body type: {body_type}"
                     )));
                 }
             };
@@ -263,8 +261,7 @@ pub fn parse_tdx_quote(data: &[u8]) -> Result<TdxQuote> {
             })
         }
         v => Err(AttestationError::QuoteParseFailed(format!(
-            "unsupported quote version: {}",
-            v
+            "unsupported quote version: {v}"
         ))),
     }
 }
@@ -291,13 +288,12 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
 
     let sig_data_len = quote_bytes
         .pread_with::<u32>(body_end, scroll::LE)
-        .map_err(|e| AttestationError::QuoteParseFailed(format!("sig_data_len: {}", e)))?
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("sig_data_len: {e}")))?
         as usize;
 
     if sig_data_len < 128 {
         return Err(AttestationError::QuoteParseFailed(format!(
-            "sig_data_len too small: {} (need at least 128 for sig + key)",
-            sig_data_len
+            "sig_data_len too small: {sig_data_len} (need at least 128 for sig + key)"
         )));
     }
 
@@ -325,7 +321,7 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
     let signature =
         Signature::from_scalars(p256::FieldBytes::from(r_arr), p256::FieldBytes::from(s_arr))
             .map_err(|e| {
-                AttestationError::SignatureVerificationFailed(format!("construct P-256 sig: {}", e))
+                AttestationError::SignatureVerificationFailed(format!("construct P-256 sig: {e}"))
             })?;
 
     // Construct the verifying key from the uncompressed public key point
@@ -335,7 +331,7 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
     uncompressed.extend_from_slice(key_y);
 
     let verifying_key = VerifyingKey::from_sec1_bytes(&uncompressed).map_err(|e| {
-        AttestationError::SignatureVerificationFailed(format!("parse attestation key: {}", e))
+        AttestationError::SignatureVerificationFailed(format!("parse attestation key: {e}"))
     })?;
 
     // Verify: the signature is over the raw SHA-256 hash (pre-hashed)
@@ -343,8 +339,7 @@ pub fn verify_quote_signature(quote_bytes: &[u8], quote: &TdxQuote) -> Result<bo
     match verifying_key.verify_prehash(&hash, &signature) {
         Ok(()) => Ok(true),
         Err(e) => Err(AttestationError::SignatureVerificationFailed(format!(
-            "ECDSA P-256 DCAP: {}",
-            e
+            "ECDSA P-256 DCAP: {e}"
         ))),
     }
 }
@@ -365,7 +360,7 @@ pub async fn verify_evidence(
     // 1. Decode the quote
     let quote_bytes = BASE64
         .decode(&evidence.quote)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("quote base64: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("quote base64: {e}")))?;
 
     // 2. Parse the quote
     let quote = parse_tdx_quote(&quote_bytes)?;

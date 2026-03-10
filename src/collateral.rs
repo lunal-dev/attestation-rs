@@ -165,7 +165,7 @@ impl DefaultCertProvider {
         );
         // Turin processors have an additional FMC SPL parameter
         if let Some(fmc) = tcb.fmc {
-            url.push_str(&format!("&fmcSPL={:02}", fmc));
+            url.push_str(&format!("&fmcSPL={fmc:02}"));
         }
         url
     }
@@ -258,7 +258,7 @@ impl CertProvider for DefaultCertProvider {
         // The cert chain response is PEM with two certificates (ARK + ASK)
         // Parse them into DER
         let pem_str = String::from_utf8(pem_data).map_err(|e| {
-            crate::error::AttestationError::CertFetchError(format!("cert chain not UTF-8: {}", e))
+            crate::error::AttestationError::CertFetchError(format!("cert chain not UTF-8: {e}"))
         })?;
 
         let mut certs = Vec::new();
@@ -275,8 +275,7 @@ impl CertProvider for DefaultCertProvider {
                     .decode(current.trim())
                     .map_err(|e| {
                         crate::error::AttestationError::CertFetchError(format!(
-                            "cert base64: {}",
-                            e
+                            "cert base64: {e}"
                         ))
                     })?;
                 certs.push(der);
@@ -451,7 +450,7 @@ impl DefaultTdxCollateralProvider {
 
     /// Intel PCS v4 TDX TCB Info URL.
     pub fn tcb_info_url(fmspc: &str) -> String {
-        format!("{}/tcb?fmspc={}", INTEL_PCS_V4_BASE, fmspc)
+        format!("{INTEL_PCS_V4_BASE}/tcb?fmspc={fmspc}")
     }
 
     /// Intel PCS v4 QE Identity URL.
@@ -466,7 +465,7 @@ impl DefaultTdxCollateralProvider {
 
     /// Intel PCS v4 PCK CRL URL.
     pub fn pck_crl_url(ca: &str) -> String {
-        format!("{}/pckcrl?ca={}", INTEL_PCS_V4_BASE, ca)
+        format!("{INTEL_PCS_V4_BASE}/pckcrl?ca={ca}")
     }
 }
 

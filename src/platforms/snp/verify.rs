@@ -40,11 +40,11 @@ pub async fn verify_evidence(
     // 1. Decode the attestation report
     let report_bytes = BASE64
         .decode(&evidence.attestation_report)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("base64 decode: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("base64 decode: {e}")))?;
 
     // 2. Parse with sev crate
     let report = AttestationReport::from_bytes(&report_bytes)
-        .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {}", e)))?;
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {e}")))?;
 
     // 3. Version check
     if report.version < MIN_REPORT_VERSION || report.version > MAX_REPORT_VERSION {
@@ -77,8 +77,7 @@ pub async fn verify_evidence(
     };
     let processor_gen = ProcessorGeneration::from_cpuid(cpuid_fam, cpuid_mod).ok_or_else(|| {
         AttestationError::QuoteParseFailed(format!(
-            "unknown processor: family=0x{:02X}, model=0x{:02X}",
-            cpuid_fam, cpuid_mod
+            "unknown processor: family=0x{cpuid_fam:02X}, model=0x{cpuid_mod:02X}"
         ))
     })?;
 
@@ -112,10 +111,10 @@ pub async fn verify_evidence(
 
     // 7. Verify report signature against VEK
     let vek = Certificate::from_der(&vcek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("VEK to sev Certificate: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("VEK to sev Certificate: {e}")))?;
     (&vek, &report)
         .verify()
-        .map_err(|e| AttestationError::SignatureVerificationFailed(format!("{}", e)))?;
+        .map_err(|e| AttestationError::SignatureVerificationFailed(format!("{e}")))?;
 
     // 8. VMPL check
     if report.vmpl != 0 {
@@ -212,7 +211,7 @@ async fn resolve_vcek(
         // VCEK provided in evidence
         let vcek = BASE64
             .decode(&chain.vcek)
-            .map_err(|e| AttestationError::CertChainError(format!("VCEK base64: {}", e)))?;
+            .map_err(|e| AttestationError::CertChainError(format!("VCEK base64: {e}")))?;
         Ok(vcek)
     } else {
         // Guard: all-zeros chip_id means MASK_CHIP_ID was set, can't fetch from KDS
@@ -251,10 +250,10 @@ async fn resolve_vcek(
 /// Delegates to the sev crate's Verifiable trait.
 pub fn verify_cert_chain(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) -> Result<()> {
     let chain = Chain::from_der(ark_der, ask_der, vcek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("chain parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("chain parse: {e}")))?;
     chain
         .verify()
-        .map_err(|e| AttestationError::CertChainError(format!("chain verify: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("chain verify: {e}")))?;
     Ok(())
 }
 
@@ -262,19 +261,19 @@ pub fn verify_cert_chain(ark_der: &[u8], ask_der: &[u8], vcek_der: &[u8]) -> Res
 /// Delegates to the sev crate's Verifiable trait.
 pub fn verify_report_signature(report_bytes: &[u8], vcek_der: &[u8]) -> Result<()> {
     let report = AttestationReport::from_bytes(report_bytes)
-        .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {}", e)))?;
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {e}")))?;
     let vek = Certificate::from_der(vcek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("VCEK parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("VCEK parse: {e}")))?;
     (&vek, &report)
         .verify()
-        .map_err(|e| AttestationError::SignatureVerificationFailed(format!("{}", e)))?;
+        .map_err(|e| AttestationError::SignatureVerificationFailed(format!("{e}")))?;
     Ok(())
 }
 
 /// Verify a VEK (VCEK/VLEK) certificate's validity period (notBefore/notAfter).
 fn verify_vek_validity_period(vek_der: &[u8]) -> Result<()> {
     let (_, cert) = X509Certificate::from_der(vek_der).map_err(|e| {
-        AttestationError::CertChainError(format!("VEK x509 parse for validity: {}", e))
+        AttestationError::CertChainError(format!("VEK x509 parse for validity: {e}"))
     })?;
     let validity = cert.validity();
     let now = x509_parser::time::ASN1Time::now();
@@ -297,7 +296,7 @@ fn verify_vek_validity_period(vek_der: &[u8]) -> Result<()> {
 /// by examining its Common Name.
 pub(crate) fn is_vlek_cert(vek_der: &[u8]) -> Result<bool> {
     let (_, cert) = X509Certificate::from_der(vek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("VEK x509 parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("VEK x509 parse: {e}")))?;
     let cn = cert
         .subject()
         .iter_common_name()
@@ -307,7 +306,7 @@ pub(crate) fn is_vlek_cert(vek_der: &[u8]) -> Result<bool> {
         })?
         .as_str()
         .map_err(|e| {
-            AttestationError::CertChainError(format!("VEK Common Name is not valid UTF-8: {}", e))
+            AttestationError::CertChainError(format!("VEK Common Name is not valid UTF-8: {e}"))
         })?;
     Ok(cn.contains("VLEK"))
 }
@@ -351,7 +350,7 @@ fn get_oid_octets(ext_value: &[u8]) -> Option<&[u8]> {
 /// - For "VLEK" certificates: skips chip_id check, only validates TCB SPLs.
 pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()> {
     let (_, cert) = X509Certificate::from_der(vcek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse: {e}")))?;
 
     // Check common name to determine if this is VCEK or VLEK
     let cn = cert
@@ -363,7 +362,7 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         })?
         .as_str()
         .map_err(|e| {
-            AttestationError::CertChainError(format!("VCEK Common Name is not valid UTF-8: {}", e))
+            AttestationError::CertChainError(format!("VCEK Common Name is not valid UTF-8: {e}"))
         })?;
 
     let is_vcek = !cn.contains("VLEK");
@@ -406,17 +405,15 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
             .find(|e| e.oid.to_string() == oid_str)
             .ok_or_else(|| {
                 AttestationError::TcbMismatch(format!(
-                    "VCEK missing required OID extension: {}",
-                    name
+                    "VCEK missing required OID extension: {name}"
                 ))
             })?;
         let cert_val = get_oid_int(ext.value).ok_or_else(|| {
-            AttestationError::TcbMismatch(format!("VCEK {} OID has unparseable value", name))
+            AttestationError::TcbMismatch(format!("VCEK {name} OID has unparseable value"))
         })?;
         if cert_val != expected {
             return Err(AttestationError::TcbMismatch(format!(
-                "VCEK {} SPL {} does not match report {}",
-                name, cert_val, expected
+                "VCEK {name} SPL {cert_val} does not match report {expected}"
             )));
         }
     }
@@ -433,16 +430,14 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
             })?;
             if cert_val != fmc_expected {
                 return Err(AttestationError::TcbMismatch(format!(
-                    "VCEK fmc SPL {} does not match report {}",
-                    cert_val, fmc_expected
+                    "VCEK fmc SPL {cert_val} does not match report {fmc_expected}"
                 )));
             }
         } else if fmc_expected != 0 {
             // Non-zero FMC in the report but VCEK lacks the OID — the cert cannot
             // attest to the platform's FMC level, so reject.
             return Err(AttestationError::TcbMismatch(format!(
-                "report FMC SPL is {} but VCEK certificate lacks FMC OID extension",
-                fmc_expected
+                "report FMC SPL is {fmc_expected} but VCEK certificate lacks FMC OID extension"
             )));
         }
     }
@@ -464,11 +459,11 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
 pub fn check_vcek_not_revoked(vcek_der: &[u8], crl_der: &[u8], issuer_der: &[u8]) -> Result<()> {
     // 1. Parse the issuing CA cert to extract its public key
     let (_, issuer_cert) = X509Certificate::from_der(issuer_der)
-        .map_err(|e| AttestationError::CertChainError(format!("CRL issuer x509 parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("CRL issuer x509 parse: {e}")))?;
 
     // 2. Parse the CRL
     let (_, crl) = CertificateRevocationList::from_der(crl_der)
-        .map_err(|e| AttestationError::CertChainError(format!("AMD CRL parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("AMD CRL parse: {e}")))?;
 
     // 3. Verify CRL signature against the issuing CA's public key.
     // We use our own implementation because x509-parser's verify_signature
@@ -477,7 +472,7 @@ pub fn check_vcek_not_revoked(vcek_der: &[u8], crl_der: &[u8], issuer_der: &[u8]
 
     // 4. Check serial number against revocation list
     let (_, cert) = X509Certificate::from_der(vcek_der)
-        .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse for CRL: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse for CRL: {e}")))?;
     let cert_serial = cert.raw_serial();
 
     for revoked in crl.iter_revoked_certificates() {
@@ -500,18 +495,18 @@ pub fn check_vcek_not_revoked(vcek_der: &[u8], crl_der: &[u8], issuer_der: &[u8]
 /// x509-parser's `TbsCertList` does not expose raw bytes publicly.
 fn extract_tbs_from_crl_der(crl_der: &[u8]) -> Result<&[u8]> {
     let mut reader = der::SliceReader::new(crl_der)
-        .map_err(|e| AttestationError::CertChainError(format!("CRL DER: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("CRL DER: {e}")))?;
     // Skip past the outer SEQUENCE tag+length to reach its content
     let header = der::Header::decode(&mut reader)
-        .map_err(|e| AttestationError::CertChainError(format!("CRL DER header: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("CRL DER header: {e}")))?;
     header
         .tag
         .assert_eq(der::Tag::Sequence)
-        .map_err(|e| AttestationError::CertChainError(format!("CRL: expected SEQUENCE: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("CRL: expected SEQUENCE: {e}")))?;
     // First element inside the SEQUENCE is TBSCertList
     reader
         .tlv_bytes()
-        .map_err(|e| AttestationError::CertChainError(format!("CRL TBS extract: {}", e)))
+        .map_err(|e| AttestationError::CertChainError(format!("CRL TBS extract: {e}")))
 }
 
 /// Verify a CRL signature against the issuing CA certificate.
@@ -535,19 +530,18 @@ fn verify_crl_signature(
             // Milan ASK uses RSA 4096 with PSS SHA-384
             let spki_der = issuer_cert.public_key().raw;
             let rsa_pub = rsa::RsaPublicKey::from_public_key_der(spki_der).map_err(|e| {
-                AttestationError::CertChainError(format!("CRL issuer RSA key parse: {}", e))
+                AttestationError::CertChainError(format!("CRL issuer RSA key parse: {e}"))
             })?;
             // ALGORITHM: RSA-PSS SHA-384 verification. The AMD Milan ARK signs
             // CRLs with RSASSA-PSS using SHA-384 as both hash and MGF1 hash,
             // salt length = hash length (48 bytes).
             let verifying_key = rsa::pss::VerifyingKey::<sha2::Sha384>::new(rsa_pub);
             let sig = rsa::pss::Signature::try_from(sig_value).map_err(|e| {
-                AttestationError::CertChainError(format!("CRL RSA-PSS signature parse: {}", e))
+                AttestationError::CertChainError(format!("CRL RSA-PSS signature parse: {e}"))
             })?;
             verifying_key.verify(tbs_der, &sig).map_err(|e| {
                 AttestationError::CertChainError(format!(
-                    "CRL RSA-PSS signature verification failed: {}",
-                    e
+                    "CRL RSA-PSS signature verification failed: {e}"
                 ))
             })?;
         }
@@ -560,22 +554,20 @@ fn verify_crl_signature(
                 p384::ecdsa::VerifyingKey::from_public_key_der(issuer_cert.public_key().raw)
             })
             .map_err(|e| {
-                AttestationError::CertChainError(format!("CRL issuer ECDSA key parse: {}", e))
+                AttestationError::CertChainError(format!("CRL issuer ECDSA key parse: {e}"))
             })?;
             let sig = p384::ecdsa::DerSignature::from_bytes(sig_value).map_err(|e| {
-                AttestationError::CertChainError(format!("CRL ECDSA signature parse: {}", e))
+                AttestationError::CertChainError(format!("CRL ECDSA signature parse: {e}"))
             })?;
             verifying_key.verify(tbs_der, &sig).map_err(|e| {
                 AttestationError::CertChainError(format!(
-                    "CRL ECDSA signature verification failed: {}",
-                    e
+                    "CRL ECDSA signature verification failed: {e}"
                 ))
             })?;
         }
         _ => {
             return Err(AttestationError::CertChainError(format!(
-                "unsupported CRL signature algorithm OID: {}",
-                sig_alg_oid
+                "unsupported CRL signature algorithm OID: {sig_alg_oid}"
             )));
         }
     }
@@ -586,7 +578,7 @@ fn verify_crl_signature(
 /// Parse an SNP attestation report from raw bytes using the sev crate.
 pub fn parse_report(report_bytes: &[u8]) -> Result<AttestationReport> {
     AttestationReport::from_bytes(report_bytes)
-        .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {}", e)))
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("SNP report parse: {e}")))
 }
 
 #[cfg(test)]

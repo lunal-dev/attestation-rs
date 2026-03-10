@@ -31,7 +31,7 @@ pub async fn verify_evidence(
 
     // Decode
     let hcl_report_bytes = decode_base64url(&evidence.hcl_report)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("HCL report base64: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("HCL report base64: {e}")))?;
     let hcl = tpm_common::parse_hcl_report(&hcl_report_bytes)?;
     if hcl.report_type != tpm_common::HCL_REPORT_TYPE_TDX {
         return Err(AttestationError::QuoteParseFailed(format!(
@@ -41,7 +41,7 @@ pub async fn verify_evidence(
         )));
     }
     let td_quote_bytes = decode_base64url(&evidence.td_quote)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("TD quote base64: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("TD quote base64: {e}")))?;
     let (tpm_sig, tpm_msg, tpm_pcrs) = tpm_common::decode_tpm_quote(&evidence.tpm_quote)?;
 
     // TPM layer

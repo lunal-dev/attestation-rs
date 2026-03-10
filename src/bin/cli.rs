@@ -282,7 +282,7 @@ async fn cmd_verify(args: VerifyArgs) {
     let elapsed = t0.elapsed();
 
     // Human-readable summary to stderr
-    eprintln!("Verified in {:?}", elapsed);
+    eprintln!("Verified in {elapsed:?}");
     eprintln!("  Signature valid: {}", result.signature_valid);
     eprintln!("  Platform: {}", result.platform);
     eprintln!("  Launch digest: {}", result.claims.launch_digest);
