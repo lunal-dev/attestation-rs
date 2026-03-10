@@ -31,7 +31,7 @@ fn read_be_u16(data: &[u8], offset: usize, field: &str) -> Result<u16> {
     data.get(offset..offset + 2)
         .and_then(|s| s.try_into().ok())
         .map(u16::from_be_bytes)
-        .ok_or_else(|| AttestationError::QuoteParseFailed(format!("truncated at {}", field)))
+        .ok_or_else(|| AttestationError::QuoteParseFailed(format!("truncated at {field}")))
 }
 
 /// Read a big-endian u32 from a byte slice at the given offset.
@@ -39,7 +39,7 @@ fn read_be_u32(data: &[u8], offset: usize, field: &str) -> Result<u32> {
     data.get(offset..offset + 4)
         .and_then(|s| s.try_into().ok())
         .map(u32::from_be_bytes)
-        .ok_or_else(|| AttestationError::QuoteParseFailed(format!("truncated at {}", field)))
+        .ok_or_else(|| AttestationError::QuoteParseFailed(format!("truncated at {field}")))
 }
 
 // --- HCL report parsing ---
@@ -133,8 +133,7 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
     let available = hcl_report.len() - content_start;
     if content_length > available {
         return Err(AttestationError::QuoteParseFailed(format!(
-            "HCL content_length ({}) exceeds available data ({})",
-            content_length, available
+            "HCL content_length ({content_length}) exceeds available data ({available})"
         )));
     }
     let bounded_len = content_length;
@@ -163,7 +162,7 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
 /// (modulus) and `e` (exponent) fields.
 pub fn extract_ak_pub_from_jwk_json(json_bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     let json: serde_json::Value = serde_json::from_slice(json_bytes)
-        .map_err(|e| AttestationError::QuoteParseFailed(format!("HCL var_data JSON: {}", e)))?;
+        .map_err(|e| AttestationError::QuoteParseFailed(format!("HCL var_data JSON: {e}")))?;
 
     let keys = json["keys"].as_array().ok_or_else(|| {
         AttestationError::QuoteParseFailed("HCL var_data JSON missing 'keys' array".to_string())
@@ -182,10 +181,10 @@ pub fn extract_ak_pub_from_jwk_json(json_bytes: &[u8]) -> Result<(Vec<u8>, Vec<u
             })?;
 
             let modulus = BASE64URL.decode(n_b64).map_err(|e| {
-                AttestationError::QuoteParseFailed(format!("HCLAkPub 'n' base64: {}", e))
+                AttestationError::QuoteParseFailed(format!("HCLAkPub 'n' base64: {e}"))
             })?;
             let exponent = BASE64URL.decode(e_b64).map_err(|e| {
-                AttestationError::QuoteParseFailed(format!("HCLAkPub 'e' base64: {}", e))
+                AttestationError::QuoteParseFailed(format!("HCLAkPub 'e' base64: {e}"))
             })?;
 
             return Ok((modulus, exponent));
@@ -219,7 +218,7 @@ pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -
     let (modulus, exponent) = match extract_ak_pub_from_jwk_json(var_data) {
         Ok(result) => result,
         Err(jwk_err) => {
-            log::debug!("JWK AK extraction failed, trying TPM2B_PUBLIC: {}", jwk_err);
+            log::debug!("JWK AK extraction failed, trying TPM2B_PUBLIC: {jwk_err}");
             extract_ak_pub_from_var_data(var_data)?
         }
     };
@@ -228,17 +227,17 @@ pub fn verify_tpm_signature(signature: &[u8], message: &[u8], var_data: &[u8]) -
     let e = rsa::BigUint::from_bytes_be(&exponent);
 
     let public_key = RsaPublicKey::new(n, e).map_err(|e| {
-        AttestationError::SignatureVerificationFailed(format!("construct RSA key: {}", e))
+        AttestationError::SignatureVerificationFailed(format!("construct RSA key: {e}"))
     })?;
 
     let verifying_key = RsaVerifyingKey::<sha2::Sha256>::new(public_key);
 
     let sig = rsa::pkcs1v15::Signature::try_from(signature).map_err(|e| {
-        AttestationError::SignatureVerificationFailed(format!("parse RSA sig: {}", e))
+        AttestationError::SignatureVerificationFailed(format!("parse RSA sig: {e}"))
     })?;
 
     verifying_key.verify(message, &sig).map_err(|e| {
-        AttestationError::SignatureVerificationFailed(format!("TPM RSA PKCS1v15 SHA-256: {}", e))
+        AttestationError::SignatureVerificationFailed(format!("TPM RSA PKCS1v15 SHA-256: {e}"))
     })
 }
 
@@ -289,8 +288,7 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
 
     if alg_type != TPM_ALG_RSA {
         return Err(AttestationError::SignatureVerificationFailed(format!(
-            "AK key type 0x{:04x} is not RSA (expected 0x{:04x})",
-            alg_type, TPM_ALG_RSA
+            "AK key type 0x{alg_type:04x} is not RSA (expected 0x{TPM_ALG_RSA:04x})"
         )));
     }
 
@@ -303,7 +301,11 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
 
     // authPolicy (TPM2B_DIGEST): 2-byte size + data
     let auth_size = read_be_u16(var_data, offset, "authPolicy size")? as usize;
-    offset += 2 + auth_size;
+    offset = offset
+        .checked_add(2 + auth_size)
+        .ok_or_else(|| {
+            AttestationError::QuoteParseFailed("authPolicy size overflow".to_string())
+        })?;
 
     // TPMS_RSA_PARMS
     if offset + 10 > var_data.len() {
@@ -382,8 +384,7 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
     let magic = read_be_u32(message, 0, "TPM magic")?;
     if magic != TPM_ATTEST_MAGIC {
         return Err(AttestationError::QuoteParseFailed(format!(
-            "invalid TPM Attest magic: 0x{:08X}",
-            magic
+            "invalid TPM Attest magic: 0x{magic:08X}"
         )));
     }
 
@@ -561,15 +562,15 @@ fn parse_quote_info(message: &[u8]) -> Result<(Vec<usize>, Vec<u8>)> {
 /// Parse TPM quote from evidence, returning decoded (sig, msg, pcrs).
 pub fn decode_tpm_quote(quote: &TpmQuote) -> Result<DecodedTpmQuote> {
     let sig = hex::decode(&quote.signature)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("TPM sig hex: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("TPM sig hex: {e}")))?;
     let msg = hex::decode(&quote.message)
-        .map_err(|e| AttestationError::EvidenceDeserialize(format!("TPM msg hex: {}", e)))?;
+        .map_err(|e| AttestationError::EvidenceDeserialize(format!("TPM msg hex: {e}")))?;
     let pcrs: Vec<Vec<u8>> = quote
         .pcrs
         .iter()
         .map(|p| {
             hex::decode(p)
-                .map_err(|e| AttestationError::EvidenceDeserialize(format!("PCR hex: {}", e)))
+                .map_err(|e| AttestationError::EvidenceDeserialize(format!("PCR hex: {e}")))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok((sig, msg, pcrs))
@@ -627,7 +628,7 @@ pub fn build_tpm_verification_result(
         .enumerate()
         .map(|(i, pcr)| {
             (
-                format!("pcr{:02}", i),
+                format!("pcr{i:02}"),
                 serde_json::Value::String(hex::encode(pcr)),
             )
         })
@@ -645,7 +646,7 @@ pub fn build_tpm_verification_result(
             signed_data = strip_trailing_nulls(&nonce).to_vec();
         }
         Err(e) => {
-            log::warn!("failed to extract TPM nonce for claims output: {}", e);
+            log::warn!("failed to extract TPM nonce for claims output: {e}");
         }
     }
 
