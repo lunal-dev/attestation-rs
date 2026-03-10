@@ -86,16 +86,15 @@ pub fn parse_auth_data<'a>(quote_bytes: &'a [u8], body_end: usize) -> Result<Quo
     }
     let cert_data_type = quote_bytes
         .pread_with::<u16>(cert_type_offset, scroll::LE)
-        .map_err(|e| err(format!("cert_data_type: {}", e)))?;
+        .map_err(|e| err(format!("cert_data_type: {e}")))?;
     if cert_data_type != CERT_DATA_TYPE_ECDSA_SIG_AUX {
         return Err(err(format!(
-            "expected cert_data_type {} (EcdsaSigAuxData), got {}",
-            CERT_DATA_TYPE_ECDSA_SIG_AUX, cert_data_type
+            "expected cert_data_type {CERT_DATA_TYPE_ECDSA_SIG_AUX} (EcdsaSigAuxData), got {cert_data_type}"
         )));
     }
     let cert_data_size = quote_bytes
         .pread_with::<u32>(cert_type_offset + 2, scroll::LE)
-        .map_err(|e| err(format!("cert_data_size: {}", e)))? as usize;
+        .map_err(|e| err(format!("cert_data_size: {e}")))? as usize;
 
     let cert_data_start = cert_type_offset + 6;
     if quote_bytes.len() < cert_data_start + cert_data_size {
@@ -122,7 +121,7 @@ pub fn parse_auth_data<'a>(quote_bytes: &'a [u8], body_end: usize) -> Result<Quo
     }
     let qe_auth_data_size = cert_data
         .pread_with::<u16>(auth_size_offset, scroll::LE)
-        .map_err(|e| err(format!("qe_auth_data_size: {}", e)))?
+        .map_err(|e| err(format!("qe_auth_data_size: {e}")))?
         as usize;
 
     let qe_auth_data_start = auth_size_offset + 2;
@@ -138,16 +137,15 @@ pub fn parse_auth_data<'a>(quote_bytes: &'a [u8], body_end: usize) -> Result<Quo
     }
     let nested_type = cert_data
         .pread_with::<u16>(nested_offset, scroll::LE)
-        .map_err(|e| err(format!("nested cert_data_type: {}", e)))?;
+        .map_err(|e| err(format!("nested cert_data_type: {e}")))?;
     if nested_type != CERT_DATA_TYPE_PCK_CHAIN {
         return Err(err(format!(
-            "expected nested cert_data_type {} (PckCertChain), got {}",
-            CERT_DATA_TYPE_PCK_CHAIN, nested_type
+            "expected nested cert_data_type {CERT_DATA_TYPE_PCK_CHAIN} (PckCertChain), got {nested_type}"
         )));
     }
     let nested_size = cert_data
         .pread_with::<u32>(nested_offset + 2, scroll::LE)
-        .map_err(|e| err(format!("nested cert_data_size: {}", e)))? as usize;
+        .map_err(|e| err(format!("nested cert_data_size: {e}")))? as usize;
 
     let pem_start = nested_offset + 6;
     if cert_data.len() < pem_start + nested_size {
@@ -203,15 +201,14 @@ pub fn verify_qe_report_signature(
     pck_pub_key: &VerifyingKey,
 ) -> Result<()> {
     let sig = Signature::from_slice(auth_data.qe_report_signature).map_err(|e| {
-        AttestationError::SignatureVerificationFailed(format!("QE report signature parse: {}", e))
+        AttestationError::SignatureVerificationFailed(format!("QE report signature parse: {e}"))
     })?;
 
     pck_pub_key
         .verify(auth_data.qe_report_body, &sig)
         .map_err(|e| {
             AttestationError::SignatureVerificationFailed(format!(
-                "QE report signature verification: {}",
-                e
+                "QE report signature verification: {e}"
             ))
         })
 }
@@ -232,7 +229,7 @@ pub fn verify_qe_report_signature(
 /// Returns the PCK leaf's ECDSA P-256 public key for QE report signature verification.
 pub fn verify_pck_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     let pem_str = std::str::from_utf8(pem_data).map_err(|e| {
-        AttestationError::CertChainError(format!("PEM data is not valid UTF-8: {}", e))
+        AttestationError::CertChainError(format!("PEM data is not valid UTF-8: {e}"))
     })?;
 
     // Split PEM into individual DER-encoded certificates
@@ -253,7 +250,7 @@ pub fn verify_pck_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     // Step 1: Verify Root CA public key matches hardcoded Intel key
     let root_pub_key = extract_p256_pub_key(&root_cert.pub_key_bytes, "Root CA")?;
     let intel_root_key = VerifyingKey::from_sec1_bytes(INTEL_SGX_ROOT_CA_PUB_DER)
-        .map_err(|e| AttestationError::CertChainError(format!("Intel Root CA key parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("Intel Root CA key parse: {e}")))?;
 
     if root_pub_key.to_encoded_point(false) != intel_root_key.to_encoded_point(false) {
         return Err(AttestationError::CertChainError(
@@ -298,7 +295,7 @@ pub fn verify_pck_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
 ///   - Both certificates are within their validity periods
 pub fn verify_signing_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     let pem_str = std::str::from_utf8(pem_data).map_err(|e| {
-        AttestationError::CertChainError(format!("signing chain PEM not UTF-8: {}", e))
+        AttestationError::CertChainError(format!("signing chain PEM not UTF-8: {e}"))
     })?;
 
     let der_certs = split_pem_to_der(pem_str)?;
@@ -316,7 +313,7 @@ pub fn verify_signing_cert_chain(pem_data: &[u8]) -> Result<VerifyingKey> {
     // Verify Root CA public key matches hardcoded Intel key
     let root_pub_key = extract_p256_pub_key(&root_cert.pub_key_bytes, "Root CA")?;
     let intel_root_key = VerifyingKey::from_sec1_bytes(INTEL_SGX_ROOT_CA_PUB_DER)
-        .map_err(|e| AttestationError::CertChainError(format!("Intel Root CA key parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("Intel Root CA key parse: {e}")))?;
 
     if root_pub_key.to_encoded_point(false) != intel_root_key.to_encoded_point(false) {
         return Err(AttestationError::CertChainError(
@@ -370,12 +367,12 @@ fn parse_x509_cert(der: &[u8], label: &str) -> Result<CertData> {
     //   - The subjectPublicKeyInfo from tbsCertificate
 
     let cert = x509_cert::Certificate::from_der(der).map_err(|e| {
-        AttestationError::CertChainError(format!("{} cert DER parse: {}", label, e))
+        AttestationError::CertChainError(format!("{label} cert DER parse: {e}"))
     })?;
 
     // Extract TBS bytes: re-encode the TBS certificate to DER
     let tbs_bytes = der::Encode::to_der(&cert.tbs_certificate).map_err(|e| {
-        AttestationError::CertChainError(format!("{} TBS DER encode: {}", label, e))
+        AttestationError::CertChainError(format!("{label} TBS DER encode: {e}"))
     })?;
 
     // Extract signature bytes (strip leading zero byte if present for ASN.1 BIT STRING)
@@ -397,25 +394,25 @@ fn parse_x509_cert(der: &[u8], label: &str) -> Result<CertData> {
 /// Extract a P-256 verifying key from SEC1-encoded public key bytes.
 fn extract_p256_pub_key(pub_key_bytes: &[u8], label: &str) -> Result<VerifyingKey> {
     VerifyingKey::from_sec1_bytes(pub_key_bytes)
-        .map_err(|e| AttestationError::CertChainError(format!("{} public key parse: {}", label, e)))
+        .map_err(|e| AttestationError::CertChainError(format!("{label} public key parse: {e}")))
 }
 
 /// Verify a certificate's signature using the issuer's public key.
 fn verify_cert_signature(cert: &CertData, issuer_key: &VerifyingKey, label: &str) -> Result<()> {
     // The signature in X.509 is DER-encoded (ASN.1 SEQUENCE of two INTEGERs)
     let sig = Signature::from_der(&cert.signature_bytes).map_err(|e| {
-        AttestationError::CertChainError(format!("{} signature parse: {}", label, e))
+        AttestationError::CertChainError(format!("{label} signature parse: {e}"))
     })?;
 
     issuer_key.verify(&cert.tbs_bytes, &sig).map_err(|e| {
-        AttestationError::CertChainError(format!("{} signature verification: {}", label, e))
+        AttestationError::CertChainError(format!("{label} signature verification: {e}"))
     })
 }
 
 /// Verify a certificate's validity period (NotBefore/NotAfter) against the current time.
 fn verify_cert_validity_period(der: &[u8], label: &str) -> Result<()> {
     let (_, cert) = X509Certificate::from_der(der).map_err(|e| {
-        AttestationError::CertChainError(format!("{} x509 parse for validity: {}", label, e))
+        AttestationError::CertChainError(format!("{label} x509 parse for validity: {e}"))
     })?;
 
     let validity = cert.validity();
@@ -461,7 +458,7 @@ fn split_pem_to_der(pem_str: &str) -> Result<Vec<Vec<u8>>> {
         } else if line.contains("END CERTIFICATE") {
             in_cert = false;
             let der = BASE64.decode(current.trim()).map_err(|e| {
-                AttestationError::CertChainError(format!("PEM base64 decode: {}", e))
+                AttestationError::CertChainError(format!("PEM base64 decode: {e}"))
             })?;
             certs.push(der);
         } else if in_cert {
@@ -485,7 +482,7 @@ pub fn compute_body_end(quote_bytes: &[u8], quote_version: QuoteVersion) -> Resu
         QuoteVersion::V5Tdx10 | QuoteVersion::V5Tdx15 => {
             let body_size = quote_bytes
                 .pread_with::<u32>(QUOTE_HEADER_SIZE + 2, scroll::LE)
-                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 body size: {}", e)))?
+                .map_err(|e| AttestationError::QuoteParseFailed(format!("v5 body size: {e}")))?
                 as usize;
             Ok(QUOTE_HEADER_SIZE + 6 + body_size)
         }
@@ -550,11 +547,12 @@ pub fn extract_fmspc_from_pck_der(der_certs: &[Vec<u8>]) -> Result<String> {
     }
 
     let (_, cert) = X509Certificate::from_der(&der_certs[0])
-        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {e}")))?;
 
     // Find the SGX extensions OID in the cert extensions
-    let sgx_ext_oid = x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID)
-        .expect("SGX_EXTENSIONS_OID is valid");
+    let sgx_ext_oid = x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID).map_err(|e| {
+        AttestationError::CertChainError(format!("invalid SGX_EXTENSIONS_OID: {e:?}"))
+    })?;
 
     for ext in cert.extensions() {
         if ext.oid == sgx_ext_oid {
@@ -570,11 +568,13 @@ pub fn extract_fmspc_from_pck_der(der_certs: &[Vec<u8>]) -> Result<String> {
 
 /// Parse the SGX extension ASN.1 blob and extract the FMSPC value.
 fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
-    let fmspc_oid = x509_parser::oid_registry::Oid::from(FMSPC_OID).expect("FMSPC_OID is valid");
+    let fmspc_oid = x509_parser::oid_registry::Oid::from(FMSPC_OID).map_err(|e| {
+        AttestationError::CertChainError(format!("invalid FMSPC_OID: {e:?}"))
+    })?;
 
     // Parse outer SEQUENCE
     let (_, seq) = parse_der_sequence(data)
-        .map_err(|e| AttestationError::CertChainError(format!("SGX extension parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("SGX extension parse: {e}")))?;
 
     // Each element is a SEQUENCE { OID, value }
     for item in seq.ref_iter() {
@@ -587,7 +587,14 @@ fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
                             if fmspc_bytes.len() == 6 {
                                 return Ok(hex::encode(fmspc_bytes));
                             }
+                            return Err(AttestationError::CertChainError(format!(
+                                "FMSPC found but has unexpected length {} (expected 6)",
+                                fmspc_bytes.len()
+                            )));
                         }
+                        return Err(AttestationError::CertChainError(
+                            "FMSPC OID found but value is not an OCTET STRING".into(),
+                        ));
                     }
                 }
             }
@@ -665,17 +672,21 @@ fn extract_pck_tcb_components_from_der(der_certs: &[Vec<u8>]) -> Result<([u8; 16
     }
 
     let (_, cert) = X509Certificate::from_der(&der_certs[0])
-        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {e}")))?;
 
-    let sgx_ext_oid = x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID)
-        .expect("SGX_EXTENSIONS_OID is valid");
-    let tcb_oid = x509_parser::oid_registry::Oid::from(&[1, 2, 840, 113741, 1, 13, 1, 2][..])
-        .expect("TCB OID is valid");
+    let sgx_ext_oid =
+        x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID).map_err(|e| {
+            AttestationError::CertChainError(format!("invalid SGX_EXTENSIONS_OID: {e:?}"))
+        })?;
+    let tcb_oid =
+        x509_parser::oid_registry::Oid::from(&[1, 2, 840, 113741, 1, 13, 1, 2][..]).map_err(
+            |e| AttestationError::CertChainError(format!("invalid TCB OID: {e:?}")),
+        )?;
 
     for ext in cert.extensions() {
         if ext.oid == sgx_ext_oid {
             let (_, seq) = parse_der_sequence(ext.value).map_err(|e| {
-                AttestationError::CertChainError(format!("SGX extension parse: {}", e))
+                AttestationError::CertChainError(format!("SGX extension parse: {e}"))
             })?;
 
             for item in seq.ref_iter() {
@@ -771,20 +782,20 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> Resul
 /// `TCB-Info-Issuer-Chain` response header, rooted to Intel SGX Root CA.
 pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8]) -> Result<()> {
     let envelope: TcbInfoSignedEnvelope = serde_json::from_slice(tcb_info_json)
-        .map_err(|e| AttestationError::CertChainError(format!("TCB Info envelope parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info envelope parse: {e}")))?;
 
     let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
-        AttestationError::CertChainError(format!("TCB Info signature hex decode: {}", e))
+        AttestationError::CertChainError(format!("TCB Info signature hex decode: {e}"))
     })?;
     let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
-        AttestationError::CertChainError(format!("TCB Info signature parse: {}", e))
+        AttestationError::CertChainError(format!("TCB Info signature parse: {e}"))
     })?;
 
     // Extract the raw JSON string of "tcbInfo" from the envelope.
     // NOTE: .to_string() re-serializes the JSON, which preserves correctness
     // as long as serde_json maintains key order (it does for Value::Object).
     let raw_json: serde_json::Value = serde_json::from_slice(tcb_info_json)
-        .map_err(|e| AttestationError::CertChainError(format!("TCB Info raw JSON parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info raw JSON parse: {e}")))?;
     let tcb_info_raw = raw_json
         .get("tcbInfo")
         .ok_or_else(|| AttestationError::CertChainError("TCB Info missing 'tcbInfo' field".into()))?
@@ -797,8 +808,7 @@ pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8])
         .verify(tcb_info_raw.as_bytes(), &signature)
         .map_err(|e| {
             AttestationError::CertChainError(format!(
-                "TCB Info signature verification failed: {}",
-                e
+                "TCB Info signature verification failed: {e}"
             ))
         })?;
 
@@ -829,7 +839,7 @@ pub fn evaluate_tcb_status(
     }
 
     let wrapper: TcbInfoWrapper = serde_json::from_slice(tcb_info_json)
-        .map_err(|e| AttestationError::CertChainError(format!("TCB Info JSON parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info JSON parse: {e}")))?;
 
     // Check if collateral has expired (nextUpdate is in the past)
     let collateral_expired = wrapper
@@ -855,6 +865,11 @@ pub fn evaluate_tcb_status(
     for (i, level) in wrapper.tcb_info.tcb_levels.iter().enumerate() {
         let sgx_comps: Vec<u8> = level.tcb.sgxtcbcomponents.iter().map(|c| c.svn).collect();
         if sgx_comps.len() < 16 {
+            log::warn!(
+                "TCB level {} has only {} SGX components (expected 16), skipping",
+                i,
+                sgx_comps.len()
+            );
             continue;
         }
 
@@ -906,43 +921,10 @@ pub fn evaluate_tcb_status(
 /// Check if an ISO 8601 timestamp (e.g. "2024-03-07T00:00:00Z") is in the past.
 /// Returns `None` if the timestamp cannot be parsed.
 fn chrono_parse_is_past(ts: &str) -> Option<bool> {
-    // Parse "YYYY-MM-DDThh:mm:ssZ" format
-    let ts = ts.trim();
-    if ts.len() < 19 {
-        return None;
-    }
-    let year: u64 = ts.get(0..4)?.parse().ok()?;
-    let month: u64 = ts.get(5..7)?.parse().ok()?;
-    let day: u64 = ts.get(8..10)?.parse().ok()?;
-    let hour: u64 = ts.get(11..13)?.parse().ok()?;
-    let min: u64 = ts.get(14..16)?.parse().ok()?;
-    let sec: u64 = ts.get(17..19)?.parse().ok()?;
+    use chrono::Utc;
 
-    // Approximate seconds since Unix epoch (ignoring leap years/seconds for
-    // this comparison — accuracy within a day is sufficient for collateral expiry).
-    let days_in_year = 365u64;
-    let epoch_days =
-        (year - 1970) * days_in_year + (year - 1969) / 4 + days_before_month(month, year) + day - 1;
-    let next_update_secs = epoch_days * 86400 + hour * 3600 + min * 60 + sec;
-
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-
-    Some(now_secs > next_update_secs)
-}
-
-/// Approximate cumulative days before a given month (1-indexed).
-fn days_before_month(month: u64, year: u64) -> u64 {
-    const DAYS: [u64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    let m = (month.saturating_sub(1) as usize).min(11);
-    let mut d = DAYS[m];
-    // Leap year adjustment for months after February
-    if month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
-        d += 1;
-    }
-    d
+    let dt = chrono::DateTime::parse_from_rfc3339(ts.trim()).ok()?;
+    Some(Utc::now() > dt)
 }
 
 /// Parse a TCB status string from Intel PCS into our enum.
@@ -956,8 +938,7 @@ fn parse_tcb_status(s: &str) -> Result<TdxTcbStatus> {
         "OutOfDateConfigurationNeeded" => Ok(TdxTcbStatus::OutOfDateConfigurationNeeded),
         "Revoked" => Ok(TdxTcbStatus::Revoked),
         _ => Err(AttestationError::TcbMismatch(format!(
-            "unknown TCB status: {}",
-            s
+            "unknown TCB status: {s}"
         ))),
     }
 }
@@ -981,7 +962,7 @@ pub fn determine_ca_type_from_der(der_certs: &[Vec<u8>]) -> Result<String> {
         ));
     }
     let (_, cert) = X509Certificate::from_der(&der_certs[0])
-        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {e}")))?;
 
     let issuer = format!("{}", cert.issuer());
     if issuer.contains("Platform") {
@@ -990,8 +971,7 @@ pub fn determine_ca_type_from_der(der_certs: &[Vec<u8>]) -> Result<String> {
         Ok("processor".to_string())
     } else {
         Err(AttestationError::CertChainError(format!(
-            "unrecognized PCK issuer CA type: {}",
-            issuer
+            "unrecognized PCK issuer CA type: {issuer}"
         )))
     }
 }
@@ -1065,16 +1045,16 @@ pub fn verify_qe_identity(
 
     // Parse the envelope and optionally verify signature
     let envelope: QeIdentityEnvelope = serde_json::from_slice(qe_identity_json).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity envelope parse: {}", e))
+        AttestationError::CertChainError(format!("QE Identity envelope parse: {e}"))
     })?;
 
     if let Some(certs_pem) = signing_certs_pem {
         // Verify Intel ECDSA P-256 signature on the enclaveIdentity JSON
         let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
-            AttestationError::CertChainError(format!("QE Identity signature hex decode: {}", e))
+            AttestationError::CertChainError(format!("QE Identity signature hex decode: {e}"))
         })?;
         let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
-            AttestationError::CertChainError(format!("QE Identity signature parse: {}", e))
+            AttestationError::CertChainError(format!("QE Identity signature parse: {e}"))
         })?;
 
         let identity_raw = envelope.enclave_identity.to_string();
@@ -1084,8 +1064,7 @@ pub fn verify_qe_identity(
             .verify(identity_raw.as_bytes(), &signature)
             .map_err(|e| {
                 AttestationError::CertChainError(format!(
-                    "QE Identity signature verification failed: {}",
-                    e
+                    "QE Identity signature verification failed: {e}"
                 ))
             })?;
     } else {
@@ -1095,7 +1074,7 @@ pub fn verify_qe_identity(
     // Parse the identity fields
     let identity: EnclaveIdentityFields = serde_json::from_value(envelope.enclave_identity.clone())
         .map_err(|e| {
-            AttestationError::CertChainError(format!("QE Identity fields parse: {}", e))
+            AttestationError::CertChainError(format!("QE Identity fields parse: {e}"))
         })?;
 
     // Extract QE report fields at known offsets
@@ -1113,7 +1092,7 @@ pub fn verify_qe_identity(
 
     // Check MRSIGNER (exact match)
     let expected_mrsigner = hex::decode(&identity.mrsigner).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity MRSIGNER hex decode: {}", e))
+        AttestationError::CertChainError(format!("QE Identity MRSIGNER hex decode: {e}"))
     })?;
     if !crate::utils::constant_time_eq(qe_mrsigner, &expected_mrsigner) {
         return Err(AttestationError::CertChainError(
@@ -1131,10 +1110,10 @@ pub fn verify_qe_identity(
 
     // Check MISCSELECT (masked comparison)
     let expected_miscselect = hex::decode(&identity.miscselect).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity MISCSELECT hex decode: {}", e))
+        AttestationError::CertChainError(format!("QE Identity MISCSELECT hex decode: {e}"))
     })?;
     let miscselect_mask = hex::decode(&identity.miscselect_mask).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity MISCSELECT_MASK hex decode: {}", e))
+        AttestationError::CertChainError(format!("QE Identity MISCSELECT_MASK hex decode: {e}"))
     })?;
     if expected_miscselect.len() != 4 || miscselect_mask.len() != 4 {
         return Err(AttestationError::CertChainError(format!(
@@ -1154,10 +1133,10 @@ pub fn verify_qe_identity(
 
     // Check ATTRIBUTES (masked comparison)
     let expected_attributes = hex::decode(&identity.attributes).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity ATTRIBUTES hex decode: {}", e))
+        AttestationError::CertChainError(format!("QE Identity ATTRIBUTES hex decode: {e}"))
     })?;
     let attributes_mask = hex::decode(&identity.attributes_mask).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity ATTRIBUTES_MASK hex decode: {}", e))
+        AttestationError::CertChainError(format!("QE Identity ATTRIBUTES_MASK hex decode: {e}"))
     })?;
     if expected_attributes.len() != 16 || attributes_mask.len() != 16 {
         return Err(AttestationError::CertChainError(format!(
@@ -1192,8 +1171,7 @@ pub fn verify_qe_identity(
     }
     if !svn_ok {
         return Err(AttestationError::CertChainError(format!(
-            "QE ISVSVN {} does not meet any published TCB level",
-            qe_isvsvn
+            "QE ISVSVN {qe_isvsvn} does not meet any published TCB level"
         )));
     }
 
@@ -1224,12 +1202,12 @@ pub fn check_intermediate_ca_revocation_from_der(
 
     // The intermediate CA is the 2nd cert in the chain
     let (_, intermediate_cert) = X509Certificate::from_der(&der_certs[1])
-        .map_err(|e| AttestationError::CertChainError(format!("Intermediate CA parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("Intermediate CA parse: {e}")))?;
     let intermediate_serial = intermediate_cert.raw_serial();
 
     // Parse the Root CA CRL
     let (_, crl) = CertificateRevocationList::from_der(root_ca_crl_der)
-        .map_err(|e| AttestationError::CertChainError(format!("Root CA CRL parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("Root CA CRL parse: {e}")))?;
 
     // Check if intermediate serial is in the revoked list
     for revoked in crl.iter_revoked_certificates() {
@@ -1263,12 +1241,12 @@ pub fn check_cert_revocation_from_der(der_certs: &[Vec<u8>], crl_der: &[u8]) -> 
 
     // Parse the leaf cert to get its serial number
     let (_, leaf_cert) = X509Certificate::from_der(&der_certs[0])
-        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("PCK leaf parse: {e}")))?;
     let leaf_serial = leaf_cert.raw_serial();
 
     // Parse the CRL
     let (_, crl) = CertificateRevocationList::from_der(crl_der)
-        .map_err(|e| AttestationError::CertChainError(format!("CRL DER parse: {}", e)))?;
+        .map_err(|e| AttestationError::CertChainError(format!("CRL DER parse: {e}")))?;
 
     // Check if leaf serial is in the revoked list
     for revoked in crl.iter_revoked_certificates() {
