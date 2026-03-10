@@ -387,7 +387,9 @@ pub async fn verify_evidence(
         let auth = super::dcap::parse_auth_data(&quote_bytes, body_end)?;
 
         // PCK CRL revocation check (leaf + intermediate CA)
-        provider.check_pck_revocation(auth.pck_cert_chain_pem).await?;
+        provider
+            .check_pck_revocation(auth.pck_cert_chain_pem)
+            .await?;
 
         // TCB status evaluation
         let fmspc = super::dcap::extract_fmspc_from_pck(auth.pck_cert_chain_pem)?;

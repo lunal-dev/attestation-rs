@@ -47,8 +47,25 @@ pub async fn verify_evidence(
     }
 
     // 4. Determine processor generation
-    let cpuid_fam = report.cpuid_fam_id.unwrap_or(0);
-    let cpuid_mod = report.cpuid_mod_id.unwrap_or(0);
+    // v3+ reports are required to have CPUID fields; treat None as a spec violation.
+    let cpuid_fam = match report.cpuid_fam_id {
+        Some(v) => v,
+        None if report.version >= 3 => {
+            return Err(AttestationError::QuoteParseFailed(
+                "v3+ SNP report missing cpuid_fam_id field".to_string(),
+            ));
+        }
+        None => 0,
+    };
+    let cpuid_mod = match report.cpuid_mod_id {
+        Some(v) => v,
+        None if report.version >= 3 => {
+            return Err(AttestationError::QuoteParseFailed(
+                "v3+ SNP report missing cpuid_mod_id field".to_string(),
+            ));
+        }
+        None => 0,
+    };
     let processor_gen = ProcessorGeneration::from_cpuid(cpuid_fam, cpuid_mod).ok_or_else(|| {
         AttestationError::QuoteParseFailed(format!(
             "unknown processor: family=0x{:02X}, model=0x{:02X}",
@@ -77,6 +94,8 @@ pub async fn verify_evidence(
     // 6c. CRL revocation check (if provider supplies CRL data)
     if let Some(crl_der) = cert_provider.get_snp_crl(processor_gen).await? {
         check_vcek_not_revoked(&vcek_der, &crl_der)?;
+    } else {
+        log::warn!("snp: CRL data not available from cert provider; skipping revocation check");
     }
 
     // 7. Verify report signature against VEK
@@ -101,30 +120,7 @@ pub async fn verify_evidence(
 
     // 8d. Minimum TCB enforcement
     if let Some(ref min_tcb) = params.min_tcb {
-        let tcb = &report.reported_tcb;
-        let fmc_below = match (min_tcb.fmc, tcb.fmc) {
-            (Some(min_fmc), Some(report_fmc)) => report_fmc < min_fmc,
-            (Some(_), None) => true, // min requires FMC but report doesn't have it
-            _ => false,
-        };
-        if tcb.bootloader < min_tcb.bootloader
-            || tcb.tee < min_tcb.tee
-            || tcb.snp < min_tcb.snp
-            || tcb.microcode < min_tcb.microcode
-            || fmc_below
-        {
-            return Err(AttestationError::TcbMismatch(format!(
-                "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
-                tcb.bootloader,
-                tcb.tee,
-                tcb.snp,
-                tcb.microcode,
-                min_tcb.bootloader,
-                min_tcb.tee,
-                min_tcb.snp,
-                min_tcb.microcode,
-            )));
-        }
+        enforce_min_tcb(&report.reported_tcb, min_tcb)?;
     }
 
     // 9. Check report_data binding
@@ -162,6 +158,36 @@ pub async fn verify_evidence(
     })
 }
 
+/// Enforce minimum TCB version requirements.
+///
+/// Shared between bare-metal SNP and Azure SNP verification paths.
+pub fn enforce_min_tcb(tcb: &sev::firmware::host::TcbVersion, min_tcb: &SnpTcb) -> Result<()> {
+    let fmc_below = match (min_tcb.fmc, tcb.fmc) {
+        (Some(min_fmc), Some(report_fmc)) => report_fmc < min_fmc,
+        (Some(_), None) => true, // min requires FMC but report doesn't have it
+        _ => false,
+    };
+    if tcb.bootloader < min_tcb.bootloader
+        || tcb.tee < min_tcb.tee
+        || tcb.snp < min_tcb.snp
+        || tcb.microcode < min_tcb.microcode
+        || fmc_below
+    {
+        return Err(AttestationError::TcbMismatch(format!(
+            "reported TCB ({}.{}.{}.{}) below minimum ({}.{}.{}.{})",
+            tcb.bootloader,
+            tcb.tee,
+            tcb.snp,
+            tcb.microcode,
+            min_tcb.bootloader,
+            min_tcb.tee,
+            min_tcb.snp,
+            min_tcb.microcode,
+        )));
+    }
+    Ok(())
+}
+
 /// Resolve the VCEK certificate - either from evidence or from cert provider.
 async fn resolve_vcek(
     evidence: &SnpEvidence,
@@ -191,7 +217,11 @@ async fn resolve_vcek(
             snp: report.reported_tcb.snp,
             microcode: report.reported_tcb.microcode,
             fmc: if processor_gen == ProcessorGeneration::Turin {
-                Some(report.reported_tcb.fmc.unwrap_or(0))
+                Some(report.reported_tcb.fmc.ok_or_else(|| {
+                    AttestationError::QuoteParseFailed(
+                        "Turin report missing FMC TCB field".to_string(),
+                    )
+                })?)
             } else {
                 None
             },
@@ -320,10 +350,7 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         })?
         .as_str()
         .map_err(|e| {
-            AttestationError::CertChainError(format!(
-                "VCEK Common Name is not valid UTF-8: {}",
-                e
-            ))
+            AttestationError::CertChainError(format!("VCEK Common Name is not valid UTF-8: {}", e))
         })?;
 
     let is_vcek = !cn.contains("VLEK");
@@ -397,9 +424,14 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
                     cert_val, fmc_expected
                 )));
             }
+        } else if fmc_expected != 0 {
+            // Non-zero FMC in the report but VCEK lacks the OID — the cert cannot
+            // attest to the platform's FMC level, so reject.
+            return Err(AttestationError::TcbMismatch(format!(
+                "report FMC SPL is {} but VCEK certificate lacks FMC OID extension",
+                fmc_expected
+            )));
         }
-        // If the cert doesn't have FMC OID but the report does, that's OK —
-        // older VCEKs may not include it. Only validate when present.
     }
 
     Ok(())

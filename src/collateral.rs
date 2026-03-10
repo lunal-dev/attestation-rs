@@ -15,8 +15,7 @@ pub const AMD_KDS_VLEK_BASE: &str = "https://kdsintf.amd.com/vlek/v1";
 
 // ── Intel PCS v4 (Provisioning Certification Service) ──
 /// Base URL for Intel SGX/TDX certification API v4.
-pub const INTEL_PCS_V4_BASE: &str =
-    "https://api.trustedservices.intel.com/sgx/certification/v4";
+pub const INTEL_PCS_V4_BASE: &str = "https://api.trustedservices.intel.com/sgx/certification/v4";
 /// Base URL for Intel SGX certificate infrastructure.
 pub const INTEL_CERTS_BASE: &str = "https://certificates.trustedservices.intel.com";
 /// Intel PCS v4 QE Identity endpoint.
@@ -195,9 +194,7 @@ async fn read_response_with_limit(response: reqwest::Response) -> Result<Vec<u8>
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| {
-            crate::error::AttestationError::CertFetchError(format!("read body: {e}"))
-        })?
+        .map_err(|e| crate::error::AttestationError::CertFetchError(format!("read body: {e}")))?
         .to_vec();
 
     if bytes.len() > MAX_RESPONSE_SIZE {
@@ -217,13 +214,9 @@ async fn send_get(client: &reqwest::Client, url: &str) -> Result<reqwest::Respon
         .get(url)
         .send()
         .await
-        .map_err(|e| {
-            crate::error::AttestationError::CertFetchError(format!("HTTP request: {e}"))
-        })?
+        .map_err(|e| crate::error::AttestationError::CertFetchError(format!("HTTP request: {e}")))?
         .error_for_status()
-        .map_err(|e| {
-            crate::error::AttestationError::CertFetchError(format!("HTTP status: {e}"))
-        })
+        .map_err(|e| crate::error::AttestationError::CertFetchError(format!("HTTP status: {e}")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -623,26 +616,29 @@ impl Default for DefaultTdxCollateralProvider {
 }
 
 /// Simple percent-decoding for URL-encoded PEM strings from Intel PCS headers.
+///
+/// Decodes percent-encoded bytes and pushes them as raw bytes into a `Vec<u8>`,
+/// which is then losslessly converted to a UTF-8 `String` (PEM data is ASCII).
 #[cfg(not(target_arch = "wasm32"))]
 fn percent_decode(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
+    let mut result = Vec::with_capacity(input.len());
     let mut chars = input.bytes();
     while let Some(b) = chars.next() {
         if b == b'%' {
             if let (Some(h), Some(l)) = (chars.next(), chars.next()) {
                 if let (Some(hv), Some(lv)) = (hex_val(h), hex_val(l)) {
-                    result.push((hv << 4 | lv) as char);
+                    result.push(hv << 4 | lv);
                     continue;
                 }
             }
-            result.push('%');
+            result.push(b'%');
         } else if b == b'+' {
-            result.push(' ');
+            result.push(b' ');
         } else {
-            result.push(b as char);
+            result.push(b);
         }
     }
-    result
+    String::from_utf8(result).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -735,5 +731,4 @@ mod tests {
         // Should be expired with a zero TTL
         assert!(cert.is_expired(std::time::Duration::from_secs(0)));
     }
-
 }

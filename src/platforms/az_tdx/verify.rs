@@ -7,25 +7,6 @@ use crate::utils::decode_base64url;
 
 use super::evidence::AzTdxEvidence;
 
-fn verify_hcl_var_data_binding(tdx_quote: &tdx_verify::TdxQuote, var_data: &[u8]) -> Result<()> {
-    let hash = crate::utils::sha256(var_data);
-    let report_data_prefix = tdx_quote
-        .body
-        .report_data
-        .get(..32)
-        .ok_or_else(|| {
-            AttestationError::QuoteParseFailed(
-                "TDX quote report_data shorter than 32 bytes".to_string(),
-            )
-        })?;
-    if !crate::utils::constant_time_eq(report_data_prefix, &hash) {
-        return Err(AttestationError::SignatureVerificationFailed(
-            "HCL var_data binding failed: TDX quote report_data != SHA-256(var_data)".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 /// Verify Azure TDX vTPM attestation evidence.
 ///
 /// When `collateral_provider` is `Some`, performs full DCAP collateral verification.
@@ -102,7 +83,9 @@ pub async fn verify_evidence(
         let pck_der_certs = dcap::parse_pem_to_der(auth.pck_cert_chain_pem)?;
 
         // PCK CRL revocation check (leaf + intermediate CA)
-        provider.check_pck_revocation(auth.pck_cert_chain_pem).await?;
+        provider
+            .check_pck_revocation(auth.pck_cert_chain_pem)
+            .await?;
 
         // TCB status evaluation
         let fmspc = dcap::extract_fmspc_from_pck_der(&pck_der_certs)?;
@@ -138,7 +121,7 @@ pub async fn verify_evidence(
     };
 
     // Bindings
-    verify_hcl_var_data_binding(&tdx_quote, &hcl.var_data)?;
+    tpm_common::verify_hcl_var_data_binding(&tdx_quote.body.report_data, &hcl.var_data)?;
     let init_data_match =
         tpm_common::check_init_data(&tpm_pcrs, params.expected_init_data_hash.as_deref())?;
 

@@ -62,6 +62,22 @@ pub const HCL_REPORT_TYPE_SNP: u32 = 2;
 /// HCL report type: Intel TDX.
 pub const HCL_REPORT_TYPE_TDX: u32 = 4;
 
+/// Verify HCL var_data binding: report_data[..32] == SHA-256(var_data).
+///
+/// Shared between Azure SNP and Azure TDX verification paths.
+pub fn verify_hcl_var_data_binding(report_data: &[u8], var_data: &[u8]) -> Result<()> {
+    let hash = crate::utils::sha256(var_data);
+    let report_data_prefix = report_data.get(..32).ok_or_else(|| {
+        AttestationError::QuoteParseFailed("report_data shorter than 32 bytes".to_string())
+    })?;
+    if !crate::utils::constant_time_eq(report_data_prefix, &hash) {
+        return Err(AttestationError::SignatureVerificationFailed(
+            "HCL var_data binding failed: report_data[..32] != SHA-256(var_data)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Parsed HCL report data.
 pub struct HclReportData {
     /// Raw TEE report bytes (1184 bytes).
@@ -115,7 +131,13 @@ pub fn parse_hcl_report(hcl_report: &[u8]) -> Result<HclReportData> {
 
     // Validate content_length against available data
     let available = hcl_report.len() - content_start;
-    let bounded_len = content_length.min(available);
+    if content_length > available {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "HCL content_length ({}) exceeds available data ({})",
+            content_length, available
+        )));
+    }
+    let bounded_len = content_length;
 
     // Extract content and trim trailing nulls
     let content = &hcl_report[content_start..content_start + bounded_len];
@@ -387,11 +409,9 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
 pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<()> {
     let nonce = extract_tpm_nonce(message)?;
     if nonce.len() != expected.len() {
-        return Err(AttestationError::QuoteParseFailed(format!(
-            "TPM nonce length mismatch: extracted {} bytes, expected {} bytes",
-            nonce.len(),
-            expected.len()
-        )));
+        return Err(AttestationError::QuoteParseFailed(
+            "TPM nonce length mismatch".to_string(),
+        ));
     }
     if !crate::utils::constant_time_eq(&nonce, expected) {
         return Err(AttestationError::ReportDataMismatch);
