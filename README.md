@@ -1,5 +1,7 @@
 # Attestation
 
+[![CI](https://github.com/lunal-dot-dev/attestation-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lunal-dot-dev/attestation-rs/actions/workflows/ci.yml)
+
 A Rust library providing a unified interface for TEE (Trusted Execution Environment) attestation evidence generation and verification.
 
 ## Supported Platforms
