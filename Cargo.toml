@@ -30,6 +30,7 @@ sha2 = "0.10"
 thiserror = "2"
 anyhow = "1"
 log = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std", "now"] }
 cfg-if = "1"
 subtle = "2"
 
