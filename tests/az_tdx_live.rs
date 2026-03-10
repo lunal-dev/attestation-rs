@@ -162,7 +162,7 @@ async fn test_az_tdx_attest_then_verify_roundtrip() {
 
     // Verify without expected values (just check structure)
     let params = VerifyParams::default();
-    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params, None).await;
 
     assert!(
         result.is_ok(),
@@ -216,7 +216,7 @@ async fn test_az_tdx_verify_with_expected_nonce() {
         ..Default::default()
     };
 
-    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params, None).await;
 
     assert!(
         result.is_ok(),
@@ -288,7 +288,7 @@ async fn test_az_tdx_cross_process_serialization() {
     // Verify the deserialized evidence
     let params = VerifyParams::default();
     let result =
-        attestation::platforms::az_tdx::verify::verify_evidence(&evidence_back, &params).await;
+        attestation::platforms::az_tdx::verify::verify_evidence(&evidence_back, &params, None).await;
 
     assert!(
         result.is_ok(),
@@ -362,7 +362,7 @@ async fn test_az_tdx_wrong_nonce_fails_verification() {
         ..Default::default()
     };
 
-    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params).await;
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params, None).await;
 
     assert!(
         result.is_err(),
@@ -460,7 +460,7 @@ async fn test_az_tdx_empty_nonce_roundtrip() {
 
     // Verify without expected_report_data (don't check nonce)
     let params = VerifyParams::default();
-    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params)
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params, None)
         .await
         .expect("verify() with empty nonce evidence should succeed");
 
@@ -490,7 +490,7 @@ async fn test_az_tdx_32_byte_nonce() {
         expected_report_data: Some(nonce.to_vec()),
         ..Default::default()
     };
-    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params)
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params, None)
         .await
         .expect("verify() with 32-byte nonce should succeed");
 

@@ -618,6 +618,7 @@ pub fn build_tpm_verification_result(
     platform: PlatformType,
     report_data_match: Option<bool>,
     init_data_match: Option<bool>,
+    collateral_verified: bool,
 ) -> VerificationResult {
     let mut platform_data = base_claims.platform_data.clone();
 
@@ -660,6 +661,7 @@ pub fn build_tpm_verification_result(
         claims,
         report_data_match,
         init_data_match,
+        collateral_verified,
         tcb_status: None,
     }
 }
@@ -1265,6 +1267,7 @@ mod tests {
             PlatformType::AzSnp,
             None,
             None,
+            false,
         );
 
         assert_eq!(
@@ -1319,6 +1322,7 @@ mod tests {
             PlatformType::AzSnp,
             None,
             None,
+            false,
         );
 
         assert_eq!(

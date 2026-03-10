@@ -1,5 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use der::Decode;
+use der::{Decode, Reader};
+use signature::Verifier as _;
+use spki::DecodePublicKey;
 use x509_parser::prelude::{CertificateRevocationList, FromDer as X509FromDer, X509Certificate};
 
 use sev::certs::snp::{Certificate, Chain, Verifiable};
@@ -8,6 +10,13 @@ use sev::firmware::guest::AttestationReport;
 use crate::collateral::CertProvider;
 use crate::error::{AttestationError, Result};
 use crate::types::{PlatformType, ProcessorGeneration, SnpTcb, VerificationResult, VerifyParams};
+
+// OID constants for CRL signature algorithm identification.
+// x509-parser's verify_signature does not support OID_RSA_PSS (rsaPSS with parameters),
+// which Milan ARK uses for CRL signing. We dispatch on OID and verify with the `rsa`
+// and `p384` crates directly.
+const OID_RSA_PSS: &str = "1.2.840.113549.1.1.10";
+const OID_ECDSA_WITH_SHA384: &str = "1.2.840.10045.4.3.3";
 
 use super::claims::extract_claims;
 use super::evidence::SnpEvidence;
@@ -92,11 +101,14 @@ pub async fn verify_evidence(
     verify_vek_validity_period(&vcek_der)?;
 
     // 6c. CRL revocation check (if provider supplies CRL data)
-    if let Some(crl_der) = cert_provider.get_snp_crl(processor_gen).await? {
-        check_vcek_not_revoked(&vcek_der, &crl_der)?;
+    // AMD CRLs are signed by the ARK (root), not the ASK/ASVK intermediate.
+    let crl_verified = if let Some(crl_der) = cert_provider.get_snp_crl(processor_gen).await? {
+        check_vcek_not_revoked(&vcek_der, &crl_der, ark_der)?;
+        true
     } else {
         log::warn!("snp: CRL data not available from cert provider; skipping revocation check");
-    }
+        false
+    };
 
     // 7. Verify report signature against VEK
     let vek = Certificate::from_der(&vcek_der)
@@ -154,6 +166,7 @@ pub async fn verify_evidence(
         claims,
         report_data_match,
         init_data_match,
+        collateral_verified: crl_verified,
         tcb_status: None,
     })
 }
@@ -439,21 +452,131 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
 
 /// Check whether a VCEK/VLEK certificate has been revoked by an AMD CRL.
 ///
+/// Verifies the CRL's own signature against the issuing CA before trusting the
+/// revocation list. Without this an attacker could supply a forged empty CRL
+/// to bypass revocation checks.
+///
 /// `vcek_der`: DER-encoded VCEK/VLEK certificate.
 /// `crl_der`: DER-encoded CRL from AMD KDS.
-pub fn check_vcek_not_revoked(vcek_der: &[u8], crl_der: &[u8]) -> Result<()> {
+/// `issuer_der`: DER-encoded issuing CA certificate (ARK — AMD CRLs are signed by the root).
+// INVARIANT CLASS: Correctness
+// INVARIANT: CRL signature verified against issuing CA before trusting revocation data.
+pub fn check_vcek_not_revoked(vcek_der: &[u8], crl_der: &[u8], issuer_der: &[u8]) -> Result<()> {
+    // 1. Parse the issuing CA cert to extract its public key
+    let (_, issuer_cert) = X509Certificate::from_der(issuer_der)
+        .map_err(|e| AttestationError::CertChainError(format!("CRL issuer x509 parse: {}", e)))?;
+
+    // 2. Parse the CRL
+    let (_, crl) = CertificateRevocationList::from_der(crl_der)
+        .map_err(|e| AttestationError::CertChainError(format!("AMD CRL parse: {}", e)))?;
+
+    // 3. Verify CRL signature against the issuing CA's public key.
+    // We use our own implementation because x509-parser's verify_signature
+    // doesn't support RSA-PSS (used by Milan ASK for CRL signing).
+    verify_crl_signature(&crl, crl_der, &issuer_cert)?;
+
+    // 4. Check serial number against revocation list
     let (_, cert) = X509Certificate::from_der(vcek_der)
         .map_err(|e| AttestationError::CertChainError(format!("VCEK x509 parse for CRL: {}", e)))?;
     let cert_serial = cert.raw_serial();
-
-    let (_, crl) = CertificateRevocationList::from_der(crl_der)
-        .map_err(|e| AttestationError::CertChainError(format!("AMD CRL parse: {}", e)))?;
 
     for revoked in crl.iter_revoked_certificates() {
         if revoked.raw_serial() == cert_serial {
             return Err(AttestationError::CertChainError(
                 "VCEK/VLEK certificate has been revoked by AMD CRL".into(),
             ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract the TBSCertList raw DER bytes from a CRL DER blob.
+///
+/// A CRL in DER is: SEQUENCE { TBSCertList, signatureAlgorithm, signatureValue }
+/// The signed data is the raw DER encoding of the first element (TBSCertList).
+///
+/// Uses the `der` crate for ASN.1 parsing instead of hand-rolling DER decoding.
+/// x509-parser's `TbsCertList` does not expose raw bytes publicly.
+fn extract_tbs_from_crl_der(crl_der: &[u8]) -> Result<&[u8]> {
+    let mut reader = der::SliceReader::new(crl_der)
+        .map_err(|e| AttestationError::CertChainError(format!("CRL DER: {}", e)))?;
+    // Skip past the outer SEQUENCE tag+length to reach its content
+    let header = der::Header::decode(&mut reader)
+        .map_err(|e| AttestationError::CertChainError(format!("CRL DER header: {}", e)))?;
+    header
+        .tag
+        .assert_eq(der::Tag::Sequence)
+        .map_err(|e| AttestationError::CertChainError(format!("CRL: expected SEQUENCE: {}", e)))?;
+    // First element inside the SEQUENCE is TBSCertList
+    reader
+        .tlv_bytes()
+        .map_err(|e| AttestationError::CertChainError(format!("CRL TBS extract: {}", e)))
+}
+
+/// Verify a CRL signature against the issuing CA certificate.
+///
+/// Supports:
+/// - RSA-PSS SHA-384 (Milan ASK, RSA 4096)
+/// - ECDSA P-384 SHA-384 (Genoa/Turin ASK)
+// INVARIANT CLASS: Correctness
+// INVARIANT: CRL must be signed by the issuing CA. No shortcuts.
+fn verify_crl_signature(
+    crl: &CertificateRevocationList,
+    crl_der: &[u8],
+    issuer_cert: &X509Certificate,
+) -> Result<()> {
+    let sig_alg_oid = crl.signature_algorithm.algorithm.to_string();
+    let tbs_der = extract_tbs_from_crl_der(crl_der)?;
+    let sig_value = crl.signature_value.as_ref();
+
+    match sig_alg_oid.as_str() {
+        OID_RSA_PSS => {
+            // Milan ASK uses RSA 4096 with PSS SHA-384
+            let spki_der = issuer_cert.public_key().raw;
+            let rsa_pub = rsa::RsaPublicKey::from_public_key_der(spki_der).map_err(|e| {
+                AttestationError::CertChainError(format!("CRL issuer RSA key parse: {}", e))
+            })?;
+            // ALGORITHM: RSA-PSS SHA-384 verification. The AMD Milan ARK signs
+            // CRLs with RSASSA-PSS using SHA-384 as both hash and MGF1 hash,
+            // salt length = hash length (48 bytes).
+            let verifying_key = rsa::pss::VerifyingKey::<sha2::Sha384>::new(rsa_pub);
+            let sig = rsa::pss::Signature::try_from(sig_value).map_err(|e| {
+                AttestationError::CertChainError(format!("CRL RSA-PSS signature parse: {}", e))
+            })?;
+            verifying_key.verify(tbs_der, &sig).map_err(|e| {
+                AttestationError::CertChainError(format!(
+                    "CRL RSA-PSS signature verification failed: {}",
+                    e
+                ))
+            })?;
+        }
+        OID_ECDSA_WITH_SHA384 => {
+            // Genoa/Turin ASK uses ECDSA P-384
+            let verifying_key = p384::ecdsa::VerifyingKey::from_sec1_bytes(
+                &issuer_cert.public_key().subject_public_key.data,
+            )
+            .or_else(|_| {
+                p384::ecdsa::VerifyingKey::from_public_key_der(issuer_cert.public_key().raw)
+            })
+            .map_err(|e| {
+                AttestationError::CertChainError(format!("CRL issuer ECDSA key parse: {}", e))
+            })?;
+            let sig = p384::ecdsa::DerSignature::from_bytes(sig_value).map_err(|e| {
+                AttestationError::CertChainError(format!("CRL ECDSA signature parse: {}", e))
+            })?;
+            verifying_key.verify(tbs_der, &sig).map_err(|e| {
+                AttestationError::CertChainError(format!(
+                    "CRL ECDSA signature verification failed: {}",
+                    e
+                ))
+            })?;
+        }
+        _ => {
+            return Err(AttestationError::CertChainError(format!(
+                "unsupported CRL signature algorithm OID: {}",
+                sig_alg_oid
+            )));
         }
     }
 
@@ -807,5 +930,44 @@ mod tests {
                 .verify()
                 .unwrap_or_else(|e| panic!("{:?} ARK->ASVK verify failed: {}", gen, e));
         }
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires network access
+    async fn test_crl_signature_verification_milan() {
+        let client = reqwest::Client::new();
+        let url = crate::collateral::snp_crl_url(ProcessorGeneration::Milan);
+        let resp = client.get(&url).send().await.unwrap();
+        let crl_der = resp.bytes().await.unwrap().to_vec();
+
+        // AMD CRLs are signed by the ARK (root), not the ASK
+        let ark_der = super::super::certs::get_ark(ProcessorGeneration::Milan);
+        let (_, ark_cert) = X509Certificate::from_der(ark_der).unwrap();
+        let (_, crl) = CertificateRevocationList::from_der(&crl_der).unwrap();
+
+        eprintln!("CRL sig algo OID: {}", crl.signature_algorithm.algorithm);
+        eprintln!("CRL issuer: {}", crl.issuer());
+
+        let result = verify_crl_signature(&crl, &crl_der, &ark_cert);
+        assert!(result.is_ok(), "Milan CRL sig verify failed: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires network access
+    async fn test_crl_signature_verification_genoa() {
+        let client = reqwest::Client::new();
+        let url = crate::collateral::snp_crl_url(ProcessorGeneration::Genoa);
+        let resp = client.get(&url).send().await.unwrap();
+        let crl_der = resp.bytes().await.unwrap().to_vec();
+
+        // AMD CRLs are signed by the ARK (root), not the ASK
+        let ark_der = super::super::certs::get_ark(ProcessorGeneration::Genoa);
+        let (_, ark_cert) = X509Certificate::from_der(ark_der).unwrap();
+        let (_, crl) = CertificateRevocationList::from_der(&crl_der).unwrap();
+
+        eprintln!("CRL sig algo OID: {}", crl.signature_algorithm.algorithm);
+
+        let result = verify_crl_signature(&crl, &crl_der, &ark_cert);
+        assert!(result.is_ok(), "Genoa CRL sig verify failed: {:?}", result.err());
     }
 }

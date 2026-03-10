@@ -253,7 +253,7 @@ async fn test_az_snp_hcl_report_contains_snp_report() {
     assert_eq!(hcl.tee_report.len(), 1184);
 
     // Should parse as a valid SNP report
-    let snp_report = attestation::platforms::snp::verify::SnpReport::from_bytes(&hcl.tee_report)
+    let snp_report = attestation::platforms::snp::verify::parse_report(&hcl.tee_report)
         .expect("should parse as SNP report");
 
     // Version should be >= 3
