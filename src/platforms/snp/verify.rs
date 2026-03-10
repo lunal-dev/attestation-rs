@@ -889,13 +889,11 @@ mod tests {
         ] {
             let asvk_der = super::super::certs::get_asvk(gen);
             let cert = x509_cert::Certificate::from_der(asvk_der)
-                .unwrap_or_else(|e| panic!("{:?} ASVK parse failed: {}", gen, e));
+                .unwrap_or_else(|e| panic!("{gen:?} ASVK parse failed: {e}"));
             let subject = format!("{}", cert.tbs_certificate.subject);
             assert!(
                 subject.contains("VLEK"),
-                "{:?} ASVK subject should contain VLEK: {}",
-                gen,
-                subject
+                "{gen:?} ASVK subject should contain VLEK: {subject}"
             );
         }
     }
@@ -914,13 +912,13 @@ mod tests {
             let asvk_der = super::super::certs::get_asvk(gen);
             // Parse via sev crate to verify the crypto
             let ark = Certificate::from_der(ark_der)
-                .unwrap_or_else(|e| panic!("{:?} ARK sev parse: {}", gen, e));
+                .unwrap_or_else(|e| panic!("{gen:?} ARK sev parse: {e}"));
             let asvk = Certificate::from_der(asvk_der)
-                .unwrap_or_else(|e| panic!("{:?} ASVK sev parse: {}", gen, e));
+                .unwrap_or_else(|e| panic!("{gen:?} ASVK sev parse: {e}"));
             // ARK should verify ASVK
             (&ark, &asvk)
                 .verify()
-                .unwrap_or_else(|e| panic!("{:?} ARK->ASVK verify failed: {}", gen, e));
+                .unwrap_or_else(|e| panic!("{gen:?} ARK->ASVK verify failed: {e}"));
         }
     }
 
@@ -941,7 +939,11 @@ mod tests {
         eprintln!("CRL issuer: {}", crl.issuer());
 
         let result = verify_crl_signature(&crl, &crl_der, &ark_cert);
-        assert!(result.is_ok(), "Milan CRL sig verify failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Milan CRL sig verify failed: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -960,6 +962,10 @@ mod tests {
         eprintln!("CRL sig algo OID: {}", crl.signature_algorithm.algorithm);
 
         let result = verify_crl_signature(&crl, &crl_der, &ark_cert);
-        assert!(result.is_ok(), "Genoa CRL sig verify failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Genoa CRL sig verify failed: {:?}",
+            result.err()
+        );
     }
 }

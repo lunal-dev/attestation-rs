@@ -54,9 +54,7 @@ pub const MAX_EVIDENCE_FIELD_SIZE: usize = 1_048_576;
 pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
     if len > MAX_EVIDENCE_FIELD_SIZE {
         return Err(crate::error::AttestationError::EvidenceDeserialize(
-            format!(
-                "field '{name}' too large: {len} bytes (max {MAX_EVIDENCE_FIELD_SIZE})"
-            ),
+            format!("field '{name}' too large: {len} bytes (max {MAX_EVIDENCE_FIELD_SIZE})"),
         ));
     }
     Ok(())

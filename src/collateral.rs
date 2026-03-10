@@ -274,9 +274,7 @@ impl CertProvider for DefaultCertProvider {
                 let der = base64::engine::general_purpose::STANDARD
                     .decode(current.trim())
                     .map_err(|e| {
-                        crate::error::AttestationError::CertFetchError(format!(
-                            "cert base64: {e}"
-                        ))
+                        crate::error::AttestationError::CertFetchError(format!("cert base64: {e}"))
                     })?;
                 certs.push(der);
             } else if in_cert {

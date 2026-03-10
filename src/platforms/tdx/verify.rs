@@ -657,8 +657,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("DebugPolicyViolation"),
-            "should be DebugPolicyViolation, got: {}",
-            err
+            "should be DebugPolicyViolation, got: {err}"
         );
     }
 
@@ -808,8 +807,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("ReportDataMismatch"),
-            "error should be ReportDataMismatch, got: {}",
-            err
+            "error should be ReportDataMismatch, got: {err}"
         );
     }
 

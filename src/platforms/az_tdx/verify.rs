@@ -187,8 +187,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("base64") || err.contains("Base64"),
-            "error: {}",
-            err
+            "error: {err}"
         );
     }
 
@@ -209,8 +208,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("version"),
-            "error should mention version: {}",
-            err
+            "error should mention version: {err}"
         );
     }
 
@@ -233,8 +231,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("report_type") || err.contains("expected"),
-            "error: {}",
-            err
+            "error: {err}"
         );
     }
 
@@ -257,8 +254,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("too short"),
-            "error should mention too short: {}",
-            err
+            "error should mention too short: {err}"
         );
     }
 

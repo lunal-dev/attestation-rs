@@ -121,8 +121,7 @@ pub fn parse_auth_data<'a>(quote_bytes: &'a [u8], body_end: usize) -> Result<Quo
     }
     let qe_auth_data_size = cert_data
         .pread_with::<u16>(auth_size_offset, scroll::LE)
-        .map_err(|e| err(format!("qe_auth_data_size: {e}")))?
-        as usize;
+        .map_err(|e| err(format!("qe_auth_data_size: {e}")))? as usize;
 
     let qe_auth_data_start = auth_size_offset + 2;
     if cert_data.len() < qe_auth_data_start + qe_auth_data_size {
@@ -366,14 +365,12 @@ fn parse_x509_cert(der: &[u8], label: &str) -> Result<CertData> {
     //   - The signatureValue (the actual ECDSA signature)
     //   - The subjectPublicKeyInfo from tbsCertificate
 
-    let cert = x509_cert::Certificate::from_der(der).map_err(|e| {
-        AttestationError::CertChainError(format!("{label} cert DER parse: {e}"))
-    })?;
+    let cert = x509_cert::Certificate::from_der(der)
+        .map_err(|e| AttestationError::CertChainError(format!("{label} cert DER parse: {e}")))?;
 
     // Extract TBS bytes: re-encode the TBS certificate to DER
-    let tbs_bytes = der::Encode::to_der(&cert.tbs_certificate).map_err(|e| {
-        AttestationError::CertChainError(format!("{label} TBS DER encode: {e}"))
-    })?;
+    let tbs_bytes = der::Encode::to_der(&cert.tbs_certificate)
+        .map_err(|e| AttestationError::CertChainError(format!("{label} TBS DER encode: {e}")))?;
 
     // Extract signature bytes (strip leading zero byte if present for ASN.1 BIT STRING)
     let sig_bits = cert.signature.raw_bytes();
@@ -400,9 +397,8 @@ fn extract_p256_pub_key(pub_key_bytes: &[u8], label: &str) -> Result<VerifyingKe
 /// Verify a certificate's signature using the issuer's public key.
 fn verify_cert_signature(cert: &CertData, issuer_key: &VerifyingKey, label: &str) -> Result<()> {
     // The signature in X.509 is DER-encoded (ASN.1 SEQUENCE of two INTEGERs)
-    let sig = Signature::from_der(&cert.signature_bytes).map_err(|e| {
-        AttestationError::CertChainError(format!("{label} signature parse: {e}"))
-    })?;
+    let sig = Signature::from_der(&cert.signature_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("{label} signature parse: {e}")))?;
 
     issuer_key.verify(&cert.tbs_bytes, &sig).map_err(|e| {
         AttestationError::CertChainError(format!("{label} signature verification: {e}"))
@@ -457,9 +453,9 @@ fn split_pem_to_der(pem_str: &str) -> Result<Vec<Vec<u8>>> {
             current.clear();
         } else if line.contains("END CERTIFICATE") {
             in_cert = false;
-            let der = BASE64.decode(current.trim()).map_err(|e| {
-                AttestationError::CertChainError(format!("PEM base64 decode: {e}"))
-            })?;
+            let der = BASE64
+                .decode(current.trim())
+                .map_err(|e| AttestationError::CertChainError(format!("PEM base64 decode: {e}")))?;
             certs.push(der);
         } else if in_cert {
             current.push_str(line.trim());
@@ -568,9 +564,8 @@ pub fn extract_fmspc_from_pck_der(der_certs: &[Vec<u8>]) -> Result<String> {
 
 /// Parse the SGX extension ASN.1 blob and extract the FMSPC value.
 fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
-    let fmspc_oid = x509_parser::oid_registry::Oid::from(FMSPC_OID).map_err(|e| {
-        AttestationError::CertChainError(format!("invalid FMSPC_OID: {e:?}"))
-    })?;
+    let fmspc_oid = x509_parser::oid_registry::Oid::from(FMSPC_OID)
+        .map_err(|e| AttestationError::CertChainError(format!("invalid FMSPC_OID: {e:?}")))?;
 
     // Parse outer SEQUENCE
     let (_, seq) = parse_der_sequence(data)
@@ -674,14 +669,11 @@ fn extract_pck_tcb_components_from_der(der_certs: &[Vec<u8>]) -> Result<([u8; 16
     let (_, cert) = X509Certificate::from_der(&der_certs[0])
         .map_err(|e| AttestationError::CertChainError(format!("PCK leaf x509 parse: {e}")))?;
 
-    let sgx_ext_oid =
-        x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID).map_err(|e| {
-            AttestationError::CertChainError(format!("invalid SGX_EXTENSIONS_OID: {e:?}"))
-        })?;
-    let tcb_oid =
-        x509_parser::oid_registry::Oid::from(&[1, 2, 840, 113741, 1, 13, 1, 2][..]).map_err(
-            |e| AttestationError::CertChainError(format!("invalid TCB OID: {e:?}")),
-        )?;
+    let sgx_ext_oid = x509_parser::oid_registry::Oid::from(SGX_EXTENSIONS_OID).map_err(|e| {
+        AttestationError::CertChainError(format!("invalid SGX_EXTENSIONS_OID: {e:?}"))
+    })?;
+    let tcb_oid = x509_parser::oid_registry::Oid::from(&[1, 2, 840, 113741, 1, 13, 1, 2][..])
+        .map_err(|e| AttestationError::CertChainError(format!("invalid TCB OID: {e:?}")))?;
 
     for ext in cert.extensions() {
         if ext.oid == sgx_ext_oid {
@@ -787,9 +779,8 @@ pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8])
     let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
         AttestationError::CertChainError(format!("TCB Info signature hex decode: {e}"))
     })?;
-    let signature = Signature::from_slice(&sig_bytes).map_err(|e| {
-        AttestationError::CertChainError(format!("TCB Info signature parse: {e}"))
-    })?;
+    let signature = Signature::from_slice(&sig_bytes)
+        .map_err(|e| AttestationError::CertChainError(format!("TCB Info signature parse: {e}")))?;
 
     // Extract the raw JSON string of "tcbInfo" from the envelope.
     // NOTE: .to_string() re-serializes the JSON, which preserves correctness
@@ -807,9 +798,7 @@ pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8])
     signing_key
         .verify(tcb_info_raw.as_bytes(), &signature)
         .map_err(|e| {
-            AttestationError::CertChainError(format!(
-                "TCB Info signature verification failed: {e}"
-            ))
+            AttestationError::CertChainError(format!("TCB Info signature verification failed: {e}"))
         })?;
 
     Ok(())
@@ -1073,9 +1062,7 @@ pub fn verify_qe_identity(
 
     // Parse the identity fields
     let identity: EnclaveIdentityFields = serde_json::from_value(envelope.enclave_identity.clone())
-        .map_err(|e| {
-            AttestationError::CertChainError(format!("QE Identity fields parse: {e}"))
-        })?;
+        .map_err(|e| AttestationError::CertChainError(format!("QE Identity fields parse: {e}")))?;
 
     // Extract QE report fields at known offsets
     let qe_miscselect = &qe_report_body[QE_MISCSELECT_OFFSET..QE_MISCSELECT_OFFSET + 4];
@@ -1480,7 +1467,7 @@ mod tests {
         let result = check_intermediate_ca_revocation(single_cert_pem.as_bytes(), &bogus_crl);
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
-        assert!(err.contains("at least 2 certs"), "error: {}", err);
+        assert!(err.contains("at least 2 certs"), "error: {err}");
     }
 
     #[test]

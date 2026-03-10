@@ -301,11 +301,9 @@ pub fn extract_ak_pub_from_var_data(var_data: &[u8]) -> Result<(Vec<u8>, Vec<u8>
 
     // authPolicy (TPM2B_DIGEST): 2-byte size + data
     let auth_size = read_be_u16(var_data, offset, "authPolicy size")? as usize;
-    offset = offset
-        .checked_add(2 + auth_size)
-        .ok_or_else(|| {
-            AttestationError::QuoteParseFailed("authPolicy size overflow".to_string())
-        })?;
+    offset = offset.checked_add(2 + auth_size).ok_or_else(|| {
+        AttestationError::QuoteParseFailed("authPolicy size overflow".to_string())
+    })?;
 
     // TPMS_RSA_PARMS
     if offset + 10 > var_data.len() {
@@ -922,8 +920,7 @@ mod tests {
         let err_msg = format!("{:?}", result.err().unwrap());
         assert!(
             err_msg.contains("not RSA"),
-            "error should mention RSA: {}",
-            err_msg
+            "error should mention RSA: {err_msg}"
         );
     }
 
@@ -1119,8 +1116,7 @@ mod tests {
         // 256 zero bytes = 342 base64url chars (all 'A')
         let n_b64 = "A".repeat(342);
         let json_str = format!(
-            r#"{{"keys":[{{"kid":"HCLAkPub","key_ops":["sign"],"kty":"RSA","e":"AQAB","n":"{}"}}]}}"#,
-            n_b64
+            r#"{{"keys":[{{"kid":"HCLAkPub","key_ops":["sign"],"kty":"RSA","e":"AQAB","n":"{n_b64}"}}]}}"#,
         );
 
         let (modulus, exponent) = extract_ak_pub_from_jwk_json(json_str.as_bytes()).unwrap();
@@ -1164,8 +1160,7 @@ mod tests {
         let err = format!("{:?}", result.err().unwrap());
         assert!(
             err.contains("RSA") || err.contains("sig") || err.contains("Signature"),
-            "error should be about signature verification, not key extraction: {}",
-            err
+            "error should be about signature verification, not key extraction: {err}"
         );
     }
 

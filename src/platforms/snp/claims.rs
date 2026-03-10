@@ -91,7 +91,7 @@ mod tests {
                 assert_eq!(*snp, 8);
                 assert_eq!(*microcode, 115);
             }
-            other => panic!("expected TcbInfo::Snp, got: {:?}", other),
+            other => panic!("expected TcbInfo::Snp, got: {other:?}"),
         }
 
         // Platform data should contain policy fields

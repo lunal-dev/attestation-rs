@@ -41,6 +41,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
             let result = attestation::platforms::az_tdx::verify::verify_evidence(
                 black_box(&evidence),
                 black_box(&params),
+                None,
             )
             .await
             .unwrap();

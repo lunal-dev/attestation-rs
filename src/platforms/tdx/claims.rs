@@ -94,7 +94,7 @@ mod tests {
                 assert_eq!(tcb_svn[0], 0x03);
                 assert_eq!(tcb_svn[2], 0x05);
             }
-            other => panic!("expected TcbInfo::Tdx, got: {:?}", other),
+            other => panic!("expected TcbInfo::Tdx, got: {other:?}"),
         }
 
         // Platform data checks
@@ -151,7 +151,7 @@ mod tests {
                 assert_eq!(tcb_svn[1], 0x01);
                 assert_eq!(tcb_svn[2], 0x02);
             }
-            other => panic!("expected TcbInfo::Tdx, got: {:?}", other),
+            other => panic!("expected TcbInfo::Tdx, got: {other:?}"),
         }
 
         // V5 TDX 1.5 quote version
@@ -193,13 +193,11 @@ mod tests {
         ] {
             assert!(
                 v4_claims.platform_data.get(*key).is_some(),
-                "v4 claims missing key: {}",
-                key
+                "v4 claims missing key: {key}"
             );
             assert!(
                 v5_claims.platform_data.get(*key).is_some(),
-                "v5 claims missing key: {}",
-                key
+                "v5 claims missing key: {key}"
             );
         }
     }
