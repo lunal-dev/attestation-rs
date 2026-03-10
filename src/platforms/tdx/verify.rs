@@ -464,6 +464,7 @@ pub async fn verify_evidence(
         claims,
         report_data_match,
         init_data_match,
+        collateral_verified: tcb_status.is_some(),
         tcb_status,
     })
 }

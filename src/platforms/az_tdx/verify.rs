@@ -127,6 +127,7 @@ pub async fn verify_evidence(
 
     // Result
     let tdx_claims = extract_claims(&tdx_quote);
+    let collateral_verified = tcb_status.is_some();
     let mut result = tpm_common::build_tpm_verification_result(
         tdx_claims,
         &tpm_pcrs,
@@ -134,6 +135,7 @@ pub async fn verify_evidence(
         PlatformType::AzTdx,
         report_data_match,
         init_data_match,
+        collateral_verified,
     );
     result.tcb_status = tcb_status;
     Ok(result)

@@ -129,13 +129,17 @@ pub async fn verify_evidence(
     })?;
 
     // CRL revocation check (if provider supplies CRL data)
-    if let Some(crl_der) = cert_provider.get_snp_crl(matched_gen).await? {
-        crate::platforms::snp::verify::check_vcek_not_revoked(&vcek_der, &crl_der)?;
+    // AMD CRLs are signed by the ARK (root), not the ASK/ASVK intermediate.
+    let ark_der = crate::platforms::snp::certs::get_ark(matched_gen);
+    let crl_verified = if let Some(crl_der) = cert_provider.get_snp_crl(matched_gen).await? {
+        crate::platforms::snp::verify::check_vcek_not_revoked(&vcek_der, &crl_der, ark_der)?;
+        true
     } else {
         log::warn!(
             "az-snp: SNP CRL data not available from cert provider; skipping revocation check"
         );
-    }
+        false
+    };
 
     // SNP report signature against VCEK
     crate::platforms::snp::verify::verify_report_signature(&hcl.tee_report, &vcek_der)?;
@@ -169,6 +173,7 @@ pub async fn verify_evidence(
         PlatformType::AzSnp,
         report_data_match,
         init_data_match,
+        crl_verified,
     ))
 }
 

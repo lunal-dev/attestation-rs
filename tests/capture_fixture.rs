@@ -46,7 +46,7 @@ async fn capture_az_tdx_evidence_fixture() {
 
     // Also verify it
     let params = attestation::types::VerifyParams::default();
-    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params)
+    let result = attestation::platforms::az_tdx::verify::verify_evidence(&evidence, &params, None)
         .await
         .expect("verify failed");
     eprintln!(

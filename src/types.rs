@@ -62,7 +62,12 @@ pub struct VerificationResult {
     pub report_data_match: Option<bool>,
     /// Did the init_data match expected (None if no expected value provided).
     pub init_data_match: Option<bool>,
-    /// TDX DCAP TCB status from Intel collateral evaluation (TDX platforms only).
+    /// Whether collateral was available and all collateral checks passed
+    /// (CRL revocation, TCB status, QE identity). False when collateral was
+    /// unavailable or any collateral check was skipped.
+    #[serde(default)]
+    pub collateral_verified: bool,
+    /// Platform-specific collateral/TCB status details (TDX DCAP status, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tcb_status: Option<DcapVerificationStatus>,
 }
