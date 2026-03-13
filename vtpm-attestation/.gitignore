@@ -1,4 +1,0 @@
-target
-arm/*.json
-Cargo.lock
-*.swp

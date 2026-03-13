@@ -1,28 +1,125 @@
-[workspace]
-members = [
-    "lunal-attestation",
-    "vtpm-attestation",
-    "amd-vtpm",
-    "amd-vtpm/example"
-]
-resolver = "2"
+[package]
+name = "attestation"
+version = "0.3.0"
+edition = "2021"
+description = "Unified TEE attestation evidence generation and verification"
+license = "Apache-2.0"
 
-[workspace.dependencies]
-# Common dependencies shared across workspace members
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = "1.45"
-reqwest = { version = "0.12", features = ["json", "blocking"] }
-hex = "0.4"
+[features]
+default = ["snp", "tdx", "az-snp", "az-tdx"]
+
+# Platform features — gate which TEE platforms are compiled in
+snp = ["dep:sev", "dep:x509-parser"]
+tdx = ["dep:x509-parser"]
+az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
+az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
+
+# Guest-side evidence generation (Linux-only, requires TEE hardware)
+attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
+
+# CLI binary (verify works everywhere; combine with `attest` for evidence generation)
+cli = ["dep:clap"]
+
+[dependencies]
+async-trait = "0.1"
 base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.5", features = ["derive"] }
-bincode = "1.3.1"
-urlencoding = "2.1"
-flate2 = "1.0"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std", "now"] }
+cfg-if = "1"
+subtle = "2"
 
-# Dependencies from vtpm-attestation
-thiserror = "2.0.3"
-sev = { version = "6.2.1", features = ["crypto_nossl"] }
-zerocopy = { version = "0.8.26", features = ["derive"] }
-pem = "3.0"
+# Crypto
+p256 = { version = "0.13", features = ["ecdsa"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
+# hazmat feature needed internally for PrehashVerifier in TDX DCAP signature verification;
+# no hazmat types are re-exported in the public API.
+ecdsa = { version = "0.16", features = ["verifying", "hazmat"] }
+rsa = { version = "0.9", features = ["sha2"] }
+x509-cert = "0.2"
+x509-parser = { version = "0.16", optional = true }
+der = { version = "0.7", features = ["alloc", "oid"] }
+spki = "0.7"
+signature = "2"
+
+# Binary parsing
+scroll = "0.12"
+
+# Attest-side dependencies (cross-platform parts)
+libc = { version = "0.2", optional = true }
+tempfile = { version = "3", optional = true }
+sev = { version = "6", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
+pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
+zerocopy = { version = "0.8", optional = true, features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
+
+# Native (non-WASM) dependencies — needed for cert fetching on any OS
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+
+# Guest-side attestation crates — Linux-only (require TEE hardware / vTPM)
+[target.'cfg(target_os = "linux")'.dependencies]
+az-snp-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
+az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+async-trait = "0.1"
+tempfile = "3"
+
+[[bench]]
+name = "snp"
+harness = false
+required-features = ["snp"]
+
+[[bench]]
+name = "tdx"
+harness = false
+required-features = ["tdx"]
+
+[[bench]]
+name = "az_snp"
+harness = false
+required-features = ["az-snp"]
+
+[[bench]]
+name = "az_tdx"
+harness = false
+required-features = ["az-tdx"]
+
+[[bench]]
+name = "az_snp_attest"
+harness = false
+required-features = ["az-snp", "attest"]
+
+[[example]]
+name = "snp"
+required-features = ["snp", "attest"]
+
+[[example]]
+name = "tdx"
+required-features = ["tdx", "attest"]
+
+[[example]]
+name = "az_snp"
+required-features = ["az-snp", "attest"]
+
+[[example]]
+name = "az_tdx"
+required-features = ["az-tdx", "attest"]
+
+[[bin]]
+name = "attestation-cli"
+path = "src/bin/cli.rs"
+required-features = ["cli"]
