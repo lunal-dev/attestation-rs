@@ -40,9 +40,13 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<DstackEvidence> {
         )
     })??;
 
+    // dstack returns the quote as a hex string; convert to base64
+    // since the TDX verifier expects base64-encoded quote bytes.
+    let quote_bytes = response.decode_quote()?;
+    let quote_b64 = BASE64.encode(&quote_bytes);
+
     Ok(DstackEvidence {
-        // response.quote is already base64-encoded by dstack
-        quote: response.quote,
+        quote: quote_b64,
         event_log: non_empty(response.event_log),
         vm_config: non_empty(response.vm_config),
     })
@@ -55,7 +59,7 @@ fn non_empty(s: String) -> Option<String> {
 /// Response from dstack's GetQuote endpoint.
 #[derive(Debug, Deserialize)]
 struct GetQuoteResponse {
-    /// Base64-encoded TDX quote bytes.
+    /// Hex-encoded TDX quote bytes.
     quote: String,
     /// Event log entries (JSON string).
     #[serde(default)]
@@ -66,11 +70,11 @@ struct GetQuoteResponse {
 }
 
 impl GetQuoteResponse {
-    /// Decode the quote field from base64 to raw bytes.
+    /// Decode the quote field from hex to raw bytes.
     fn decode_quote(&self) -> Result<Vec<u8>> {
-        BASE64.decode(&self.quote).map_err(|e| {
+        hex::decode(&self.quote).map_err(|e| {
             AttestationError::HardwareAccessFailed(format!(
-                "failed to decode dstack quote base64: {e}"
+                "failed to decode dstack quote hex: {e}"
             ))
         })
     }
