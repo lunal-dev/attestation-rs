@@ -1,4 +1,5 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
+use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64URL};
+use base64::Engine;
 use sha2::{Digest, Sha256, Sha384};
 use subtle::ConstantTimeEq;
 
@@ -58,6 +59,28 @@ pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Decode a single PEM block into DER bytes, accepting any label.
+///
+/// Returns the DER payload of the first PEM block found. If the input is not
+/// PEM (no `-----BEGIN` line), returns `None` so the caller can fall through to
+/// treat the data as raw DER.
+pub fn decode_pem_to_der(data: &[u8]) -> crate::error::Result<Option<Vec<u8>>> {
+    let pem_str = std::str::from_utf8(data).map_err(|e| {
+        crate::error::AttestationError::CertFetchError(format!("PEM is not valid UTF-8: {e}"))
+    })?;
+    if !pem_str.starts_with("-----BEGIN") {
+        return Ok(None);
+    }
+    let b64: String = pem_str
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect();
+    let der = BASE64.decode(b64.trim()).map_err(|e| {
+        crate::error::AttestationError::CertFetchError(format!("PEM base64 decode: {e}"))
+    })?;
+    Ok(Some(der))
 }
 
 /// Compare two byte slices in constant time.

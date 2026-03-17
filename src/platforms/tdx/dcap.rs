@@ -602,11 +602,15 @@ fn extract_fmspc_from_sgx_extension(data: &[u8]) -> Result<String> {
 }
 
 /// Intel PCS v4 TCB Info JSON signed envelope.
+///
+/// Uses `RawValue` for the `tcbInfo` field to preserve the exact bytes
+/// Intel signed — `serde_json` without `preserve_order` uses `BTreeMap`
+/// which reorders keys alphabetically, breaking signature verification.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TcbInfoSignedEnvelope {
-    #[allow(dead_code)]
-    tcb_info: TcbInfoJson,
+struct TcbInfoSignedEnvelope<'a> {
+    #[serde(borrow)]
+    tcb_info: &'a serde_json::value::RawValue,
     signature: String,
 }
 
@@ -773,7 +777,7 @@ fn extract_integer_value(obj: &x509_parser::der_parser::ber::BerObject) -> Resul
 /// `signing_certs_pem`: PEM-encoded signing certificate chain from the
 /// `TCB-Info-Issuer-Chain` response header, rooted to Intel SGX Root CA.
 pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8]) -> Result<()> {
-    let envelope: TcbInfoSignedEnvelope = serde_json::from_slice(tcb_info_json)
+    let envelope: TcbInfoSignedEnvelope<'_> = serde_json::from_slice(tcb_info_json)
         .map_err(|e| AttestationError::CertChainError(format!("TCB Info envelope parse: {e}")))?;
 
     let sig_bytes = hex::decode(&envelope.signature).map_err(|e| {
@@ -782,21 +786,12 @@ pub fn verify_tcb_info_signature(tcb_info_json: &[u8], signing_certs_pem: &[u8])
     let signature = Signature::from_slice(&sig_bytes)
         .map_err(|e| AttestationError::CertChainError(format!("TCB Info signature parse: {e}")))?;
 
-    // Extract the raw JSON string of "tcbInfo" from the envelope.
-    // NOTE: .to_string() re-serializes the JSON, which preserves correctness
-    // as long as serde_json maintains key order (it does for Value::Object).
-    let raw_json: serde_json::Value = serde_json::from_slice(tcb_info_json)
-        .map_err(|e| AttestationError::CertChainError(format!("TCB Info raw JSON parse: {e}")))?;
-    let tcb_info_raw = raw_json
-        .get("tcbInfo")
-        .ok_or_else(|| AttestationError::CertChainError("TCB Info missing 'tcbInfo' field".into()))?
-        .to_string();
-
     // Verify the signing cert chain roots to Intel SGX Root CA (2-cert chain)
     let signing_key = verify_signing_cert_chain(signing_certs_pem)?;
 
+    // RawValue preserves the exact bytes Intel signed — no re-serialization.
     signing_key
-        .verify(tcb_info_raw.as_bytes(), &signature)
+        .verify(envelope.tcb_info.get().as_bytes(), &signature)
         .map_err(|e| {
             AttestationError::CertChainError(format!("TCB Info signature verification failed: {e}"))
         })?;
@@ -848,49 +843,45 @@ pub fn evaluate_tcb_status(
     let (pck_compsvn, pck_pcesvn) = extract_pck_tcb_components(pck_pem)?;
     let fmspc = extract_fmspc_from_pck(pck_pem)?;
 
-    // Find the first matching TCB level where all SGX platform SVNs >= level SVNs
-    // and PCESVN >= level PCESVN
-    let mut sgx_match_idx = None;
-    for (i, level) in wrapper.tcb_info.tcb_levels.iter().enumerate() {
-        let sgx_comps: Vec<u8> = level.tcb.sgxtcbcomponents.iter().map(|c| c.svn).collect();
-        if sgx_comps.len() < 16 {
-            log::warn!(
-                "TCB level {} has only {} SGX components (expected 16), skipping",
-                i,
-                sgx_comps.len()
-            );
-            continue;
-        }
+    // Single-pass TCB level matching (follows Intel DCAP QVL algorithm).
+    // SGX match: all PCK SGX component SVNs >= level SVNs, and PCESVN >= level PCESVN.
+    // TDX match: all tee_tcb_svn values >= level TDX component SVNs.
+    //   When tdxtcbcomponents is absent from a level, it is treated as a match
+    //   (the level applies to all TDX TCB values).
+    let tee_tcb_svn_nonzero = tee_tcb_svn.iter().any(|&v| v != 0);
+    let mut sgx_matched = false;
 
-        let sgx_match = pck_compsvn
-            .iter()
-            .zip(sgx_comps.iter())
-            .all(|(&pck, &lvl)| pck >= lvl)
-            && pck_pcesvn >= level.tcb.pcesvn;
-
-        if sgx_match {
-            sgx_match_idx = Some(i);
-            break;
-        }
-    }
-
-    let sgx_idx = sgx_match_idx
-        .ok_or_else(|| AttestationError::TcbMismatch("no matching SGX TCB level found".into()))?;
-
-    // Now find matching TDX TCB level starting from the SGX match
-    for level in &wrapper.tcb_info.tcb_levels[sgx_idx..] {
-        if let Some(ref tdx_comps) = level.tcb.tdxtcbcomponents {
-            let tdx_svns: Vec<u8> = tdx_comps.iter().map(|c| c.svn).collect();
-            if tdx_svns.len() < 16 {
+    for level in &wrapper.tcb_info.tcb_levels {
+        // Step 1: SGX match (only match once — first match wins)
+        if !sgx_matched {
+            let sgx_comps: Vec<u8> =
+                level.tcb.sgxtcbcomponents.iter().map(|c| c.svn).collect();
+            if sgx_comps.len() < 16 {
                 continue;
             }
-
-            let tdx_match = tdx_svns
+            let sgx_ok = pck_compsvn
                 .iter()
-                .zip(tee_tcb_svn.iter())
-                .all(|(&lvl, &svn)| lvl <= svn);
+                .zip(sgx_comps.iter())
+                .all(|(&pck, &lvl)| pck >= lvl)
+                && pck_pcesvn >= level.tcb.pcesvn;
+            if sgx_ok {
+                sgx_matched = true;
+            }
+        }
 
-            if tdx_match {
+        // Step 2: TDX match (only if SGX already matched and tee_tcb_svn is non-zero)
+        if sgx_matched && tee_tcb_svn_nonzero {
+            let tdx_ok = match level.tcb.tdxtcbcomponents.as_ref() {
+                Some(tdx_comps) => {
+                    tdx_comps
+                        .iter()
+                        .zip(tee_tcb_svn.iter())
+                        .all(|(comp, &svn)| svn >= comp.svn)
+                }
+                // When tdxtcbcomponents is absent the level applies universally
+                None => true,
+            };
+            if tdx_ok {
                 let tcb_status = parse_tcb_status(&level.tcb_status)?;
                 return Ok(DcapVerificationStatus {
                     tcb_status,
@@ -902,9 +893,15 @@ pub fn evaluate_tcb_status(
         }
     }
 
-    Err(AttestationError::TcbMismatch(
-        "no matching TDX TCB level found".into(),
-    ))
+    if !sgx_matched {
+        Err(AttestationError::TcbMismatch(
+            "no matching SGX TCB level found".into(),
+        ))
+    } else {
+        Err(AttestationError::TcbMismatch(
+            "no matching TDX TCB level found".into(),
+        ))
+    }
 }
 
 /// Check if an ISO 8601 timestamp (e.g. "2024-03-07T00:00:00Z") is in the past.
@@ -970,10 +967,14 @@ pub fn determine_ca_type_from_der(der_certs: &[Vec<u8>]) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 /// Intel PCS v4 QE Identity JSON signed envelope.
+///
+/// Uses `RawValue` for the `enclaveIdentity` field to preserve the exact bytes
+/// Intel signed (see [`TcbInfoSignedEnvelope`] for rationale).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct QeIdentityEnvelope {
-    enclave_identity: serde_json::Value,
+struct QeIdentityEnvelope<'a> {
+    #[serde(borrow)]
+    enclave_identity: &'a serde_json::value::RawValue,
     signature: String,
 }
 
@@ -1003,11 +1004,12 @@ struct QeIdentityTcb {
 }
 
 /// QE report field offsets within the 384-byte QE report body.
-const QE_MISCSELECT_OFFSET: usize = 40;
+// SGX Enclave Report body offsets (384-byte structure)
+const QE_MISCSELECT_OFFSET: usize = 16;
 const QE_ATTRIBUTES_OFFSET: usize = 48;
-const QE_MRSIGNER_OFFSET: usize = 176;
-const QE_ISVPRODID_OFFSET: usize = 304;
-const QE_ISVSVN_OFFSET: usize = 306;
+const QE_MRSIGNER_OFFSET: usize = 128;
+const QE_ISVPRODID_OFFSET: usize = 256;
+const QE_ISVSVN_OFFSET: usize = 258;
 
 /// Verify the Quoting Enclave identity against Intel's published QE Identity.
 ///
@@ -1033,7 +1035,7 @@ pub fn verify_qe_identity(
     }
 
     // Parse the envelope and optionally verify signature
-    let envelope: QeIdentityEnvelope = serde_json::from_slice(qe_identity_json).map_err(|e| {
+    let envelope: QeIdentityEnvelope<'_> = serde_json::from_slice(qe_identity_json).map_err(|e| {
         AttestationError::CertChainError(format!("QE Identity envelope parse: {e}"))
     })?;
 
@@ -1046,11 +1048,11 @@ pub fn verify_qe_identity(
             AttestationError::CertChainError(format!("QE Identity signature parse: {e}"))
         })?;
 
-        let identity_raw = envelope.enclave_identity.to_string();
+        // RawValue preserves the exact bytes Intel signed — no re-serialization.
         let signing_key = verify_signing_cert_chain(certs_pem)?;
 
         signing_key
-            .verify(identity_raw.as_bytes(), &signature)
+            .verify(envelope.enclave_identity.get().as_bytes(), &signature)
             .map_err(|e| {
                 AttestationError::CertChainError(format!(
                     "QE Identity signature verification failed: {e}"
@@ -1060,8 +1062,8 @@ pub fn verify_qe_identity(
         log::warn!("QE Identity signing chain not available; skipping signature verification on QE Identity collateral");
     }
 
-    // Parse the identity fields
-    let identity: EnclaveIdentityFields = serde_json::from_value(envelope.enclave_identity.clone())
+    // Parse the identity fields from the raw JSON
+    let identity: EnclaveIdentityFields = serde_json::from_str(envelope.enclave_identity.get())
         .map_err(|e| AttestationError::CertChainError(format!("QE Identity fields parse: {e}")))?;
 
     // Extract QE report fields at known offsets
@@ -1378,8 +1380,6 @@ mod tests {
         let end = compute_body_end(V5_QUOTE, QuoteVersion::V5Tdx15).unwrap();
         assert_eq!(end, body_end_v5());
     }
-
-    // --- Phase 2 tests ---
 
     #[test]
     fn test_extract_fmspc_from_pck_v4() {
