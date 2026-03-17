@@ -355,12 +355,9 @@ pub trait TdxCollateralProvider: Send + Sync {
     /// Fetch the TDX TD_QE Identity JSON.
     ///
     /// TDX quotes are produced by a TD QE with a different MRSIGNER than the
-    /// SGX QE. By default this delegates to [`get_qe_identity`] for backward
-    /// compatibility, but the default provider fetches from the TDX-specific
-    /// Intel PCS endpoint.
-    async fn get_td_qe_identity(&self) -> Result<Vec<u8>> {
-        self.get_qe_identity().await
-    }
+    /// SGX QE. Implementors must fetch from the TDX-specific Intel PCS
+    /// endpoint (`/tdx/certification/v4/qe/identity`), not the SGX one.
+    async fn get_td_qe_identity(&self) -> Result<Vec<u8>>;
 
     /// Fetch the Intel SGX Root CA CRL (DER-encoded).
     async fn get_root_ca_crl(&self) -> Result<Vec<u8>>;
@@ -593,7 +590,11 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
     async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>> {
         let bytes = self.fetch(&Self::pck_crl_url(ca)).await?;
         // Intel PCS v4 returns PEM-encoded CRL; convert to DER if needed.
-        Ok(crate::utils::decode_pem_to_der(&bytes)?.unwrap_or(bytes))
+        if crate::utils::is_pem(&bytes) {
+            crate::utils::decode_pem_to_der(&bytes)
+        } else {
+            Ok(bytes)
+        }
     }
 
     async fn get_tcb_signing_chain(&self) -> Result<Option<Vec<u8>>> {
@@ -624,6 +625,16 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
 
     async fn get_qe_identity(&self) -> Result<Vec<u8>> {
         let url = Self::qe_identity_url();
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+        Err(crate::error::AttestationError::CertFetchError(
+            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
+        ))
+    }
+
+    async fn get_td_qe_identity(&self) -> Result<Vec<u8>> {
+        let url = Self::td_qe_identity_url();
         if let Some(cached) = self.get_cached(&url) {
             return Ok(cached);
         }

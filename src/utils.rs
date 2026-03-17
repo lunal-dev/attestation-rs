@@ -61,26 +61,39 @@ pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// Check whether `data` looks like a PEM-encoded block.
+///
+/// Returns `true` if the (whitespace-trimmed) data starts with `-----BEGIN`.
+pub fn is_pem(data: &[u8]) -> bool {
+    let s = match std::str::from_utf8(data) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    s.trim_start().starts_with("-----BEGIN")
+}
+
 /// Decode a single PEM block into DER bytes, accepting any label.
 ///
-/// Returns the DER payload of the first PEM block found. If the input is not
-/// PEM (no `-----BEGIN` line), returns `None` so the caller can fall through to
-/// treat the data as raw DER.
-pub fn decode_pem_to_der(data: &[u8]) -> crate::error::Result<Option<Vec<u8>>> {
+/// Returns the DER payload of the first PEM block found. Returns an error if
+/// the data is not valid PEM — callers should use [`is_pem`] first if they
+/// need to distinguish PEM from raw DER.
+pub fn decode_pem_to_der(data: &[u8]) -> crate::error::Result<Vec<u8>> {
     let pem_str = std::str::from_utf8(data).map_err(|e| {
         crate::error::AttestationError::CertFetchError(format!("PEM is not valid UTF-8: {e}"))
     })?;
-    if !pem_str.starts_with("-----BEGIN") {
-        return Ok(None);
+    if !pem_str.trim_start().starts_with("-----BEGIN") {
+        return Err(crate::error::AttestationError::CertFetchError(
+            "expected PEM data but no -----BEGIN marker found".to_string(),
+        ));
     }
     let b64: String = pem_str
         .lines()
-        .filter(|l| !l.starts_with("-----"))
+        .filter(|l| !l.trim().starts_with("-----"))
         .collect();
     let der = BASE64.decode(b64.trim()).map_err(|e| {
         crate::error::AttestationError::CertFetchError(format!("PEM base64 decode: {e}"))
     })?;
-    Ok(Some(der))
+    Ok(der)
 }
 
 /// Compare two byte slices in constant time.

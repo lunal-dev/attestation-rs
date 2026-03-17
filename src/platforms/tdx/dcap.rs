@@ -843,62 +843,68 @@ pub fn evaluate_tcb_status(
     let (pck_compsvn, pck_pcesvn) = extract_pck_tcb_components(pck_pem)?;
     let fmspc = extract_fmspc_from_pck(pck_pem)?;
 
-    // Single-pass TCB level matching (follows Intel DCAP QVL algorithm).
-    // SGX match: all PCK SGX component SVNs >= level SVNs, and PCESVN >= level PCESVN.
-    // TDX match: all tee_tcb_svn values >= level TDX component SVNs.
-    //   When tdxtcbcomponents is absent from a level, it is treated as a match
+    // TCB level matching (follows Intel DCAP QVL algorithm).
+    //
+    // Pass 1 — SGX match: find the first level where all PCK SGX component
+    //   SVNs >= level SVNs and PCESVN >= level PCESVN.
+    // Pass 2 — TDX match: starting from the SGX-matched level, find the first
+    //   level where all tee_tcb_svn values >= level TDX component SVNs.
+    //   When tdxtcbcomponents is absent from a level it is treated as a match
     //   (the level applies to all TDX TCB values).
-    let tee_tcb_svn_nonzero = tee_tcb_svn.iter().any(|&v| v != 0);
-    let mut sgx_matched = false;
 
-    for level in &wrapper.tcb_info.tcb_levels {
-        // Step 1: SGX match (only match once — first match wins)
-        if !sgx_matched {
+    // Pass 1: find the first SGX-matching level index.
+    let sgx_match_idx = wrapper
+        .tcb_info
+        .tcb_levels
+        .iter()
+        .position(|level| {
             let sgx_comps: Vec<u8> = level.tcb.sgxtcbcomponents.iter().map(|c| c.svn).collect();
-            if sgx_comps.len() < 16 {
-                continue;
-            }
-            let sgx_ok = pck_compsvn
-                .iter()
-                .zip(sgx_comps.iter())
-                .all(|(&pck, &lvl)| pck >= lvl)
-                && pck_pcesvn >= level.tcb.pcesvn;
-            if sgx_ok {
-                sgx_matched = true;
-            }
-        }
-
-        // Step 2: TDX match (only if SGX already matched and tee_tcb_svn is non-zero)
-        if sgx_matched && tee_tcb_svn_nonzero {
-            let tdx_ok = match level.tcb.tdxtcbcomponents.as_ref() {
-                Some(tdx_comps) => tdx_comps
+            sgx_comps.len() >= 16
+                && pck_compsvn
                     .iter()
-                    .zip(tee_tcb_svn.iter())
-                    .all(|(comp, &svn)| svn >= comp.svn),
-                // When tdxtcbcomponents is absent the level applies universally
-                None => true,
-            };
-            if tdx_ok {
-                let tcb_status = parse_tcb_status(&level.tcb_status)?;
-                return Ok(DcapVerificationStatus {
-                    tcb_status,
-                    fmspc,
-                    advisory_ids: level.advisory_ids.clone(),
-                    collateral_expired,
-                });
-            }
+                    .zip(sgx_comps.iter())
+                    .all(|(&pck, &lvl)| pck >= lvl)
+                && pck_pcesvn >= level.tcb.pcesvn
+        })
+        .ok_or_else(|| AttestationError::TcbMismatch("no matching SGX TCB level found".into()))?;
+
+    // Pass 2: find the first TDX-matching level at or after the SGX match.
+    let tee_tcb_svn_nonzero = tee_tcb_svn.iter().any(|&v| v != 0);
+    if !tee_tcb_svn_nonzero {
+        // All-zero tee_tcb_svn: use the SGX-matched level directly.
+        let level = &wrapper.tcb_info.tcb_levels[sgx_match_idx];
+        let tcb_status = parse_tcb_status(&level.tcb_status)?;
+        return Ok(DcapVerificationStatus {
+            tcb_status,
+            fmspc,
+            advisory_ids: level.advisory_ids.clone(),
+            collateral_expired,
+        });
+    }
+
+    for level in &wrapper.tcb_info.tcb_levels[sgx_match_idx..] {
+        let tdx_ok = match level.tcb.tdxtcbcomponents.as_ref() {
+            Some(tdx_comps) => tdx_comps
+                .iter()
+                .zip(tee_tcb_svn.iter())
+                .all(|(comp, &svn)| svn >= comp.svn),
+            // When tdxtcbcomponents is absent the level applies universally
+            None => true,
+        };
+        if tdx_ok {
+            let tcb_status = parse_tcb_status(&level.tcb_status)?;
+            return Ok(DcapVerificationStatus {
+                tcb_status,
+                fmspc,
+                advisory_ids: level.advisory_ids.clone(),
+                collateral_expired,
+            });
         }
     }
 
-    if !sgx_matched {
-        Err(AttestationError::TcbMismatch(
-            "no matching SGX TCB level found".into(),
-        ))
-    } else {
-        Err(AttestationError::TcbMismatch(
-            "no matching TDX TCB level found".into(),
-        ))
-    }
+    Err(AttestationError::TcbMismatch(
+        "no matching TDX TCB level found".into(),
+    ))
 }
 
 /// Check if an ISO 8601 timestamp (e.g. "2024-03-07T00:00:00Z") is in the past.
@@ -1046,9 +1052,9 @@ pub fn verify_qe_identity(
             AttestationError::CertChainError(format!("QE Identity signature parse: {e}"))
         })?;
 
-        // RawValue preserves the exact bytes Intel signed — no re-serialization.
         let signing_key = verify_signing_cert_chain(certs_pem)?;
 
+        // RawValue preserves the exact bytes Intel signed — no re-serialization.
         signing_key
             .verify(envelope.enclave_identity.get().as_bytes(), &signature)
             .map_err(|e| {
