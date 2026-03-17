@@ -777,10 +777,8 @@ mod tests {
         include_bytes!("../../../test_data/collateral/td_qe_identity.json");
     const QE_IDENTITY_SIGNING_CHAIN: &[u8] =
         include_bytes!("../../../test_data/collateral/qe_identity_signing_chain.pem");
-    const PCK_CRL_DER: &[u8] =
-        include_bytes!("../../../test_data/collateral/pck_crl_platform.der");
-    const ROOT_CA_CRL_DER: &[u8] =
-        include_bytes!("../../../test_data/collateral/root_ca_crl.der");
+    const PCK_CRL_DER: &[u8] = include_bytes!("../../../test_data/collateral/pck_crl_platform.der");
+    const ROOT_CA_CRL_DER: &[u8] = include_bytes!("../../../test_data/collateral/root_ca_crl.der");
 
     struct FixtureCollateralProvider {
         fmspc_tcb_info: std::collections::HashMap<String, Vec<u8>>,
@@ -800,14 +798,9 @@ mod tests {
     #[async_trait::async_trait]
     impl TdxCollateralProvider for FixtureCollateralProvider {
         async fn get_tcb_info(&self, fmspc: &str) -> crate::error::Result<Vec<u8>> {
-            self.fmspc_tcb_info
-                .get(fmspc)
-                .cloned()
-                .ok_or_else(|| {
-                    AttestationError::CertFetchError(format!(
-                        "no fixture TCB info for FMSPC {fmspc}"
-                    ))
-                })
+            self.fmspc_tcb_info.get(fmspc).cloned().ok_or_else(|| {
+                AttestationError::CertFetchError(format!("no fixture TCB info for FMSPC {fmspc}"))
+            })
         }
 
         async fn get_qe_identity(&self) -> crate::error::Result<Vec<u8>> {
@@ -834,9 +827,7 @@ mod tests {
             Ok(Some(QE_IDENTITY_SIGNING_CHAIN.to_vec()))
         }
 
-        async fn get_td_qe_identity_signing_chain(
-            &self,
-        ) -> crate::error::Result<Option<Vec<u8>>> {
+        async fn get_td_qe_identity_signing_chain(&self) -> crate::error::Result<Option<Vec<u8>>> {
             Ok(Some(QE_IDENTITY_SIGNING_CHAIN.to_vec()))
         }
     }

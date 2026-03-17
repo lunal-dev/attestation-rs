@@ -854,8 +854,7 @@ pub fn evaluate_tcb_status(
     for level in &wrapper.tcb_info.tcb_levels {
         // Step 1: SGX match (only match once — first match wins)
         if !sgx_matched {
-            let sgx_comps: Vec<u8> =
-                level.tcb.sgxtcbcomponents.iter().map(|c| c.svn).collect();
+            let sgx_comps: Vec<u8> = level.tcb.sgxtcbcomponents.iter().map(|c| c.svn).collect();
             if sgx_comps.len() < 16 {
                 continue;
             }
@@ -872,12 +871,10 @@ pub fn evaluate_tcb_status(
         // Step 2: TDX match (only if SGX already matched and tee_tcb_svn is non-zero)
         if sgx_matched && tee_tcb_svn_nonzero {
             let tdx_ok = match level.tcb.tdxtcbcomponents.as_ref() {
-                Some(tdx_comps) => {
-                    tdx_comps
-                        .iter()
-                        .zip(tee_tcb_svn.iter())
-                        .all(|(comp, &svn)| svn >= comp.svn)
-                }
+                Some(tdx_comps) => tdx_comps
+                    .iter()
+                    .zip(tee_tcb_svn.iter())
+                    .all(|(comp, &svn)| svn >= comp.svn),
                 // When tdxtcbcomponents is absent the level applies universally
                 None => true,
             };
@@ -1035,9 +1032,10 @@ pub fn verify_qe_identity(
     }
 
     // Parse the envelope and optionally verify signature
-    let envelope: QeIdentityEnvelope<'_> = serde_json::from_slice(qe_identity_json).map_err(|e| {
-        AttestationError::CertChainError(format!("QE Identity envelope parse: {e}"))
-    })?;
+    let envelope: QeIdentityEnvelope<'_> =
+        serde_json::from_slice(qe_identity_json).map_err(|e| {
+            AttestationError::CertChainError(format!("QE Identity envelope parse: {e}"))
+        })?;
 
     if let Some(certs_pem) = signing_certs_pem {
         // Verify Intel ECDSA P-256 signature on the enclaveIdentity JSON

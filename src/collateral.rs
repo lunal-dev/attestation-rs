@@ -578,7 +578,10 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
             )
             .await?;
         if let Some(ref chain_pem) = chain {
-            self.set_cached("td_qe_identity_signing_chain".to_string(), chain_pem.clone());
+            self.set_cached(
+                "td_qe_identity_signing_chain".to_string(),
+                chain_pem.clone(),
+            );
         }
         Ok(body)
     }
