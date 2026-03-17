@@ -756,6 +756,96 @@ mod tests {
         }
     }
 
+    // ---------------------------------------------------------------
+    // Fixture-backed collateral provider for testing the full DCAP
+    // collateral path (TCB info, QE identity, CRL checks).
+    //
+    // Collateral files were captured from Intel PCS v4 and stored in
+    // test_data/collateral/. The signing chains and CRLs have long
+    // validity, but TCB Info `nextUpdate` will eventually expire.
+    // `evaluate_tcb_status` surfaces that as `collateral_expired: true`
+    // rather than a hard failure, so the tests remain valid.
+    // ---------------------------------------------------------------
+
+    const TCB_INFO_V4: &[u8] =
+        include_bytes!("../../../test_data/collateral/tcb_info_50806f000000.json");
+    const TCB_INFO_V5: &[u8] =
+        include_bytes!("../../../test_data/collateral/tcb_info_90c06f000000.json");
+    const TCB_SIGNING_CHAIN: &[u8] =
+        include_bytes!("../../../test_data/collateral/tcb_signing_chain.pem");
+    const TD_QE_IDENTITY: &[u8] =
+        include_bytes!("../../../test_data/collateral/td_qe_identity.json");
+    const QE_IDENTITY_SIGNING_CHAIN: &[u8] =
+        include_bytes!("../../../test_data/collateral/qe_identity_signing_chain.pem");
+    const PCK_CRL_DER: &[u8] =
+        include_bytes!("../../../test_data/collateral/pck_crl_platform.der");
+    const ROOT_CA_CRL_DER: &[u8] =
+        include_bytes!("../../../test_data/collateral/root_ca_crl.der");
+
+    struct FixtureCollateralProvider {
+        fmspc_tcb_info: std::collections::HashMap<String, Vec<u8>>,
+    }
+
+    impl FixtureCollateralProvider {
+        fn new() -> Self {
+            let mut map = std::collections::HashMap::new();
+            map.insert("50806f000000".to_string(), TCB_INFO_V4.to_vec());
+            map.insert("90c06f000000".to_string(), TCB_INFO_V5.to_vec());
+            Self {
+                fmspc_tcb_info: map,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TdxCollateralProvider for FixtureCollateralProvider {
+        async fn get_tcb_info(&self, fmspc: &str) -> crate::error::Result<Vec<u8>> {
+            self.fmspc_tcb_info
+                .get(fmspc)
+                .cloned()
+                .ok_or_else(|| {
+                    AttestationError::CertFetchError(format!(
+                        "no fixture TCB info for FMSPC {fmspc}"
+                    ))
+                })
+        }
+
+        async fn get_qe_identity(&self) -> crate::error::Result<Vec<u8>> {
+            Ok(TD_QE_IDENTITY.to_vec())
+        }
+
+        async fn get_td_qe_identity(&self) -> crate::error::Result<Vec<u8>> {
+            Ok(TD_QE_IDENTITY.to_vec())
+        }
+
+        async fn get_root_ca_crl(&self) -> crate::error::Result<Vec<u8>> {
+            Ok(ROOT_CA_CRL_DER.to_vec())
+        }
+
+        async fn get_pck_crl(&self, _ca: &str) -> crate::error::Result<Vec<u8>> {
+            Ok(PCK_CRL_DER.to_vec())
+        }
+
+        async fn get_tcb_signing_chain(&self) -> crate::error::Result<Option<Vec<u8>>> {
+            Ok(Some(TCB_SIGNING_CHAIN.to_vec()))
+        }
+
+        async fn get_qe_identity_signing_chain(&self) -> crate::error::Result<Option<Vec<u8>>> {
+            Ok(Some(QE_IDENTITY_SIGNING_CHAIN.to_vec()))
+        }
+
+        async fn get_td_qe_identity_signing_chain(
+            &self,
+        ) -> crate::error::Result<Option<Vec<u8>>> {
+            Ok(Some(QE_IDENTITY_SIGNING_CHAIN.to_vec()))
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // verify_evidence tests — each test runs both without collateral
+    // (None) and with the fixture provider to cover both paths.
+    // ---------------------------------------------------------------
+
     #[tokio::test]
     async fn test_verify_evidence_v4_no_expected_report_data() {
         let evidence = make_tdx_evidence(V4_QUOTE);
@@ -764,14 +854,30 @@ mod tests {
             allow_debug: true,
             ..Default::default()
         };
+
+        // Without collateral
         let result = verify_evidence(&evidence, &params, None).await;
         assert!(result.is_ok(), "verify should succeed: {:?}", result.err());
-        let result = result.unwrap();
-        assert!(result.signature_valid);
+        let r = result.unwrap();
+        assert!(r.signature_valid);
         assert!(
-            result.report_data_match.is_none(),
+            r.report_data_match.is_none(),
             "should be None when no expected value"
         );
+        assert!(!r.collateral_verified, "no provider means no collateral");
+
+        // With collateral
+        let provider = FixtureCollateralProvider::new();
+        let result = verify_evidence(&evidence, &params, Some(&provider)).await;
+        assert!(
+            result.is_ok(),
+            "verify with collateral should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        assert!(r.signature_valid);
+        assert!(r.collateral_verified, "collateral should be verified");
+        assert!(r.tcb_status.is_some(), "tcb_status should be populated");
     }
 
     #[tokio::test]
@@ -784,6 +890,7 @@ mod tests {
             allow_debug: true,
             ..Default::default()
         };
+
         let result = verify_evidence(&evidence, &params, None).await;
         assert!(
             result.is_ok(),
@@ -791,6 +898,17 @@ mod tests {
             result.err()
         );
         assert_eq!(result.unwrap().report_data_match, Some(true));
+
+        let provider = FixtureCollateralProvider::new();
+        let result = verify_evidence(&evidence, &params, Some(&provider)).await;
+        assert!(
+            result.is_ok(),
+            "verify with collateral + matching report_data should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        assert_eq!(r.report_data_match, Some(true));
+        assert!(r.collateral_verified);
     }
 
     #[tokio::test]
@@ -820,6 +938,7 @@ mod tests {
             expected_report_data: Some(quote.body.report_data.to_vec()),
             ..Default::default()
         };
+
         let result = verify_evidence(&evidence, &params, None).await;
         assert!(
             result.is_ok(),
@@ -827,6 +946,13 @@ mod tests {
             result.err()
         );
         assert_eq!(result.unwrap().report_data_match, Some(true));
+
+        // NOTE: v5 fixture's PCK TCB values predate the current Intel TCB
+        // Info levels (CompSVN [1,1,...] < required [3,3,...]), so collateral
+        // verification cannot find a matching SGX TCB level. Collateral
+        // testing for the v5 code path is covered by the v4 tests above,
+        // which share the same `evaluate_tcb_status` / `verify_qe_identity`
+        // implementation.
     }
 
     #[tokio::test]
