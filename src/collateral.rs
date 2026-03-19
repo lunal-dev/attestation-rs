@@ -24,8 +24,8 @@ pub const INTEL_CERTS_BASE: &str = "https://certificates.trustedservices.intel.c
 /// Intel PCS v4 SGX QE Identity endpoint.
 pub const INTEL_QE_IDENTITY_URL: &str =
     "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity";
-/// Intel PCS v4 TDX QE Identity endpoint.
-pub const INTEL_TDX_QE_IDENTITY_URL: &str =
+/// Intel PCS v4 TDX (TD_QE) Identity endpoint.
+pub const INTEL_TD_QE_IDENTITY_URL: &str =
     "https://api.trustedservices.intel.com/tdx/certification/v4/qe/identity";
 /// Intel SGX Root CA CRL (DER format).
 pub const INTEL_ROOT_CA_CRL_URL: &str =
@@ -478,12 +478,12 @@ impl DefaultTdxCollateralProvider {
     /// Uses the `/tdx/certification/v4` endpoint which returns the TD_QE
     /// identity with the correct MRSIGNER for TDX quoting enclaves.
     pub fn qe_identity_url() -> String {
-        INTEL_TDX_QE_IDENTITY_URL.to_string()
+        INTEL_TD_QE_IDENTITY_URL.to_string()
     }
 
     /// Intel PCS v4 TDX TD_QE Identity URL.
     pub fn td_qe_identity_url() -> String {
-        INTEL_TDX_QE_IDENTITY_URL.to_string()
+        INTEL_TD_QE_IDENTITY_URL.to_string()
     }
 
     /// Intel SGX Root CA CRL URL (DER format).
