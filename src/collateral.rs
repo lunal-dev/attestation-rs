@@ -14,15 +14,18 @@ pub const AMD_KDS_VCEK_BASE: &str = "https://kdsintf.amd.com/vcek/v1";
 pub const AMD_KDS_VLEK_BASE: &str = "https://kdsintf.amd.com/vlek/v1";
 
 // ── Intel PCS v4 (Provisioning Certification Service) ──
-/// Base URL for Intel SGX/TDX certification API v4.
+/// Base URL for Intel SGX certification API v4.
 pub const INTEL_PCS_V4_BASE: &str = "https://api.trustedservices.intel.com/sgx/certification/v4";
+/// Base URL for Intel TDX certification API v4.
+pub const INTEL_TDX_PCS_V4_BASE: &str =
+    "https://api.trustedservices.intel.com/tdx/certification/v4";
 /// Base URL for Intel SGX certificate infrastructure.
 pub const INTEL_CERTS_BASE: &str = "https://certificates.trustedservices.intel.com";
 /// Intel PCS v4 SGX QE Identity endpoint.
 pub const INTEL_QE_IDENTITY_URL: &str =
     "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity";
-/// Intel PCS v4 TDX (TD_QE) Identity endpoint.
-pub const INTEL_TD_QE_IDENTITY_URL: &str =
+/// Intel PCS v4 TDX QE Identity endpoint.
+pub const INTEL_TDX_QE_IDENTITY_URL: &str =
     "https://api.trustedservices.intel.com/tdx/certification/v4/qe/identity";
 /// Intel SGX Root CA CRL (DER format).
 pub const INTEL_ROOT_CA_CRL_URL: &str =
@@ -462,18 +465,25 @@ impl DefaultTdxCollateralProvider {
     }
 
     /// Intel PCS v4 TDX TCB Info URL.
+    ///
+    /// Uses the `/tdx/certification/v4` endpoint which returns TCB Info
+    /// with `tdxtcbcomponents` needed for TDX TCB evaluation. The SGX
+    /// endpoint (`/sgx/...`) omits these components.
     pub fn tcb_info_url(fmspc: &str) -> String {
-        format!("{INTEL_PCS_V4_BASE}/tcb?fmspc={fmspc}")
+        format!("{INTEL_TDX_PCS_V4_BASE}/tcb?fmspc={fmspc}")
     }
 
-    /// Intel PCS v4 SGX QE Identity URL.
+    /// Intel PCS v4 TDX QE Identity URL.
+    ///
+    /// Uses the `/tdx/certification/v4` endpoint which returns the TD_QE
+    /// identity with the correct MRSIGNER for TDX quoting enclaves.
     pub fn qe_identity_url() -> String {
-        INTEL_QE_IDENTITY_URL.to_string()
+        INTEL_TDX_QE_IDENTITY_URL.to_string()
     }
 
     /// Intel PCS v4 TDX TD_QE Identity URL.
     pub fn td_qe_identity_url() -> String {
-        INTEL_TD_QE_IDENTITY_URL.to_string()
+        INTEL_TDX_QE_IDENTITY_URL.to_string()
     }
 
     /// Intel SGX Root CA CRL URL (DER format).
