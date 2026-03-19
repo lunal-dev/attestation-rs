@@ -14,8 +14,8 @@ const DEFAULT_DSTACK_SOCKET: &str = "/var/run/dstack.sock";
 
 /// Check if dstack guest agent is available via its Unix socket.
 pub fn is_available() -> bool {
-    let socket_path = std::env::var("DSTACK_SOCKET")
-        .unwrap_or_else(|_| DEFAULT_DSTACK_SOCKET.to_string());
+    let socket_path =
+        std::env::var("DSTACK_SOCKET").unwrap_or_else(|_| DEFAULT_DSTACK_SOCKET.to_string());
     Path::new(&socket_path).exists()
 }
 
@@ -26,8 +26,8 @@ pub fn is_available() -> bool {
 pub async fn generate_evidence(report_data: &[u8]) -> Result<DstackEvidence> {
     let padded = pad_report_data(report_data, 64)?;
 
-    let socket_path = std::env::var("DSTACK_SOCKET")
-        .unwrap_or_else(|_| DEFAULT_DSTACK_SOCKET.to_string());
+    let socket_path =
+        std::env::var("DSTACK_SOCKET").unwrap_or_else(|_| DEFAULT_DSTACK_SOCKET.to_string());
 
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -35,9 +35,7 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<DstackEvidence> {
     )
     .await
     .map_err(|_| {
-        AttestationError::HardwareAccessFailed(
-            "dstack GetQuote timed out after 30s".to_string(),
-        )
+        AttestationError::HardwareAccessFailed("dstack GetQuote timed out after 30s".to_string())
     })??;
 
     // dstack returns the quote as a hex string; convert to base64
@@ -53,7 +51,11 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<DstackEvidence> {
 }
 
 fn non_empty(s: String) -> Option<String> {
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Response from dstack's GetQuote endpoint.
@@ -83,6 +85,9 @@ impl GetQuoteResponse {
 /// POST to dstack's GetQuote endpoint over a Unix domain socket.
 ///
 /// Uses raw HTTP/1.1 framing to avoid additional dependencies.
+/// `Connection: close` is deliberate: it ensures the server closes the
+/// connection after the response, so we can read until EOF without needing
+/// to parse chunked transfer encoding.
 async fn get_quote_via_socket(socket_path: &str, report_data: &[u8]) -> Result<GetQuoteResponse> {
     let mut stream = UnixStream::connect(socket_path).await.map_err(|e| {
         AttestationError::HardwareAccessFailed(format!(
@@ -91,9 +96,9 @@ async fn get_quote_via_socket(socket_path: &str, report_data: &[u8]) -> Result<G
         ))
     })?;
 
-    // dstack expects report_data as hex in the JSON body
+    // dstack expects report_data as hex in the JSON body (snake_case field name)
     let report_data_hex = hex::encode(report_data);
-    let body = format!(r#"{{"reportData":"{}"}}"#, report_data_hex);
+    let body = format!(r#"{{"report_data":"{}"}}"#, report_data_hex);
     let body_bytes = body.as_bytes();
 
     let request = format!(
@@ -111,7 +116,9 @@ async fn get_quote_via_socket(socket_path: &str, report_data: &[u8]) -> Result<G
         AttestationError::HardwareAccessFailed(format!("failed to write to dstack socket: {e}"))
     })?;
     stream.write_all(body_bytes).await.map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("failed to write body to dstack socket: {e}"))
+        AttestationError::HardwareAccessFailed(format!(
+            "failed to write body to dstack socket: {e}"
+        ))
     })?;
 
     // Read response (bounded to 10 MiB to prevent memory exhaustion)
