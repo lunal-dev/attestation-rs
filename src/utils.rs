@@ -78,9 +78,8 @@ pub fn is_pem(data: &[u8]) -> bool {
 /// the data is not valid PEM — callers should use [`is_pem`] first if they
 /// need to distinguish PEM from raw DER.
 pub fn decode_pem_to_der(data: &[u8]) -> crate::error::Result<Vec<u8>> {
-    let parsed = pem::parse(data).map_err(|e| {
-        crate::error::AttestationError::CertFetchError(format!("PEM decode: {e}"))
-    })?;
+    let parsed = pem::parse(data)
+        .map_err(|e| crate::error::AttestationError::CertFetchError(format!("PEM decode: {e}")))?;
     Ok(parsed.contents().to_vec())
 }
 
