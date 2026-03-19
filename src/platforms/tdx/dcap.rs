@@ -847,7 +847,6 @@ pub fn evaluate_tcb_status(
 
     let (pck_compsvn, pck_pcesvn) = extract_pck_tcb_components(pck_pem)?;
     let fmspc = extract_fmspc_from_pck(pck_pem)?;
-
     // Find the first matching TCB level where all SGX platform SVNs >= level SVNs
     // and PCESVN >= level PCESVN
     let mut sgx_match_idx = None;
@@ -1002,12 +1001,13 @@ struct QeIdentityTcb {
     isvsvn: u16,
 }
 
-/// QE report field offsets within the 384-byte QE report body.
-const QE_MISCSELECT_OFFSET: usize = 40;
+/// QE report field offsets within the 384-byte SGX report body.
+/// See Intel SDM Vol. 3D, Table 38-21 (REPORTBODY structure).
+const QE_MISCSELECT_OFFSET: usize = 16;
 const QE_ATTRIBUTES_OFFSET: usize = 48;
-const QE_MRSIGNER_OFFSET: usize = 176;
-const QE_ISVPRODID_OFFSET: usize = 304;
-const QE_ISVSVN_OFFSET: usize = 306;
+const QE_MRSIGNER_OFFSET: usize = 128;
+const QE_ISVPRODID_OFFSET: usize = 256;
+const QE_ISVSVN_OFFSET: usize = 258;
 
 /// Verify the Quoting Enclave identity against Intel's published QE Identity.
 ///
@@ -1165,6 +1165,31 @@ pub fn verify_qe_identity(
     Ok(())
 }
 
+/// Normalize CRL data to DER format.
+///
+/// Intel PCS v4 `pckcrl` endpoint returns PEM-encoded CRLs, while the
+/// Root CA CRL endpoint returns raw DER. This function accepts either
+/// format and always returns DER bytes.
+fn normalize_crl_to_der(data: &[u8]) -> Result<Vec<u8>> {
+    // If it looks like PEM (starts with "-----BEGIN"), decode it
+    if data.starts_with(b"-----BEGIN") {
+        let pem_str = std::str::from_utf8(data)
+            .map_err(|e| AttestationError::CertChainError(format!("CRL PEM not UTF-8: {e}")))?;
+        let mut b64 = String::new();
+        for line in pem_str.lines() {
+            if line.starts_with("-----") {
+                continue;
+            }
+            b64.push_str(line.trim());
+        }
+        BASE64
+            .decode(&b64)
+            .map_err(|e| AttestationError::CertChainError(format!("CRL PEM base64 decode: {e}")))
+    } else {
+        Ok(data.to_vec())
+    }
+}
+
 /// Check whether the Intermediate CA (Platform or Processor CA) has been
 /// revoked by the Root CA CRL.
 ///
@@ -1192,8 +1217,9 @@ pub fn check_intermediate_ca_revocation_from_der(
         .map_err(|e| AttestationError::CertChainError(format!("Intermediate CA parse: {e}")))?;
     let intermediate_serial = intermediate_cert.raw_serial();
 
-    // Parse the Root CA CRL
-    let (_, crl) = CertificateRevocationList::from_der(root_ca_crl_der)
+    // Parse the Root CA CRL (handle both PEM and DER formats)
+    let root_crl_der_bytes = normalize_crl_to_der(root_ca_crl_der)?;
+    let (_, crl) = CertificateRevocationList::from_der(&root_crl_der_bytes)
         .map_err(|e| AttestationError::CertChainError(format!("Root CA CRL parse: {e}")))?;
 
     // Check if intermediate serial is in the revoked list
@@ -1231,8 +1257,9 @@ pub fn check_cert_revocation_from_der(der_certs: &[Vec<u8>], crl_der: &[u8]) -> 
         .map_err(|e| AttestationError::CertChainError(format!("PCK leaf parse: {e}")))?;
     let leaf_serial = leaf_cert.raw_serial();
 
-    // Parse the CRL
-    let (_, crl) = CertificateRevocationList::from_der(crl_der)
+    // Parse the CRL (handle both PEM and DER formats)
+    let crl_der_bytes = normalize_crl_to_der(crl_der)?;
+    let (_, crl) = CertificateRevocationList::from_der(&crl_der_bytes)
         .map_err(|e| AttestationError::CertChainError(format!("CRL DER parse: {e}")))?;
 
     // Check if leaf serial is in the revoked list
