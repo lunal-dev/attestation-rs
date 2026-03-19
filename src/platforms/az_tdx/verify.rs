@@ -105,9 +105,9 @@ pub async fn verify_evidence(
             ));
         }
 
-        // QE Identity verification
-        let qe_identity_json = provider.get_qe_identity().await?;
-        let qe_signing_chain = provider.get_qe_identity_signing_chain().await?;
+        // QE Identity verification (TDX uses TD_QE, not SGX QE)
+        let qe_identity_json = provider.get_td_qe_identity().await?;
+        let qe_signing_chain = provider.get_td_qe_identity_signing_chain().await?;
         dcap::verify_qe_identity(
             auth.qe_report_body,
             &qe_identity_json,

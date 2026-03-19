@@ -18,9 +18,12 @@ pub const AMD_KDS_VLEK_BASE: &str = "https://kdsintf.amd.com/vlek/v1";
 pub const INTEL_PCS_V4_BASE: &str = "https://api.trustedservices.intel.com/sgx/certification/v4";
 /// Base URL for Intel SGX certificate infrastructure.
 pub const INTEL_CERTS_BASE: &str = "https://certificates.trustedservices.intel.com";
-/// Intel PCS v4 QE Identity endpoint.
+/// Intel PCS v4 SGX QE Identity endpoint.
 pub const INTEL_QE_IDENTITY_URL: &str =
     "https://api.trustedservices.intel.com/sgx/certification/v4/qe/identity";
+/// Intel PCS v4 TDX (TD_QE) Identity endpoint.
+pub const INTEL_TD_QE_IDENTITY_URL: &str =
+    "https://api.trustedservices.intel.com/tdx/certification/v4/qe/identity";
 /// Intel SGX Root CA CRL (DER format).
 pub const INTEL_ROOT_CA_CRL_URL: &str =
     "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der";
@@ -346,8 +349,15 @@ pub trait TdxCollateralProvider: Send + Sync {
     /// Fetch TDX TCB Info JSON for a given FMSPC.
     async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>>;
 
-    /// Fetch the QE Identity JSON.
+    /// Fetch the SGX QE Identity JSON.
     async fn get_qe_identity(&self) -> Result<Vec<u8>>;
+
+    /// Fetch the TDX TD_QE Identity JSON.
+    ///
+    /// TDX quotes are produced by a TD QE with a different MRSIGNER than the
+    /// SGX QE. Implementors must fetch from the TDX-specific Intel PCS
+    /// endpoint (`/tdx/certification/v4/qe/identity`), not the SGX one.
+    async fn get_td_qe_identity(&self) -> Result<Vec<u8>>;
 
     /// Fetch the Intel SGX Root CA CRL (DER-encoded).
     async fn get_root_ca_crl(&self) -> Result<Vec<u8>>;
@@ -375,6 +385,11 @@ pub trait TdxCollateralProvider: Send + Sync {
     /// Returns `None` if the signing chain is not available (signature
     /// verification will be skipped).
     async fn get_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// Fetch the TD QE Identity signing certificate chain (PEM).
+    async fn get_td_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
 
@@ -451,9 +466,14 @@ impl DefaultTdxCollateralProvider {
         format!("{INTEL_PCS_V4_BASE}/tcb?fmspc={fmspc}")
     }
 
-    /// Intel PCS v4 QE Identity URL.
+    /// Intel PCS v4 SGX QE Identity URL.
     pub fn qe_identity_url() -> String {
         INTEL_QE_IDENTITY_URL.to_string()
+    }
+
+    /// Intel PCS v4 TDX TD_QE Identity URL.
+    pub fn td_qe_identity_url() -> String {
+        INTEL_TD_QE_IDENTITY_URL.to_string()
     }
 
     /// Intel SGX Root CA CRL URL (DER format).
@@ -545,12 +565,36 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
         Ok(body)
     }
 
+    async fn get_td_qe_identity(&self) -> Result<Vec<u8>> {
+        let url = Self::td_qe_identity_url();
+        let (body, chain) = self
+            .fetch_with_signing_chain(
+                &url,
+                "sgx-enclave-identity-issuer-chain",
+                "td_qe_identity_signing_chain",
+            )
+            .await?;
+        if let Some(ref chain_pem) = chain {
+            self.set_cached(
+                "td_qe_identity_signing_chain".to_string(),
+                chain_pem.clone(),
+            );
+        }
+        Ok(body)
+    }
+
     async fn get_root_ca_crl(&self) -> Result<Vec<u8>> {
         self.fetch(&Self::root_ca_crl_url()).await
     }
 
     async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>> {
-        self.fetch(&Self::pck_crl_url(ca)).await
+        let bytes = self.fetch(&Self::pck_crl_url(ca)).await?;
+        // Intel PCS v4 returns PEM-encoded CRL; convert to DER if needed.
+        if crate::utils::is_pem(&bytes) {
+            crate::utils::decode_pem_to_der(&bytes)
+        } else {
+            Ok(bytes)
+        }
     }
 
     async fn get_tcb_signing_chain(&self) -> Result<Option<Vec<u8>>> {
@@ -559,6 +603,10 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
 
     async fn get_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
         Ok(self.get_cached("qe_identity_signing_chain"))
+    }
+
+    async fn get_td_qe_identity_signing_chain(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.get_cached("td_qe_identity_signing_chain"))
     }
 }
 
@@ -577,6 +625,16 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
 
     async fn get_qe_identity(&self) -> Result<Vec<u8>> {
         let url = Self::qe_identity_url();
+        if let Some(cached) = self.get_cached(&url) {
+            return Ok(cached);
+        }
+        Err(crate::error::AttestationError::CertFetchError(
+            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
+        ))
+    }
+
+    async fn get_td_qe_identity(&self) -> Result<Vec<u8>> {
+        let url = Self::td_qe_identity_url();
         if let Some(cached) = self.get_cached(&url) {
             return Ok(cached);
         }

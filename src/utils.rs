@@ -1,4 +1,5 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
+use base64::Engine;
 use sha2::{Digest, Sha256, Sha384};
 use subtle::ConstantTimeEq;
 
@@ -58,6 +59,28 @@ pub fn check_field_size(name: &str, len: usize) -> crate::error::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Check whether `data` looks like a PEM-encoded block.
+///
+/// Returns `true` if the (whitespace-trimmed) data starts with `-----BEGIN`.
+pub fn is_pem(data: &[u8]) -> bool {
+    let s = match std::str::from_utf8(data) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    s.trim_start().starts_with("-----BEGIN")
+}
+
+/// Decode a single PEM block into DER bytes, accepting any label.
+///
+/// Returns the DER payload of the first PEM block found. Returns an error if
+/// the data is not valid PEM — callers should use [`is_pem`] first if they
+/// need to distinguish PEM from raw DER.
+pub fn decode_pem_to_der(data: &[u8]) -> crate::error::Result<Vec<u8>> {
+    let parsed = pem::parse(data)
+        .map_err(|e| crate::error::AttestationError::CertFetchError(format!("PEM decode: {e}")))?;
+    Ok(parsed.contents().to_vec())
 }
 
 /// Compare two byte slices in constant time.
