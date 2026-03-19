@@ -804,7 +804,9 @@ mod tests {
         }
 
         async fn get_qe_identity(&self) -> crate::error::Result<Vec<u8>> {
-            Ok(TD_QE_IDENTITY.to_vec())
+            Err(AttestationError::CertFetchError(
+                "fixture provider only has TD QE identity, not SGX QE identity".into(),
+            ))
         }
 
         async fn get_td_qe_identity(&self) -> crate::error::Result<Vec<u8>> {

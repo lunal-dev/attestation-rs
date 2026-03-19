@@ -57,6 +57,7 @@ sev = { version = "6", default-features = false, features = ["snp", "crypto_noss
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
 zerocopy = { version = "0.8", optional = true, features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
+pem = "3.0.6"
 
 # Native (non-WASM) dependencies — needed for cert fetching on any OS
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

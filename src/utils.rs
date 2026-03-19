@@ -1,4 +1,4 @@
-use base64::engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64URL};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
 use base64::Engine;
 use sha2::{Digest, Sha256, Sha384};
 use subtle::ConstantTimeEq;
@@ -78,22 +78,10 @@ pub fn is_pem(data: &[u8]) -> bool {
 /// the data is not valid PEM — callers should use [`is_pem`] first if they
 /// need to distinguish PEM from raw DER.
 pub fn decode_pem_to_der(data: &[u8]) -> crate::error::Result<Vec<u8>> {
-    let pem_str = std::str::from_utf8(data).map_err(|e| {
-        crate::error::AttestationError::CertFetchError(format!("PEM is not valid UTF-8: {e}"))
+    let parsed = pem::parse(data).map_err(|e| {
+        crate::error::AttestationError::CertFetchError(format!("PEM decode: {e}"))
     })?;
-    if !pem_str.trim_start().starts_with("-----BEGIN") {
-        return Err(crate::error::AttestationError::CertFetchError(
-            "expected PEM data but no -----BEGIN marker found".to_string(),
-        ));
-    }
-    let b64: String = pem_str
-        .lines()
-        .filter(|l| !l.trim().starts_with("-----"))
-        .collect();
-    let der = BASE64.decode(b64.trim()).map_err(|e| {
-        crate::error::AttestationError::CertFetchError(format!("PEM base64 decode: {e}"))
-    })?;
-    Ok(der)
+    Ok(parsed.contents().to_vec())
 }
 
 /// Compare two byte slices in constant time.

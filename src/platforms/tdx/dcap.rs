@@ -871,7 +871,9 @@ pub fn evaluate_tcb_status(
     // Pass 2: find the first TDX-matching level at or after the SGX match.
     let tee_tcb_svn_nonzero = tee_tcb_svn.iter().any(|&v| v != 0);
     if !tee_tcb_svn_nonzero {
-        // All-zero tee_tcb_svn: use the SGX-matched level directly.
+        // All-zero tee_tcb_svn means the quote carries no TDX module TCB
+        // information (e.g. early TDX implementations or SGX-only paths).
+        // Skip TDX component matching and use the SGX-matched level directly.
         let level = &wrapper.tcb_info.tcb_levels[sgx_match_idx];
         let tcb_status = parse_tcb_status(&level.tcb_status)?;
         return Ok(DcapVerificationStatus {
