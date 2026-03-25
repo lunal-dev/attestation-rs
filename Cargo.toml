@@ -1,6 +1,6 @@
 [package]
 name = "attestation"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Unified TEE attestation evidence generation and verification"
 license = "Apache-2.0"
@@ -66,7 +66,7 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 
 # Guest-side attestation crates — Linux-only (require TEE hardware / vTPM)
 [target.'cfg(target_os = "linux")'.dependencies]
-az-snp-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
+az-snp-vtpm = { version = "0.8.1", default-features = false, features = ["attester"], optional = true }
 az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
