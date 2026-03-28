@@ -2,6 +2,8 @@
 pub mod az_snp;
 #[cfg(feature = "az-tdx")]
 pub mod az_tdx;
+#[cfg(feature = "gcp-snp")]
+pub mod gcp_snp;
 #[cfg(feature = "snp")]
 pub mod snp;
 #[cfg(feature = "tdx")]

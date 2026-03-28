@@ -11,6 +11,8 @@ pub enum PlatformType {
     AzTdx,
     #[serde(rename = "az-snp")]
     AzSnp,
+    #[serde(rename = "gcp-snp")]
+    GcpSnp,
 }
 
 /// Self-describing attestation evidence envelope.
@@ -32,6 +34,7 @@ impl std::fmt::Display for PlatformType {
             PlatformType::Snp => write!(f, "snp"),
             PlatformType::AzTdx => write!(f, "az-tdx"),
             PlatformType::AzSnp => write!(f, "az-snp"),
+            PlatformType::GcpSnp => write!(f, "gcp-snp"),
         }
     }
 }

@@ -6,13 +6,14 @@ description = "Unified TEE attestation evidence generation and verification"
 license = "Apache-2.0"
 
 [features]
-default = ["snp", "tdx", "az-snp", "az-tdx"]
+default = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp"]
 
 # Platform features — gate which TEE platforms are compiled in
 snp = ["dep:sev", "dep:x509-parser"]
 tdx = ["dep:x509-parser"]
 az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
 az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
+gcp-snp = ["snp"]      # GCP SNP depends on bare-metal SNP for report parsing
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
 attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
@@ -119,6 +120,10 @@ required-features = ["az-snp", "attest"]
 [[example]]
 name = "az_tdx"
 required-features = ["az-tdx", "attest"]
+
+[[example]]
+name = "gcp_snp"
+required-features = ["gcp-snp", "attest"]
 
 [[bin]]
 name = "attestation-cli"
