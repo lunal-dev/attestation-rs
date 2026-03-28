@@ -3,6 +3,18 @@
 // The only difference is the platform tag in the result, which allows
 // callers to distinguish GCP-originated evidence for policy decisions.
 //
+// THREAT MODEL:
+//   Attacker controls: the hypervisor, guest OS environment, DMI/SMBIOS tables,
+//   and the `platform` field in the attestation evidence envelope.
+//   Attacker goal: obtain a VerificationResult with platform=GcpSnp and
+//   signature_valid=true from hardware they control (not GCP).
+//   Protection: The AMD hardware root-of-trust (ARK/ASK/VCEK chain) is the
+//   only cryptographic trust anchor. A valid result proves the hardware is a
+//   genuine AMD SEV-SNP processor with an unrevoked VCEK. It does NOT prove
+//   the hardware is inside GCP's infrastructure.
+//   Non-goal: This verifier cannot distinguish GCP hardware from any other
+//   valid AMD SEV-SNP machine. The `GcpSnp` tag is an attester-reported claim.
+//
 // SECURITY NOTE: The `GcpSnp` platform tag in VerificationResult reflects
 // what the *attester* claimed, not a cryptographic proof of GCP origin.
 // The AMD SNP attestation report does not contain cloud-provider identity.

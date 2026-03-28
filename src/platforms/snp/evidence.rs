@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Raw SNP attestation evidence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnpEvidence {
     /// The raw attestation report bytes (1184 bytes), base64 encoded.
     pub attestation_report: String,
@@ -19,6 +20,7 @@ pub struct SnpEvidence {
 /// these from bundled trust anchors to prevent an attacker from substituting
 /// a rogue intermediate or root certificate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SnpCertChain {
     /// VCEK or VLEK certificate (DER, base64 encoded).
     pub vcek: String,

@@ -48,6 +48,16 @@ pub use types::*;
 /// Detect the current TEE platform.
 /// Checks Azure variants first (they also have bare-metal device paths),
 /// then bare-metal variants.
+///
+/// # Detection ordering invariant
+///
+/// Cloud-overlay platforms (Azure, GCP) are checked before their bare-metal
+/// counterparts because they share the same underlying hardware device paths.
+/// On a GCP Confidential VM, both `gcp-snp` and `snp` detection would succeed;
+/// `gcp-snp` must win to produce the correct envelope tag.
+///
+/// Order: `az-tdx` → `az-snp` → `gcp-snp` → `tdx` → `snp`
+///
 #[cfg(all(feature = "attest", target_os = "linux"))]
 pub fn detect() -> Result<PlatformType> {
     #[cfg(feature = "az-tdx")]
