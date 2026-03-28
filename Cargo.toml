@@ -10,7 +10,7 @@ license = "Apache-2.0"
 # library can verify evidence from any supported TEE without extra feature flags.
 # Embedders building minimal binaries should use `default-features = false` and
 # enable only the platforms they need.
-default = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp"]
+default = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp", "gcp-tdx"]
 
 # Platform features — gate which TEE platforms are compiled in
 snp = ["dep:sev", "dep:x509-parser"]
@@ -18,6 +18,7 @@ tdx = ["dep:x509-parser"]
 az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
 az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
 gcp-snp = ["snp"]      # GCP SNP depends on bare-metal SNP for report parsing
+gcp-tdx = ["tdx"]      # GCP TDX depends on bare-metal TDX for quote parsing
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
 attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
@@ -132,6 +133,10 @@ required-features = ["az-tdx", "attest"]
 [[example]]
 name = "gcp_snp"
 required-features = ["gcp-snp", "attest"]
+
+[[example]]
+name = "gcp_tdx"
+required-features = ["gcp-tdx", "attest"]
 
 [profile.release]
 # Security crates must panic on integer overflow rather than silently wrapping.

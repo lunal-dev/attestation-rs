@@ -22,6 +22,17 @@ pub enum PlatformType {
     /// `reported_tcb`) instead.
     #[serde(rename = "gcp-snp")]
     GcpSnp,
+    /// GCP Confidential VM running Intel TDX.
+    ///
+    /// **Security note:** Same caveat as `GcpSnp`. This tag reflects the
+    /// *attester's claim*, not a cryptographic proof of GCP origin. The Intel
+    /// TDX DCAP quote contains no cloud-provider identity. A valid `GcpTdx`
+    /// result means the Intel DCAP signature chain verified successfully — not
+    /// that the machine is inside GCP. Policy decisions **must not** grant
+    /// elevated trust based solely on this tag; use report fields (`mr_td`,
+    /// `rtmr_*`, `tee_tcb_svn`) instead.
+    #[serde(rename = "gcp-tdx")]
+    GcpTdx,
 }
 
 /// Self-describing attestation evidence envelope.
@@ -44,6 +55,7 @@ impl std::fmt::Display for PlatformType {
             PlatformType::AzTdx => write!(f, "az-tdx"),
             PlatformType::AzSnp => write!(f, "az-snp"),
             PlatformType::GcpSnp => write!(f, "gcp-snp"),
+            PlatformType::GcpTdx => write!(f, "gcp-tdx"),
         }
     }
 }
@@ -68,7 +80,7 @@ pub struct VerificationResult {
     pub signature_valid: bool,
     /// Which platform produced this evidence.
     ///
-    /// For cloud-overlay platforms (`GcpSnp`, `AzSnp`, `AzTdx`) this value is
+    /// For cloud-overlay platforms (`GcpSnp`, `GcpTdx`, `AzSnp`, `AzTdx`) this value is
     /// derived from the attestation envelope header (an attester claim) rather
     /// than a hardware-proven cloud-provider identity. Do not use this field
     /// alone as a trust boundary — verify report fields instead.

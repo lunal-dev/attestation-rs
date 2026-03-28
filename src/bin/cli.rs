@@ -89,6 +89,7 @@ enum PlatformArg {
     AzSnp,
     AzTdx,
     GcpSnp,
+    GcpTdx,
 }
 
 #[cfg(all(feature = "attest", target_os = "linux"))]
@@ -100,6 +101,7 @@ impl PlatformArg {
             PlatformArg::AzSnp => attestation::PlatformType::AzSnp,
             PlatformArg::AzTdx => attestation::PlatformType::AzTdx,
             PlatformArg::GcpSnp => attestation::PlatformType::GcpSnp,
+            PlatformArg::GcpTdx => attestation::PlatformType::GcpTdx,
         }
     }
 }
