@@ -2,12 +2,13 @@
 //!
 //! This library provides a single interface for generating and verifying
 //! attestation evidence across multiple Trusted Execution Environment (TEE)
-//! platforms: AMD SEV-SNP, Intel TDX, Azure SEV-SNP (vTPM), and Azure TDX (vTPM).
+//! platforms: AMD SEV-SNP, Intel TDX, Azure SEV-SNP (vTPM), Azure TDX (vTPM),
+//! and GCP SEV-SNP (bare-metal).
 //!
 //! # Platform Support
 //!
 //! Each platform can be individually enabled via cargo features:
-//! `snp`, `tdx`, `az-snp`, `az-tdx` (all on by default).
+//! `snp`, `tdx`, `az-snp`, `az-tdx`, `gcp-snp` (all on by default).
 //! Evidence generation requires the `attest` feature and Linux with TEE hardware.
 //!
 //! # Quick Start
@@ -47,6 +48,16 @@ pub use types::*;
 /// Detect the current TEE platform.
 /// Checks Azure variants first (they also have bare-metal device paths),
 /// then bare-metal variants.
+///
+/// # Detection ordering invariant
+///
+/// Cloud-overlay platforms (Azure, GCP) are checked before their bare-metal
+/// counterparts because they share the same underlying hardware device paths.
+/// On a GCP Confidential VM, both `gcp-snp` and `snp` detection would succeed;
+/// `gcp-snp` must win to produce the correct envelope tag.
+///
+/// Order: `az-tdx` → `az-snp` → `gcp-snp` → `tdx` → `snp`
+///
 #[cfg(all(feature = "attest", target_os = "linux"))]
 pub fn detect() -> Result<PlatformType> {
     #[cfg(feature = "az-tdx")]
@@ -57,6 +68,11 @@ pub fn detect() -> Result<PlatformType> {
     #[cfg(feature = "az-snp")]
     if platforms::az_snp::attest::is_available() {
         return Ok(PlatformType::AzSnp);
+    }
+
+    #[cfg(feature = "gcp-snp")]
+    if platforms::gcp_snp::attest::is_available() {
+        return Ok(PlatformType::GcpSnp);
     }
 
     #[cfg(feature = "tdx")]
@@ -101,6 +117,12 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         #[cfg(feature = "az-tdx")]
         PlatformType::AzTdx => {
             let evidence = platforms::az_tdx::attest::generate_evidence(report_data).await?;
+            serde_json::to_value(&evidence)
+                .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+        #[cfg(feature = "gcp-snp")]
+        PlatformType::GcpSnp => {
+            let evidence = platforms::gcp_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -230,6 +252,18 @@ impl Verifier {
                     &evidence,
                     params,
                     Some(self.tdx_provider.as_ref()),
+                )
+                .await
+            }
+            #[cfg(feature = "gcp-snp")]
+            PlatformType::GcpSnp => {
+                let evidence: platforms::snp::evidence::SnpEvidence =
+                    serde_json::from_value(envelope.evidence)
+                        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+                platforms::gcp_snp::verify::verify_evidence(
+                    &evidence,
+                    params,
+                    self.cert_provider.as_ref(),
                 )
                 .await
             }

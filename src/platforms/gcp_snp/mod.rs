@@ -1,0 +1,4 @@
+pub mod verify;
+
+#[cfg(all(feature = "attest", target_os = "linux"))]
+pub mod attest;

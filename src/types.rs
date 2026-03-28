@@ -11,6 +11,17 @@ pub enum PlatformType {
     AzTdx,
     #[serde(rename = "az-snp")]
     AzSnp,
+    /// GCP Confidential VM running AMD SEV-SNP.
+    ///
+    /// **Security note:** This tag reflects the *attester's claim*, not a
+    /// cryptographic proof of GCP origin. The AMD SNP attestation report
+    /// contains no cloud-provider identity. A valid `GcpSnp` result means the
+    /// AMD hardware root-of-trust chain verified successfully — not that the
+    /// machine is inside GCP. Policy decisions **must not** grant elevated trust
+    /// based solely on this tag; use report fields (`measurement`, `chip_id`,
+    /// `reported_tcb`) instead.
+    #[serde(rename = "gcp-snp")]
+    GcpSnp,
 }
 
 /// Self-describing attestation evidence envelope.
@@ -32,6 +43,7 @@ impl std::fmt::Display for PlatformType {
             PlatformType::Snp => write!(f, "snp"),
             PlatformType::AzTdx => write!(f, "az-tdx"),
             PlatformType::AzSnp => write!(f, "az-snp"),
+            PlatformType::GcpSnp => write!(f, "gcp-snp"),
         }
     }
 }
@@ -55,6 +67,11 @@ pub struct VerificationResult {
     /// Was the hardware signature on the evidence valid?
     pub signature_valid: bool,
     /// Which platform produced this evidence.
+    ///
+    /// For cloud-overlay platforms (`GcpSnp`, `AzSnp`, `AzTdx`) this value is
+    /// derived from the attestation envelope header (an attester claim) rather
+    /// than a hardware-proven cloud-provider identity. Do not use this field
+    /// alone as a trust boundary — verify report fields instead.
     pub platform: PlatformType,
     /// Parsed, platform-normalized claims.
     pub claims: Claims,
