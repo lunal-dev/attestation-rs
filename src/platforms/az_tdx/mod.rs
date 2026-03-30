@@ -1,5 +1,5 @@
 pub mod evidence;
 pub mod verify;
 
-#[cfg(all(feature = "attest", target_os = "linux"))]
+#[cfg(all(any(feature = "attest", feature = "attest-az-tdx"), target_os = "linux"))]
 pub mod attest;

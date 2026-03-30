@@ -21,7 +21,14 @@ gcp-snp = ["snp"]      # GCP SNP depends on bare-metal SNP for report parsing
 gcp-tdx = ["tdx"]      # GCP TDX depends on bare-metal TDX for quote parsing
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
+# Use `attest` for all platforms, or per-platform features for minimal builds.
+attest = ["attest-snp", "attest-tdx", "attest-az-snp", "attest-az-tdx", "attest-gcp-snp", "attest-gcp-tdx"]
+attest-snp = ["snp", "dep:libc"]
+attest-tdx = ["tdx", "dep:libc", "dep:tempfile", "dep:pem-rfc7468"]
+attest-az-snp = ["az-snp", "attest-snp", "dep:az-snp-vtpm"]
+attest-az-tdx = ["az-tdx", "attest-tdx", "dep:az-tdx-vtpm", "dep:zerocopy"]
+attest-gcp-snp = ["gcp-snp", "attest-snp"]
+attest-gcp-tdx = ["gcp-tdx", "attest-tdx"]
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
 cli = ["dep:clap"]
@@ -116,27 +123,27 @@ required-features = ["az-snp", "attest"]
 
 [[example]]
 name = "snp"
-required-features = ["snp", "attest"]
+required-features = ["attest-snp"]
 
 [[example]]
 name = "tdx"
-required-features = ["tdx", "attest"]
+required-features = ["attest-tdx"]
 
 [[example]]
 name = "az_snp"
-required-features = ["az-snp", "attest"]
+required-features = ["attest-az-snp"]
 
 [[example]]
 name = "az_tdx"
-required-features = ["az-tdx", "attest"]
+required-features = ["attest-az-tdx"]
 
 [[example]]
 name = "gcp_snp"
-required-features = ["gcp-snp", "attest"]
+required-features = ["attest-gcp-snp"]
 
 [[example]]
 name = "gcp_tdx"
-required-features = ["gcp-tdx", "attest"]
+required-features = ["attest-gcp-tdx"]
 
 [profile.release]
 # Security crates must panic on integer overflow rather than silently wrapping.

@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
@@ -12,6 +13,19 @@ use super::evidence::TdxEvidence;
 const TSM_REPORT_PATH: &str = "/sys/kernel/config/tsm/report";
 const TDX_GUEST_DEV: &str = "/dev/tdx_guest";
 const CCEL_DATA_PATH: &str = "/sys/firmware/acpi/tables/data/CCEL";
+
+/// Default QGS vsock port (matches Intel DCAP default).
+const QGS_VSOCK_PORT: u32 = 4050;
+/// VMADDR_CID_HOST
+const VSOCK_CID_HOST: u32 = 2;
+/// AF_VSOCK (Linux)
+const AF_VSOCK: i32 = 40;
+/// TDREPORT size in bytes.
+const TDREPORT_SIZE: u32 = 1024;
+
+// QGS message types
+const QGS_MSG_GET_QUOTE_REQ: u32 = 0;
+const QGS_MSG_GET_QUOTE_RESP: u32 = 1;
 
 /// Check if TDX hardware is available.
 pub fn is_available() -> bool {
@@ -46,16 +60,35 @@ fn check_tsm_provider() -> bool {
 }
 
 /// Generate TDX attestation evidence.
+///
+/// Fallback chain: vsock direct to QGS (2-4ms) → ConfigFS TSM (~1015ms due
+/// to kernel poll) → ioctl (TDREPORT only, not a full quote).
 pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
     let padded = pad_report_data(report_data, 64)?;
     let padded_arr: [u8; 64] = padded
         .try_into()
         .map_err(|_| AttestationError::ReportDataTooLarge { max: 64 })?;
 
-    // Try ConfigFS TSM first, fall back to ioctl
-    let quote_bytes = match generate_quote_tsm(&padded_arr) {
-        Ok(q) => q,
-        Err(_) => generate_quote_ioctl(&padded_arr)?,
+    // Try vsock bypass first (fast path: ~2-4ms)
+    let quote_bytes = match generate_quote_vsock(&padded_arr) {
+        Ok(q) => {
+            log::info!("TDX quote generated via vsock bypass");
+            q
+        }
+        Err(e) => {
+            log::debug!("vsock quote generation failed, falling back to ConfigFS: {e}");
+            // Fall back to ConfigFS TSM (~1015ms)
+            match generate_quote_tsm(&padded_arr) {
+                Ok(q) => {
+                    log::info!("TDX quote generated via ConfigFS TSM");
+                    q
+                }
+                Err(e2) => {
+                    log::debug!("ConfigFS quote generation failed, falling back to ioctl: {e2}");
+                    generate_quote_ioctl(&padded_arr)?
+                }
+            }
+        }
     };
 
     let quote = BASE64.encode(&quote_bytes);
@@ -132,8 +165,12 @@ fn generate_quote_tsm(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     Ok(quote)
 }
 
-/// Generate quote via /dev/tdx_guest ioctl (fallback).
-fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
+/// Generate a TDREPORT via /dev/tdx_guest ioctl.
+///
+/// Returns the raw 1024-byte TDREPORT. This is a local attestation artifact
+/// (not remotely verifiable on its own) but is the input needed by QGS to
+/// produce a signed quote.
+fn generate_tdreport(report_data: &[u8; 64]) -> Result<[u8; 1024]> {
     let dev = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -142,8 +179,9 @@ fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
             AttestationError::HardwareAccessFailed(format!("open {}: {}", TDX_GUEST_DEV, e))
         })?;
 
-    // TDX_CMD_GET_REPORT0 ioctl
-    const TDX_CMD_GET_REPORT0: u64 = 0xC0405401;
+    // TDX_CMD_GET_REPORT0 = _IOWR('T', 1, struct tdx_report_req)
+    // struct tdx_report_req = report_data[64] + td_report[1024] = 1088 bytes
+    const TDX_CMD_GET_REPORT0: u64 = 0xC4405401;
 
     #[repr(C)]
     struct TdxReportReq {
@@ -157,6 +195,8 @@ fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
     };
     req.report_data.copy_from_slice(report_data);
 
+    // SAFETY: TdxReportReq is repr(C) with fixed-size arrays matching the kernel
+    // ioctl struct layout. The ioctl writes exactly 1024 bytes into td_report.
     let ret = unsafe { libc::ioctl(dev.as_raw_fd(), TDX_CMD_GET_REPORT0, &mut req as *mut _) };
 
     if ret != 0 {
@@ -166,7 +206,238 @@ fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
         )));
     }
 
-    Ok(req.td_report.to_vec())
+    Ok(req.td_report)
+}
+
+/// Generate quote via /dev/tdx_guest ioctl (fallback — returns TDREPORT only).
+fn generate_quote_ioctl(report_data: &[u8; 64]) -> Result<Vec<u8>> {
+    let report = generate_tdreport(report_data)?;
+    Ok(report.to_vec())
+}
+
+/// Generate a signed TDX quote via direct vsock connection to QGS.
+///
+/// This bypasses the kernel's ConfigFS TSM path (and its 1-second polling
+/// loop) by speaking the QGS wire protocol directly over AF_VSOCK. The
+/// TDREPORT is obtained via the /dev/tdx_guest ioctl (instant), then sent
+/// to QGS which returns a signed ECDSA-P256 quote in ~2-4ms.
+///
+/// Wire protocol (matching Intel DCAP `tdx_attest.c`):
+///   Outer framing: 4-byte big-endian total body size + body
+///   Request body:  qgs_msg_header (16 bytes) + report_size (u32) +
+///                  id_list_size (u32) + TDREPORT (1024 bytes)
+///   Response body: qgs_msg_header (16 bytes) + selected_id_size (u32) +
+///                  quote_size (u32) + quote bytes
+fn generate_quote_vsock(report_data: &[u8; 64]) -> Result<Vec<u8>> {
+    // Step 1: Get TDREPORT from hardware (instant, ~2ms)
+    let tdreport = generate_tdreport(report_data)?;
+
+    // Step 2: Build QGS GetQuote request
+    let qgs_request = build_qgs_get_quote_request(&tdreport)?;
+
+    // Step 3: Send over vsock and receive response
+    let qgs_response = vsock_send_receive(&qgs_request)?;
+
+    // Step 4: Parse the quote out of the QGS response
+    parse_qgs_get_quote_response(&qgs_response)
+}
+
+/// Build a QGS GetQuote request message with outer framing.
+fn build_qgs_get_quote_request(tdreport: &[u8; 1024]) -> Result<Vec<u8>> {
+    // Inner message: header (16) + report_size (4) + id_list_size (4) + tdreport (1024)
+    let inner_size: u32 = 16 + 4 + 4 + TDREPORT_SIZE;
+
+    let mut msg = Vec::with_capacity(4 + inner_size as usize);
+
+    // Outer framing: 4-byte big-endian body size
+    msg.extend_from_slice(&inner_size.to_be_bytes());
+
+    // QGS message header (16 bytes)
+    msg.extend_from_slice(&1u16.to_le_bytes()); // major_version = 1
+    msg.extend_from_slice(&0u16.to_le_bytes()); // minor_version = 0
+    msg.extend_from_slice(&QGS_MSG_GET_QUOTE_REQ.to_le_bytes()); // type = GET_QUOTE_REQ
+    msg.extend_from_slice(&inner_size.to_le_bytes()); // size = total inner message size
+    msg.extend_from_slice(&0u32.to_le_bytes()); // error_code = 0
+
+    // Request payload
+    msg.extend_from_slice(&TDREPORT_SIZE.to_le_bytes()); // report_size = 1024
+    msg.extend_from_slice(&0u32.to_le_bytes()); // id_list_size = 0
+    msg.extend_from_slice(tdreport); // TDREPORT bytes
+
+    Ok(msg)
+}
+
+/// Open AF_VSOCK to QGS on the host (CID 2, port 4050), send request, receive response.
+fn vsock_send_receive(request: &[u8]) -> Result<Vec<u8>> {
+    // SAFETY: Creating a vsock socket — standard socket syscall, no
+    // memory-safety concerns beyond the returned fd.
+    let fd = unsafe { libc::socket(AF_VSOCK, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "vsock socket creation failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // Wrap in a File so the fd is closed on drop. std::fs::File implements
+    // Read + Write on any fd and will close it on drop.
+    // SAFETY: fd is a valid socket descriptor returned by libc::socket above.
+    let mut sock: fs::File = unsafe { std::os::fd::FromRawFd::from_raw_fd(fd) };
+
+    // Connect to QGS on host
+    #[repr(C)]
+    struct SockaddrVm {
+        svm_family: libc::sa_family_t,
+        svm_reserved1: u16,
+        svm_port: u32,
+        svm_cid: u32,
+        svm_flags: u8,
+        svm_zero: [u8; 3],
+    }
+
+    let addr = SockaddrVm {
+        svm_family: AF_VSOCK as libc::sa_family_t,
+        svm_reserved1: 0,
+        svm_port: QGS_VSOCK_PORT,
+        svm_cid: VSOCK_CID_HOST,
+        svm_flags: 0,
+        svm_zero: [0; 3],
+    };
+
+    // SAFETY: addr is repr(C), correctly sized for sockaddr_vm. The fd is a
+    // valid vsock socket.
+    let ret = unsafe {
+        libc::connect(
+            fd,
+            &addr as *const SockaddrVm as *const libc::sockaddr,
+            std::mem::size_of::<SockaddrVm>() as libc::socklen_t,
+        )
+    };
+
+    if ret != 0 {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "vsock connect to CID {}:{} failed: {}",
+            VSOCK_CID_HOST,
+            QGS_VSOCK_PORT,
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // Set a 10-second timeout for the full exchange
+    let timeout = libc::timeval {
+        tv_sec: 10,
+        tv_usec: 0,
+    };
+    // SAFETY: Standard setsockopt call with a correctly-typed timeval struct.
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &timeout as *const libc::timeval as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDTIMEO,
+            &timeout as *const libc::timeval as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+    }
+
+    // Send the full request
+    sock.write_all(request).map_err(|e| {
+        AttestationError::HardwareAccessFailed(format!("vsock send failed: {}", e))
+    })?;
+
+    // Read 4-byte size header
+    let mut size_buf = [0u8; 4];
+    sock.read_exact(&mut size_buf).map_err(|e| {
+        AttestationError::HardwareAccessFailed(format!("vsock read response size failed: {}", e))
+    })?;
+
+    let body_size = u32::from_be_bytes(size_buf) as usize;
+
+    // Sanity check: response should be between 16 bytes (header only) and 64KB
+    if body_size < 16 || body_size > 65536 {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "vsock response body size out of range: {}",
+            body_size
+        )));
+    }
+
+    // Read the full body
+    let mut body = vec![0u8; body_size];
+    sock.read_exact(&mut body).map_err(|e| {
+        AttestationError::HardwareAccessFailed(format!("vsock read response body failed: {}", e))
+    })?;
+
+    Ok(body)
+}
+
+/// Parse a QGS GetQuote response and extract the quote bytes.
+fn parse_qgs_get_quote_response(response: &[u8]) -> Result<Vec<u8>> {
+    // Minimum: header (16) + selected_id_size (4) + quote_size (4) = 24
+    if response.len() < 24 {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "QGS response too short: {} bytes",
+            response.len()
+        )));
+    }
+
+    // Parse header
+    let major = u16::from_le_bytes([response[0], response[1]]);
+    let _minor = u16::from_le_bytes([response[2], response[3]]);
+    let msg_type = u32::from_le_bytes([response[4], response[5], response[6], response[7]]);
+    let _msg_size = u32::from_le_bytes([response[8], response[9], response[10], response[11]]);
+    let error_code = u32::from_le_bytes([response[12], response[13], response[14], response[15]]);
+
+    if major != 1 {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "QGS response: unsupported major version {}",
+            major
+        )));
+    }
+
+    if msg_type != QGS_MSG_GET_QUOTE_RESP {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "QGS response: unexpected message type {} (expected {})",
+            msg_type, QGS_MSG_GET_QUOTE_RESP
+        )));
+    }
+
+    if error_code != 0 {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "QGS returned error code {}",
+            error_code
+        )));
+    }
+
+    // Parse payload: selected_id_size (u32) + quote_size (u32) + data
+    let selected_id_size =
+        u32::from_le_bytes([response[16], response[17], response[18], response[19]]) as usize;
+    let quote_size =
+        u32::from_le_bytes([response[20], response[21], response[22], response[23]]) as usize;
+
+    if quote_size == 0 {
+        return Err(AttestationError::HardwareAccessFailed(
+            "QGS returned empty quote".to_string(),
+        ));
+    }
+
+    let quote_offset = 24 + selected_id_size;
+    let quote_end = quote_offset + quote_size;
+
+    if quote_end > response.len() {
+        return Err(AttestationError::HardwareAccessFailed(format!(
+            "QGS response truncated: need {} bytes, have {}",
+            quote_end,
+            response.len()
+        )));
+    }
+
+    Ok(response[quote_offset..quote_end].to_vec())
 }
 
 /// Read CC eventlog from ACPI CCEL table.

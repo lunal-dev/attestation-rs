@@ -3,5 +3,5 @@ pub mod claims;
 pub mod evidence;
 pub mod verify;
 
-#[cfg(all(feature = "attest", target_os = "linux"))]
+#[cfg(all(any(feature = "attest", feature = "attest-snp"), target_os = "linux"))]
 pub mod attest;

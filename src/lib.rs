@@ -58,34 +58,45 @@ pub use types::*;
 ///
 /// Order: `az-tdx` → `az-snp` → `gcp-tdx` → `gcp-snp` → `tdx` → `snp`
 ///
-#[cfg(all(feature = "attest", target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx",
+    ),
+    target_os = "linux"
+))]
 pub fn detect() -> Result<PlatformType> {
-    #[cfg(feature = "az-tdx")]
+    #[cfg(any(feature = "attest", feature = "attest-az-tdx"))]
     if platforms::az_tdx::attest::is_available() {
         return Ok(PlatformType::AzTdx);
     }
 
-    #[cfg(feature = "az-snp")]
+    #[cfg(any(feature = "attest", feature = "attest-az-snp"))]
     if platforms::az_snp::attest::is_available() {
         return Ok(PlatformType::AzSnp);
     }
 
-    #[cfg(feature = "gcp-tdx")]
+    #[cfg(any(feature = "attest", feature = "attest-gcp-tdx"))]
     if platforms::gcp_tdx::attest::is_available() {
         return Ok(PlatformType::GcpTdx);
     }
 
-    #[cfg(feature = "gcp-snp")]
+    #[cfg(any(feature = "attest", feature = "attest-gcp-snp"))]
     if platforms::gcp_snp::attest::is_available() {
         return Ok(PlatformType::GcpSnp);
     }
 
-    #[cfg(feature = "tdx")]
+    #[cfg(any(feature = "attest", feature = "attest-tdx"))]
     if platforms::tdx::attest::is_available() {
         return Ok(PlatformType::Tdx);
     }
 
-    #[cfg(feature = "snp")]
+    #[cfg(any(feature = "attest", feature = "attest-snp"))]
     if platforms::snp::attest::is_available() {
         return Ok(PlatformType::Snp);
     }
@@ -97,41 +108,52 @@ pub fn detect() -> Result<PlatformType> {
 ///
 /// Returns JSON bytes containing an [`AttestationEvidence`] envelope with
 /// the platform tag and platform-specific evidence payload.
-#[cfg(all(feature = "attest", target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx",
+    ),
+    target_os = "linux"
+))]
 pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8>> {
     #[allow(unreachable_patterns)]
     let evidence_value = match platform {
-        #[cfg(feature = "snp")]
+        #[cfg(any(feature = "attest", feature = "attest-snp"))]
         PlatformType::Snp => {
             let evidence = platforms::snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "tdx")]
+        #[cfg(any(feature = "attest", feature = "attest-tdx"))]
         PlatformType::Tdx => {
             let evidence = platforms::tdx::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "az-snp")]
+        #[cfg(any(feature = "attest", feature = "attest-az-snp"))]
         PlatformType::AzSnp => {
             let evidence = platforms::az_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "az-tdx")]
+        #[cfg(any(feature = "attest", feature = "attest-az-tdx"))]
         PlatformType::AzTdx => {
             let evidence = platforms::az_tdx::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "gcp-snp")]
+        #[cfg(any(feature = "attest", feature = "attest-gcp-snp"))]
         PlatformType::GcpSnp => {
             let evidence = platforms::gcp_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "gcp-tdx")]
+        #[cfg(any(feature = "attest", feature = "attest-gcp-tdx"))]
         PlatformType::GcpTdx => {
             let evidence = platforms::gcp_tdx::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
