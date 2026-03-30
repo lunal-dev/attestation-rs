@@ -1,3 +1,4 @@
+pub mod ccel;
 pub mod claims;
 pub mod dcap;
 pub mod evidence;
