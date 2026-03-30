@@ -20,7 +20,7 @@ async fn main() {
     let t0 = Instant::now();
 
     eprintln!("Generating Azure SNP attestation evidence...");
-    let evidence_json = attestation::attest(PlatformType::AzSnp, &nonce)
+    let evidence_json = attestation::attest(PlatformType::AzSnp, &nonce, &attestation::AttestOptions::default())
         .await
         .expect("attestation failed");
     eprintln!(

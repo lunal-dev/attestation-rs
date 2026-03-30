@@ -27,6 +27,39 @@ const TDREPORT_SIZE: u32 = 1024;
 const QGS_MSG_GET_QUOTE_REQ: u32 = 0;
 const QGS_MSG_GET_QUOTE_RESP: u32 = 1;
 
+/// Controls how TDX quotes are generated.
+///
+/// The kernel's ConfigFS TSM path suffers from a 1-second polling loop
+/// (`msleep_interruptible(MSEC_PER_SEC)` in `drivers/virt/coco/tdx-guest/tdx-guest.c`),
+/// bottlenecking quote generation to ~1/sec even though the actual QGS/TDQE
+/// signing takes only 2-4ms. The vsock bypass avoids this by speaking the QGS
+/// wire protocol directly over AF_VSOCK.
+///
+/// # When to use each method
+///
+/// - **`Auto`** (default): Tries vsock first for speed, falls back to ConfigFS
+///   if vsock is unavailable (no `vhost-vsock-pci` device, no QGS, etc.).
+///   Best for bare-metal and self-hosted environments with QGS.
+///
+/// - **`Vsock`**: Forces vsock only. Fails if QGS is not reachable. Use when
+///   you know vsock is available and want to avoid the ConfigFS fallback path.
+///
+/// - **`ConfigFs`**: Forces the kernel ConfigFS TSM path. Use on cloud platforms
+///   (GCP, Kata/CoCo) where the hypervisor mediates quote generation through
+///   QEMU's `quote-generation-socket` and guest-initiated vsock to QGS is not
+///   available. This is ~1015ms per quote due to the kernel polling loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TdxQuoteMethod {
+    /// Try vsock first (~2-4ms), fall back to ConfigFS TSM (~1015ms), then ioctl.
+    #[default]
+    Auto,
+    /// Direct vsock to QGS only. Requires `vhost-vsock-pci` device and QGS on host.
+    Vsock,
+    /// Kernel ConfigFS TSM only. Works on GCP, Kata/CoCo, and any environment
+    /// where the hypervisor routes quote requests via QEMU.
+    ConfigFs,
+}
+
 /// Check if TDX hardware is available.
 pub fn is_available() -> bool {
     // Check ConfigFS TSM with tdx_guest provider, or /dev/tdx_guest
@@ -59,35 +92,36 @@ fn check_tsm_provider() -> bool {
     is_tdx
 }
 
-/// Generate TDX attestation evidence.
+/// Generate TDX attestation evidence using the default quote method ([`TdxQuoteMethod::Auto`]).
 ///
-/// Fallback chain: vsock direct to QGS (2-4ms) → ConfigFS TSM (~1015ms due
-/// to kernel poll) → ioctl (TDREPORT only, not a full quote).
+/// Equivalent to `generate_evidence_with(report_data, TdxQuoteMethod::Auto)`.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
+    generate_evidence_with(report_data, TdxQuoteMethod::Auto).await
+}
+
+/// Generate TDX attestation evidence using the specified quote method.
+///
+/// See [`TdxQuoteMethod`] for when to use each method.
+pub async fn generate_evidence_with(
+    report_data: &[u8],
+    method: TdxQuoteMethod,
+) -> Result<TdxEvidence> {
     let padded = pad_report_data(report_data, 64)?;
     let padded_arr: [u8; 64] = padded
         .try_into()
         .map_err(|_| AttestationError::ReportDataTooLarge { max: 64 })?;
 
-    // Try vsock bypass first (fast path: ~2-4ms)
-    let quote_bytes = match generate_quote_vsock(&padded_arr) {
-        Ok(q) => {
+    let quote_bytes = match method {
+        TdxQuoteMethod::Auto => generate_quote_auto(&padded_arr)?,
+        TdxQuoteMethod::Vsock => {
+            let q = generate_quote_vsock(&padded_arr)?;
             log::info!("TDX quote generated via vsock bypass");
             q
         }
-        Err(e) => {
-            log::debug!("vsock quote generation failed, falling back to ConfigFS: {e}");
-            // Fall back to ConfigFS TSM (~1015ms)
-            match generate_quote_tsm(&padded_arr) {
-                Ok(q) => {
-                    log::info!("TDX quote generated via ConfigFS TSM");
-                    q
-                }
-                Err(e2) => {
-                    log::debug!("ConfigFS quote generation failed, falling back to ioctl: {e2}");
-                    generate_quote_ioctl(&padded_arr)?
-                }
-            }
+        TdxQuoteMethod::ConfigFs => {
+            let q = generate_quote_tsm(&padded_arr)?;
+            log::info!("TDX quote generated via ConfigFS TSM");
+            q
         }
     };
 
@@ -97,6 +131,31 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
     let cc_eventlog = read_eventlog().ok().flatten();
 
     Ok(TdxEvidence { quote, cc_eventlog })
+}
+
+/// Auto fallback chain: vsock (~2-4ms) → ConfigFS TSM (~1015ms) → ioctl (TDREPORT only).
+fn generate_quote_auto(report_data: &[u8; 64]) -> Result<Vec<u8>> {
+    match generate_quote_vsock(report_data) {
+        Ok(q) => {
+            log::info!("TDX quote generated via vsock bypass");
+            Ok(q)
+        }
+        Err(e) => {
+            log::debug!("vsock quote generation failed, falling back to ConfigFS: {e}");
+            match generate_quote_tsm(report_data) {
+                Ok(q) => {
+                    log::info!("TDX quote generated via ConfigFS TSM");
+                    Ok(q)
+                }
+                Err(e2) => {
+                    log::debug!(
+                        "ConfigFS quote generation failed, falling back to ioctl: {e2}"
+                    );
+                    generate_quote_ioctl(report_data)
+                }
+            }
+        }
+    }
 }
 
 /// Generate quote via Linux ConfigFS TSM reports.

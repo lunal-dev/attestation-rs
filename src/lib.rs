@@ -24,7 +24,7 @@
 //! **Attester** (inside TEE, with `attest` feature):
 //! ```rust,ignore
 //! let platform = attestation::detect()?;
-//! let evidence_json = attestation::attest(platform, b"nonce").await?;
+//! let evidence_json = attestation::attest(platform, b"nonce", &attestation::AttestOptions::default()).await?;
 //! ```
 
 pub mod collateral;
@@ -43,6 +43,8 @@ pub use error::{AttestationError, Result};
 pub use platforms::tdx::dcap::{
     check_cert_revocation, check_intermediate_ca_revocation, determine_ca_type,
 };
+#[cfg(all(any(feature = "attest", feature = "attest-tdx"), target_os = "linux"))]
+pub use platforms::tdx::attest::TdxQuoteMethod;
 pub use types::*;
 
 /// Detect the current TEE platform.
@@ -104,10 +106,10 @@ pub fn detect() -> Result<PlatformType> {
     Err(AttestationError::NoPlatformDetected)
 }
 
-/// Generate attestation evidence and wrap it in a self-describing envelope.
+/// Platform-specific attestation options.
 ///
-/// Returns JSON bytes containing an [`AttestationEvidence`] envelope with
-/// the platform tag and platform-specific evidence payload.
+/// Pass to [`attest_with_options`] to control quote generation behavior.
+/// Non-TDX platforms ignore TDX-specific fields.
 #[cfg(all(
     any(
         feature = "attest",
@@ -120,7 +122,38 @@ pub fn detect() -> Result<PlatformType> {
     ),
     target_os = "linux"
 ))]
-pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8>> {
+#[derive(Debug, Clone, Default)]
+pub struct AttestOptions {
+    /// TDX quote generation method. Only used for TDX-based platforms
+    /// (Tdx, AzTdx, GcpTdx). Ignored for SNP platforms.
+    #[cfg(any(feature = "attest", feature = "attest-tdx"))]
+    pub tdx_quote_method: platforms::tdx::attest::TdxQuoteMethod,
+}
+
+/// Generate attestation evidence and wrap it in a self-describing envelope.
+///
+/// Returns JSON bytes containing an [`AttestationEvidence`] envelope with
+/// the platform tag and platform-specific evidence payload.
+///
+/// Pass `AttestOptions::default()` for standard behavior (auto-detects the
+/// fastest available quote method for TDX platforms).
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx",
+    ),
+    target_os = "linux"
+))]
+pub async fn attest(
+    platform: PlatformType,
+    report_data: &[u8],
+    options: &AttestOptions,
+) -> Result<Vec<u8>> {
     #[allow(unreachable_patterns)]
     let evidence_value = match platform {
         #[cfg(any(feature = "attest", feature = "attest-snp"))]
@@ -131,7 +164,11 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         }
         #[cfg(any(feature = "attest", feature = "attest-tdx"))]
         PlatformType::Tdx => {
-            let evidence = platforms::tdx::attest::generate_evidence(report_data).await?;
+            let evidence = platforms::tdx::attest::generate_evidence_with(
+                report_data,
+                options.tdx_quote_method,
+            )
+            .await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -143,7 +180,11 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         }
         #[cfg(any(feature = "attest", feature = "attest-az-tdx"))]
         PlatformType::AzTdx => {
-            let evidence = platforms::az_tdx::attest::generate_evidence(report_data).await?;
+            let evidence = platforms::az_tdx::attest::generate_evidence_with(
+                report_data,
+                options.tdx_quote_method,
+            )
+            .await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -155,12 +196,16 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         }
         #[cfg(any(feature = "attest", feature = "attest-gcp-tdx"))]
         PlatformType::GcpTdx => {
-            let evidence = platforms::gcp_tdx::attest::generate_evidence(report_data).await?;
+            let evidence = platforms::gcp_tdx::attest::generate_evidence_with(
+                report_data,
+                options.tdx_quote_method,
+            )
+            .await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
         _other => {
-            let _ = report_data;
+            let _ = (report_data, options);
             return Err(AttestationError::PlatformNotEnabled(_other.to_string()));
         }
     };

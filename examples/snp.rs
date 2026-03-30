@@ -10,7 +10,7 @@ async fn main() {
     let nonce = b"example-snp-nonce";
 
     eprintln!("Generating SNP attestation evidence...");
-    let evidence_json = attestation::attest(PlatformType::Snp, nonce)
+    let evidence_json = attestation::attest(PlatformType::Snp, nonce, &attestation::AttestOptions::default())
         .await
         .expect("attestation failed");
 

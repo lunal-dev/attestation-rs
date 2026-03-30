@@ -206,7 +206,7 @@ async fn cmd_attest(args: AttestArgs) {
     }
 
     let t0 = Instant::now();
-    let evidence_json = match attestation::attest(platform, &report_data).await {
+    let evidence_json = match attestation::attest(platform, &report_data, &attestation::AttestOptions::default()).await {
         Ok(json) => json,
         Err(e) => {
             eprintln!("Attestation failed: {e}");

@@ -34,10 +34,22 @@ pub fn is_available() -> bool {
     }
 }
 
-/// Generate GCP TDX attestation evidence.
+/// Generate GCP TDX attestation evidence with default quote method.
 ///
 /// Delegates to the bare-metal TDX implementation — GCP uses the same
 /// ConfigFS TSM interface and standard Intel DCAP quotes.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
     crate::platforms::tdx::attest::generate_evidence(report_data).await
+}
+
+/// Generate GCP TDX attestation evidence with explicit quote method.
+///
+/// On GCP, vsock to a host-side QGS is typically not available — use
+/// [`TdxQuoteMethod::ConfigFs`] or [`TdxQuoteMethod::Auto`] (which will
+/// fall back to ConfigFS when vsock fails).
+pub async fn generate_evidence_with(
+    report_data: &[u8],
+    method: crate::platforms::tdx::attest::TdxQuoteMethod,
+) -> Result<TdxEvidence> {
+    crate::platforms::tdx::attest::generate_evidence_with(report_data, method).await
 }

@@ -393,7 +393,7 @@ async fn test_az_tdx_top_level_api_roundtrip_with_nonce() {
 
     // Use the top-level attest() API
     let nonce = b"top-level-api-nonce-test";
-    let evidence_json = attestation::attest(attestation::PlatformType::AzTdx, nonce)
+    let evidence_json = attestation::attest(attestation::PlatformType::AzTdx, nonce, &attestation::AttestOptions::default())
         .await
         .expect("attest() should succeed");
 
@@ -435,7 +435,7 @@ async fn test_az_tdx_top_level_api_wrong_nonce_fails() {
     }
 
     let nonce = b"attest-nonce-abc";
-    let evidence_json = attestation::attest(attestation::PlatformType::AzTdx, nonce)
+    let evidence_json = attestation::attest(attestation::PlatformType::AzTdx, nonce, &attestation::AttestOptions::default())
         .await
         .expect("attest() should succeed");
 

@@ -10,7 +10,7 @@ async fn main() {
     let nonce = b"example-tdx-nonce";
 
     eprintln!("Generating TDX attestation evidence...");
-    let evidence_json = attestation::attest(PlatformType::Tdx, nonce)
+    let evidence_json = attestation::attest(PlatformType::Tdx, nonce, &attestation::AttestOptions::default())
         .await
         .expect("attestation failed");
 
