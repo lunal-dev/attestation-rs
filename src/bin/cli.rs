@@ -1,11 +1,33 @@
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 use std::io::Write;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 use clap::ValueEnum;
 use clap::{Parser, Subcommand};
 
@@ -25,16 +47,49 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Generate attestation evidence from TEE hardware (Linux only).
-    #[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+    #[cfg(all(
+        any(
+            feature = "attest",
+            feature = "attest-tdx",
+            feature = "attest-snp",
+            feature = "attest-az-snp",
+            feature = "attest-az-tdx",
+            feature = "attest-gcp-snp",
+            feature = "attest-gcp-tdx"
+        ),
+        target_os = "linux"
+    ))]
     Attest(AttestArgs),
     /// Verify attestation evidence.
     Verify(VerifyArgs),
     /// Detect the current TEE platform (Linux only).
-    #[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+    #[cfg(all(
+        any(
+            feature = "attest",
+            feature = "attest-tdx",
+            feature = "attest-snp",
+            feature = "attest-az-snp",
+            feature = "attest-az-tdx",
+            feature = "attest-gcp-snp",
+            feature = "attest-gcp-tdx"
+        ),
+        target_os = "linux"
+    ))]
     Detect,
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 #[derive(clap::Args)]
 #[group(multiple = false)]
 struct ReportDataGroup {
@@ -51,7 +106,18 @@ struct ReportDataGroup {
     report_data_file: Option<PathBuf>,
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 #[derive(clap::Args)]
 struct AttestArgs {
     /// Platform to attest with. Auto-detects if not specified.
@@ -81,7 +147,18 @@ struct VerifyArgs {
     expected_init_data: Option<String>,
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 #[derive(Clone, ValueEnum)]
 enum PlatformArg {
     Snp,
@@ -92,7 +169,18 @@ enum PlatformArg {
     GcpTdx,
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 impl PlatformArg {
     fn to_platform_type(&self) -> attestation::PlatformType {
         match self {
@@ -106,7 +194,18 @@ impl PlatformArg {
     }
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 fn resolve_report_data(group: &ReportDataGroup) -> Result<Vec<u8>, String> {
     if let Some(ref s) = group.report_data {
         Ok(s.as_bytes().to_vec())
@@ -155,15 +254,48 @@ async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        #[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+        #[cfg(all(
+            any(
+                feature = "attest",
+                feature = "attest-tdx",
+                feature = "attest-snp",
+                feature = "attest-az-snp",
+                feature = "attest-az-tdx",
+                feature = "attest-gcp-snp",
+                feature = "attest-gcp-tdx"
+            ),
+            target_os = "linux"
+        ))]
         Commands::Detect => cmd_detect(),
-        #[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+        #[cfg(all(
+            any(
+                feature = "attest",
+                feature = "attest-tdx",
+                feature = "attest-snp",
+                feature = "attest-az-snp",
+                feature = "attest-az-tdx",
+                feature = "attest-gcp-snp",
+                feature = "attest-gcp-tdx"
+            ),
+            target_os = "linux"
+        ))]
         Commands::Attest(args) => cmd_attest(args).await,
         Commands::Verify(args) => cmd_verify(args).await,
     }
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 fn cmd_detect() {
     match attestation::detect() {
         Ok(platform) => {
@@ -176,7 +308,18 @@ fn cmd_detect() {
     }
 }
 
-#[cfg(all(any(feature = "attest", feature = "attest-tdx", feature = "attest-snp", feature = "attest-az-snp", feature = "attest-az-tdx", feature = "attest-gcp-snp", feature = "attest-gcp-tdx"), target_os = "linux"))]
+#[cfg(all(
+    any(
+        feature = "attest",
+        feature = "attest-tdx",
+        feature = "attest-snp",
+        feature = "attest-az-snp",
+        feature = "attest-az-tdx",
+        feature = "attest-gcp-snp",
+        feature = "attest-gcp-tdx"
+    ),
+    target_os = "linux"
+))]
 async fn cmd_attest(args: AttestArgs) {
     let report_data = match resolve_report_data(&args.data) {
         Ok(d) => d,
@@ -206,7 +349,13 @@ async fn cmd_attest(args: AttestArgs) {
     }
 
     let t0 = Instant::now();
-    let evidence_json = match attestation::attest(platform, &report_data, &attestation::AttestOptions::default()).await {
+    let evidence_json = match attestation::attest(
+        platform,
+        &report_data,
+        &attestation::AttestOptions::default(),
+    )
+    .await
+    {
         Ok(json) => json,
         Err(e) => {
             eprintln!("Attestation failed: {e}");

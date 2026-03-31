@@ -252,8 +252,13 @@ fn generate_tdreport(report_data: &[u8; 64]) -> Result<[u8; 1024]> {
 
     // SAFETY: TdxReportReq is repr(C) with fixed-size arrays matching the kernel
     // ioctl struct layout. The ioctl writes exactly 1024 bytes into td_report.
-    let ret =
-        unsafe { libc::ioctl(dev.as_raw_fd(), TDX_CMD_GET_REPORT0, &mut req as *mut TdxReportReq) };
+    let ret = unsafe {
+        libc::ioctl(
+            dev.as_raw_fd(),
+            TDX_CMD_GET_REPORT0,
+            &mut req as *mut TdxReportReq,
+        )
+    };
 
     if ret != 0 {
         return Err(AttestationError::HardwareAccessFailed(format!(
@@ -398,9 +403,8 @@ fn vsock_send_receive(request: &[u8]) -> Result<Vec<u8>> {
 
     let mut sock = fs::File::from(owned_fd);
 
-    sock.write_all(request).map_err(|e| {
-        AttestationError::HardwareAccessFailed(format!("vsock send failed: {}", e))
-    })?;
+    sock.write_all(request)
+        .map_err(|e| AttestationError::HardwareAccessFailed(format!("vsock send failed: {}", e)))?;
 
     let mut size_buf = [0u8; 4];
     sock.read_exact(&mut size_buf).map_err(|e| {
@@ -471,7 +475,8 @@ fn parse_qgs_get_quote_response(response: &[u8]) -> Result<Vec<u8>> {
     }
 
     // Parse payload: selected_id_size (u32) + quote_size (u32) + data
-    let selected_id_size = u32::from_le_bytes([response[16], response[17], response[18], response[19]]);
+    let selected_id_size =
+        u32::from_le_bytes([response[16], response[17], response[18], response[19]]);
     let quote_size = u32::from_le_bytes([response[20], response[21], response[22], response[23]]);
 
     if quote_size == 0 {
@@ -485,9 +490,9 @@ fn parse_qgs_get_quote_response(response: &[u8]) -> Result<Vec<u8>> {
         .ok_or_else(|| {
             AttestationError::HardwareAccessFailed("QGS selected_id_size overflow".into())
         })?;
-    let quote_end = quote_offset.checked_add(quote_size as usize).ok_or_else(|| {
-        AttestationError::HardwareAccessFailed("QGS quote_size overflow".into())
-    })?;
+    let quote_end = quote_offset
+        .checked_add(quote_size as usize)
+        .ok_or_else(|| AttestationError::HardwareAccessFailed("QGS quote_size overflow".into()))?;
 
     if quote_end > response.len() {
         return Err(AttestationError::HardwareAccessFailed(format!(

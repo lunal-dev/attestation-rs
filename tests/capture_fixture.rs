@@ -31,12 +31,8 @@ async fn capture_tdx_evidence_fixture() {
 
     // With collateral
     let provider = attestation::collateral::DefaultTdxCollateralProvider::new();
-    match attestation::platforms::tdx::verify::verify_evidence(
-        &evidence,
-        &params,
-        Some(&provider),
-    )
-    .await
+    match attestation::platforms::tdx::verify::verify_evidence(&evidence, &params, Some(&provider))
+        .await
     {
         Ok(r) => {
             eprintln!(

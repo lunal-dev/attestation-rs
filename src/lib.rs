@@ -39,12 +39,12 @@ pub use collateral::{
     INTEL_PCS_V4_BASE, INTEL_QE_IDENTITY_URL, INTEL_ROOT_CA_CRL_URL, INTEL_TD_QE_IDENTITY_URL,
 };
 pub use error::{AttestationError, Result};
+#[cfg(all(any(feature = "attest", feature = "attest-tdx"), target_os = "linux"))]
+pub use platforms::tdx::attest::TdxQuoteMethod;
 #[cfg(feature = "tdx")]
 pub use platforms::tdx::dcap::{
     check_cert_revocation, check_intermediate_ca_revocation, determine_ca_type,
 };
-#[cfg(all(any(feature = "attest", feature = "attest-tdx"), target_os = "linux"))]
-pub use platforms::tdx::attest::TdxQuoteMethod;
 pub use types::*;
 
 /// Detect the current TEE platform.

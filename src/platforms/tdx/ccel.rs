@@ -63,15 +63,13 @@ pub fn parse_ccel(data: &[u8]) -> Result<Vec<CcelEvent>> {
 
     // Skip Spec ID Event header: first 32 bytes contain the TCG_PCR_EVENT
     // header, then event_size bytes of Spec ID Event data.
-    let event_size = u32::from_le_bytes(
-        data[28..32]
-            .try_into()
-            .map_err(|_| AttestationError::EventlogIntegrityFailed("reading Spec ID Event size".into()))?,
-    ) as usize;
+    let event_size = u32::from_le_bytes(data[28..32].try_into().map_err(|_| {
+        AttestationError::EventlogIntegrityFailed("reading Spec ID Event size".into())
+    })?) as usize;
 
-    let mut offset = 32usize
-        .checked_add(event_size)
-        .ok_or_else(|| AttestationError::EventlogIntegrityFailed("Spec ID Event size overflow".into()))?;
+    let mut offset = 32usize.checked_add(event_size).ok_or_else(|| {
+        AttestationError::EventlogIntegrityFailed("Spec ID Event size overflow".into())
+    })?;
 
     if offset > data.len() {
         return Err(AttestationError::EventlogIntegrityFailed(format!(
@@ -267,10 +265,18 @@ mod tests {
         // TDINFO at offset 512: td_attributes[8], xfam[8], mrtd[48], mrconfigid[48],
         // mrowner[48], mrownerconfig[48], rtmr0[48], rtmr1[48], rtmr2[48], rtmr3[48]
         const TDINFO: usize = 512;
-        let hw_rtmr0: [u8; 48] = LIVE_TDREPORT[TDINFO + 208..TDINFO + 256].try_into().unwrap();
-        let hw_rtmr1: [u8; 48] = LIVE_TDREPORT[TDINFO + 256..TDINFO + 304].try_into().unwrap();
-        let hw_rtmr2: [u8; 48] = LIVE_TDREPORT[TDINFO + 304..TDINFO + 352].try_into().unwrap();
-        let hw_rtmr3: [u8; 48] = LIVE_TDREPORT[TDINFO + 352..TDINFO + 400].try_into().unwrap();
+        let hw_rtmr0: [u8; 48] = LIVE_TDREPORT[TDINFO + 208..TDINFO + 256]
+            .try_into()
+            .unwrap();
+        let hw_rtmr1: [u8; 48] = LIVE_TDREPORT[TDINFO + 256..TDINFO + 304]
+            .try_into()
+            .unwrap();
+        let hw_rtmr2: [u8; 48] = LIVE_TDREPORT[TDINFO + 304..TDINFO + 352]
+            .try_into()
+            .unwrap();
+        let hw_rtmr3: [u8; 48] = LIVE_TDREPORT[TDINFO + 352..TDINFO + 400]
+            .try_into()
+            .unwrap();
 
         assert_eq!(
             hex::encode(replayed[0]),
@@ -297,21 +303,39 @@ mod tests {
     #[test]
     fn test_verify_ccel_against_rtmrs() {
         const TDINFO: usize = 512;
-        let rtmr0: [u8; 48] = LIVE_TDREPORT[TDINFO + 208..TDINFO + 256].try_into().unwrap();
-        let rtmr1: [u8; 48] = LIVE_TDREPORT[TDINFO + 256..TDINFO + 304].try_into().unwrap();
-        let rtmr2: [u8; 48] = LIVE_TDREPORT[TDINFO + 304..TDINFO + 352].try_into().unwrap();
-        let rtmr3: [u8; 48] = LIVE_TDREPORT[TDINFO + 352..TDINFO + 400].try_into().unwrap();
+        let rtmr0: [u8; 48] = LIVE_TDREPORT[TDINFO + 208..TDINFO + 256]
+            .try_into()
+            .unwrap();
+        let rtmr1: [u8; 48] = LIVE_TDREPORT[TDINFO + 256..TDINFO + 304]
+            .try_into()
+            .unwrap();
+        let rtmr2: [u8; 48] = LIVE_TDREPORT[TDINFO + 304..TDINFO + 352]
+            .try_into()
+            .unwrap();
+        let rtmr3: [u8; 48] = LIVE_TDREPORT[TDINFO + 352..TDINFO + 400]
+            .try_into()
+            .unwrap();
 
         let result = verify_ccel_against_rtmrs(LIVE_CCEL, &rtmr0, &rtmr1, &rtmr2, &rtmr3);
-        assert!(result.is_ok(), "CCEL replay should match: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "CCEL replay should match: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn test_verify_ccel_tampered_fails() {
         const TDINFO: usize = 512;
-        let rtmr0: [u8; 48] = LIVE_TDREPORT[TDINFO + 208..TDINFO + 256].try_into().unwrap();
-        let rtmr1: [u8; 48] = LIVE_TDREPORT[TDINFO + 256..TDINFO + 304].try_into().unwrap();
-        let rtmr2: [u8; 48] = LIVE_TDREPORT[TDINFO + 304..TDINFO + 352].try_into().unwrap();
+        let rtmr0: [u8; 48] = LIVE_TDREPORT[TDINFO + 208..TDINFO + 256]
+            .try_into()
+            .unwrap();
+        let rtmr1: [u8; 48] = LIVE_TDREPORT[TDINFO + 256..TDINFO + 304]
+            .try_into()
+            .unwrap();
+        let rtmr2: [u8; 48] = LIVE_TDREPORT[TDINFO + 304..TDINFO + 352]
+            .try_into()
+            .unwrap();
         // Wrong RTMR[3] - should cause mismatch (unless it's all zeros and replay is too)
         let mut rtmr3 = [0u8; 48];
         rtmr3[0] = 0xFF;

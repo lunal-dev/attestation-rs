@@ -19,9 +19,13 @@ async fn main() {
     let nonce = b"example-gcp-tdx-nonce-replace-me";
 
     eprintln!("Generating GCP TDX attestation evidence...");
-    let evidence_json = attestation::attest(PlatformType::GcpTdx, nonce, &attestation::AttestOptions::default())
-        .await
-        .expect("attestation failed");
+    let evidence_json = attestation::attest(
+        PlatformType::GcpTdx,
+        nonce,
+        &attestation::AttestOptions::default(),
+    )
+    .await
+    .expect("attestation failed");
 
     eprintln!("Evidence: {} bytes", evidence_json.len());
 

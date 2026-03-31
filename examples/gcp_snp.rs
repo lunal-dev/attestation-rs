@@ -19,9 +19,13 @@ async fn main() {
     let nonce = b"example-gcp-snp-nonce-replace-me";
 
     eprintln!("Generating GCP SNP attestation evidence...");
-    let evidence_json = attestation::attest(PlatformType::GcpSnp, nonce, &attestation::AttestOptions::default())
-        .await
-        .expect("attestation failed");
+    let evidence_json = attestation::attest(
+        PlatformType::GcpSnp,
+        nonce,
+        &attestation::AttestOptions::default(),
+    )
+    .await
+    .expect("attestation failed");
 
     eprintln!("Evidence: {} bytes", evidence_json.len());
 
