@@ -443,6 +443,7 @@ pub async fn verify_evidence(
 
     // 6. Eventlog integrity check (if present)
     if let Some(ref eventlog_b64) = evidence.cc_eventlog {
+        crate::utils::check_field_size("cc_eventlog", eventlog_b64.len())?;
         let ccel_data = BASE64
             .decode(eventlog_b64)
             .map_err(|e| AttestationError::EventlogIntegrityFailed(format!("CCEL base64: {e}")))?;

@@ -13,6 +13,29 @@ use crate::error::{AttestationError, Result};
 /// Maximum digest algorithms per event (TCG spec allows ~3; cap at 16 for safety).
 const MAX_DIGEST_ALGORITHMS: u32 = 16;
 
+/// Returns true if reading `len` bytes from `offset` would exceed `data`.
+fn exceeds(data: &[u8], offset: usize, len: usize) -> bool {
+    offset.checked_add(len).is_none_or(|end| end > data.len())
+}
+
+/// Read a little-endian u32 from `data` at `offset`.
+fn read_le_u32(data: &[u8], offset: usize, field: &str) -> Result<u32> {
+    Ok(u32::from_le_bytes(
+        data[offset..offset + 4]
+            .try_into()
+            .map_err(|_| AttestationError::EventlogIntegrityFailed(format!("{field} parse")))?,
+    ))
+}
+
+/// Read a little-endian u16 from `data` at `offset`.
+fn read_le_u16(data: &[u8], offset: usize, field: &str) -> Result<u16> {
+    Ok(u16::from_le_bytes(
+        data[offset..offset + 2]
+            .try_into()
+            .map_err(|_| AttestationError::EventlogIntegrityFailed(format!("{field} parse")))?,
+    ))
+}
+
 /// A parsed CCEL event.
 #[derive(Debug, Clone)]
 pub struct CcelEvent {
@@ -60,19 +83,19 @@ pub fn parse_ccel(data: &[u8]) -> Result<Vec<CcelEvent>> {
     let mut events = Vec::new();
 
     while offset < data.len() {
-        if offset + 8 > data.len() {
+        if exceeds(data, offset, 8) {
             break;
         }
 
-        let mr_index = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-        let event_type = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap());
+        let mr_index = read_le_u32(data, offset, "mr_index")?;
+        let event_type = read_le_u32(data, offset + 4, "event_type")?;
 
         let mut pos = offset + 8;
-        if pos + 4 > data.len() {
+        if exceeds(data, pos, 4) {
             break;
         }
 
-        let digest_count = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
+        let digest_count = read_le_u32(data, pos, "digest_count")?;
         pos += 4;
 
         if digest_count > MAX_DIGEST_ALGORITHMS {
@@ -82,29 +105,30 @@ pub fn parse_ccel(data: &[u8]) -> Result<Vec<CcelEvent>> {
         }
 
         let mut sha384_digest = Vec::new();
-        let mut ok = true;
+        let mut truncated = false;
 
         for _ in 0..digest_count {
-            if pos + 2 > data.len() {
-                ok = false;
+            if exceeds(data, pos, 2) {
+                truncated = true;
                 break;
             }
-            let algo_id = u16::from_le_bytes(data[pos..pos + 2].try_into().unwrap());
+            let algo_id = read_le_u16(data, pos, "algo_id")?;
             pos += 2;
 
             let digest_size = match algo_id {
                 0x000C => 48, // SHA-384
+                0x000D => 64, // SHA-512
                 0x000B => 32, // SHA-256
                 0x0004 => 20, // SHA-1
                 _ => {
-                    // Unknown algorithm — likely hit padding/uninitialized data.
-                    ok = false;
-                    break;
+                    return Err(AttestationError::EventlogIntegrityFailed(format!(
+                        "unsupported digest algorithm 0x{algo_id:04X} at offset {pos}"
+                    )));
                 }
             };
 
-            if pos + digest_size > data.len() {
-                ok = false;
+            if exceeds(data, pos, digest_size) {
+                truncated = true;
                 break;
             }
             if algo_id == 0x000C {
@@ -113,18 +137,20 @@ pub fn parse_ccel(data: &[u8]) -> Result<Vec<CcelEvent>> {
             pos += digest_size;
         }
 
-        if !ok {
+        if truncated {
             break;
         }
 
-        if pos + 4 > data.len() {
+        if exceeds(data, pos, 4) {
             break;
         }
-        let event_data_size =
-            u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        let event_data_size = read_le_u32(data, pos, "event_data_size")? as usize;
         pos += 4;
 
-        if pos + event_data_size > data.len() {
+        let event_end = pos.checked_add(event_data_size).ok_or_else(|| {
+            AttestationError::EventlogIntegrityFailed("event_data_size overflow".into())
+        })?;
+        if event_end > data.len() {
             break;
         }
 
@@ -133,7 +159,7 @@ pub fn parse_ccel(data: &[u8]) -> Result<Vec<CcelEvent>> {
             break;
         }
 
-        let event_data = data[pos..pos + event_data_size].to_vec();
+        let event_data = data[pos..event_end].to_vec();
 
         if !sha384_digest.is_empty() {
             events.push(CcelEvent {
@@ -144,7 +170,7 @@ pub fn parse_ccel(data: &[u8]) -> Result<Vec<CcelEvent>> {
             });
         }
 
-        offset = pos + event_data_size;
+        offset = event_end;
     }
 
     Ok(events)
