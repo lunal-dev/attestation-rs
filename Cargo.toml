@@ -19,6 +19,7 @@ az-snp = ["snp"]       # Azure SNP depends on bare-metal SNP for report parsing
 az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
 gcp-snp = ["snp"]      # GCP SNP depends on bare-metal SNP for report parsing
 gcp-tdx = ["tdx"]      # GCP TDX depends on bare-metal TDX for quote parsing
+dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware)
 attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
@@ -72,7 +73,7 @@ pem = "3.0.6"
 # Native (non-WASM) dependencies — needed for cert fetching on any OS
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util"] }
 
 # Guest-side attestation crates — Linux-only (require TEE hardware / vTPM)
 [target.'cfg(target_os = "linux")'.dependencies]

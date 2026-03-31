@@ -33,6 +33,8 @@ pub enum PlatformType {
     /// `rtmr_*`, `tee_tcb_svn`) instead.
     #[serde(rename = "gcp-tdx")]
     GcpTdx,
+    #[serde(rename = "dstack")]
+    Dstack,
 }
 
 /// Self-describing attestation evidence envelope.
@@ -56,6 +58,7 @@ impl std::fmt::Display for PlatformType {
             PlatformType::AzSnp => write!(f, "az-snp"),
             PlatformType::GcpSnp => write!(f, "gcp-snp"),
             PlatformType::GcpTdx => write!(f, "gcp-tdx"),
+            PlatformType::Dstack => write!(f, "dstack"),
         }
     }
 }
