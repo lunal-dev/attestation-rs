@@ -238,6 +238,7 @@ pub struct Verifier {
 }
 
 impl Verifier {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cert_provider: Box::new(DefaultCertProvider::new()),
@@ -245,11 +246,13 @@ impl Verifier {
         }
     }
 
+    #[must_use]
     pub fn with_cert_provider(mut self, provider: impl CertProvider + 'static) -> Self {
         self.cert_provider = Box::new(provider);
         self
     }
 
+    #[must_use]
     pub fn with_tdx_provider(mut self, provider: impl TdxCollateralProvider + 'static) -> Self {
         self.tdx_provider = Box::new(provider);
         self
@@ -260,6 +263,11 @@ impl Verifier {
     /// The evidence JSON must be an [`AttestationEvidence`] envelope containing
     /// a `platform` field and an `evidence` payload. The platform is auto-detected
     /// from the envelope and the correct verifier is dispatched automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the evidence is too large, malformed, targets a
+    /// platform not compiled in, or fails signature/collateral verification.
     pub async fn verify(
         &self,
         evidence_json: &[u8],
@@ -357,9 +365,9 @@ impl Verifier {
                 )
                 .await
             }
-            _other => {
+            other => {
                 let _ = params;
-                Err(AttestationError::PlatformNotEnabled(_other.to_string()))
+                Err(AttestationError::PlatformNotEnabled(other.to_string()))
             }
         }
     }
@@ -375,6 +383,11 @@ impl Default for Verifier {
 ///
 /// Convenience wrapper around [`Verifier`] with default providers.
 /// For custom providers (e.g. cached certs), construct a [`Verifier`] instead.
+///
+/// # Errors
+///
+/// Returns an error if the evidence is too large, malformed, targets a
+/// platform not compiled in, or fails signature/collateral verification.
 pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<VerificationResult> {
     Verifier::new().verify(evidence_json, params).await
 }
