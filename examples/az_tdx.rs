@@ -20,9 +20,13 @@ async fn main() {
     let t0 = Instant::now();
 
     eprintln!("Generating Azure TDX attestation evidence...");
-    let evidence_json = attestation::attest(PlatformType::AzTdx, &nonce)
-        .await
-        .expect("attestation failed");
+    let evidence_json = attestation::attest(
+        PlatformType::AzTdx,
+        &nonce,
+        &attestation::AttestOptions::default(),
+    )
+    .await
+    .expect("attestation failed");
     eprintln!(
         "[attest]  {:?} ({} bytes)",
         t0.elapsed(),

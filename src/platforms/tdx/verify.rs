@@ -442,12 +442,18 @@ pub async fn verify_evidence(
     };
 
     // 6. Eventlog integrity check (if present)
-    if evidence.cc_eventlog.is_some() {
-        log::warn!(
-            "CC eventlog present but replay verification not yet implemented; \
-             skipping eventlog-to-RTMR integrity check. RTMRs are still verified \
-             transitively through the quote signature."
-        );
+    if let Some(ref eventlog_b64) = evidence.cc_eventlog {
+        crate::utils::check_field_size("cc_eventlog", eventlog_b64.len())?;
+        let ccel_data = BASE64
+            .decode(eventlog_b64)
+            .map_err(|e| AttestationError::EventlogIntegrityFailed(format!("CCEL base64: {e}")))?;
+        super::ccel::verify_ccel_against_rtmrs(
+            &ccel_data,
+            &quote.body.rtmr_0,
+            &quote.body.rtmr_1,
+            &quote.body.rtmr_2,
+            &quote.body.rtmr_3,
+        )?;
     }
 
     // 7. Extract claims

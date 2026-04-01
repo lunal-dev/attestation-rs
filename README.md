@@ -88,7 +88,7 @@ async fn main() {
 
     // Generate evidence with a challenge nonce
     let nonce = b"server-provided-challenge-nonce";
-    let evidence_json = attestation::attest(platform, nonce).await.unwrap();
+    let evidence_json = attestation::attest(platform, nonce, &attestation::AttestOptions::default()).await.unwrap();
 
     // Send evidence_json to the verifier — it's a self-describing envelope
     println!("Evidence: {} bytes", evidence_json.len());
