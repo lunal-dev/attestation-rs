@@ -10,5 +10,7 @@ pub mod gcp_tdx;
 pub mod snp;
 #[cfg(feature = "tdx")]
 pub mod tdx;
-#[cfg(any(feature = "az-snp", feature = "az-tdx"))]
+#[cfg(feature = "tpm")]
+pub mod tpm;
+#[cfg(any(feature = "az-snp", feature = "az-tdx", feature = "tpm"))]
 pub mod tpm_common;

@@ -90,6 +90,11 @@ pub fn detect() -> Result<PlatformType> {
         return Ok(PlatformType::Snp);
     }
 
+    #[cfg(feature = "tpm")]
+    if platforms::tpm::attest::is_available() {
+        return Ok(PlatformType::Tpm);
+    }
+
     Err(AttestationError::NoPlatformDetected)
 }
 
@@ -134,6 +139,12 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         #[cfg(feature = "gcp-tdx")]
         PlatformType::GcpTdx => {
             let evidence = platforms::gcp_tdx::attest::generate_evidence(report_data).await?;
+            serde_json::to_value(&evidence)
+                .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
+        }
+        #[cfg(feature = "tpm")]
+        PlatformType::Tpm => {
+            let evidence = platforms::tpm::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -289,6 +300,13 @@ impl Verifier {
                     Some(self.tdx_provider.as_ref()),
                 )
                 .await
+            }
+            #[cfg(feature = "tpm")]
+            PlatformType::Tpm => {
+                let evidence: platforms::tpm::evidence::TpmEvidence =
+                    serde_json::from_value(envelope.evidence)
+                        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+                platforms::tpm::verify::verify_evidence(&evidence, params).await
             }
             _other => {
                 let _ = params;
