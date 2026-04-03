@@ -404,6 +404,39 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
     Ok(message[offset..offset + nonce_size].to_vec())
 }
 
+/// Extract firmware_version (u64) from TPMS_ATTEST.
+///
+/// Walks past: magic(4) + type(2) + qualifiedSigner(TPM2B) + extraData(TPM2B) +
+/// clockInfo(17) to reach the 8-byte firmwareVersion field.
+pub fn extract_firmware_version(message: &[u8]) -> Result<u64> {
+    let magic = read_be_u32(message, 0, "TPM magic")?;
+    if magic != TPM_ATTEST_MAGIC {
+        return Err(AttestationError::QuoteParseFailed(format!(
+            "invalid TPM Attest magic: 0x{magic:08X}"
+        )));
+    }
+
+    let mut offset = 6; // magic(4) + type(2)
+
+    let signer_size = read_be_u16(message, offset, "qualifiedSigner size")? as usize;
+    offset += 2 + signer_size;
+
+    let nonce_size = read_be_u16(message, offset, "extraData size")? as usize;
+    offset += 2 + nonce_size;
+
+    // clockInfo: clock(8) + resetCount(4) + restartCount(4) + safe(1) = 17 bytes
+    offset += 17;
+
+    if message.len() < offset + 8 {
+        return Err(AttestationError::QuoteParseFailed(
+            "TPM Attest truncated at firmwareVersion".to_string(),
+        ));
+    }
+    Ok(u64::from_be_bytes(
+        message[offset..offset + 8].try_into().unwrap(),
+    ))
+}
+
 /// Verify TPM nonce matches expected report_data.
 pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<()> {
     let nonce = extract_tpm_nonce(message)?;
