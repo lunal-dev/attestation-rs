@@ -33,6 +33,14 @@ pub enum PlatformType {
     /// `rtmr_*`, `tee_tcb_svn`) instead.
     #[serde(rename = "gcp-tdx")]
     GcpTdx,
+    /// Bare-metal TPM 2.0 attestation.
+    ///
+    /// Uses the hardware TPM to generate attestation quotes. Works on any
+    /// machine with a TPM 2.0 — no CVM or cloud provider required. The trust
+    /// root is the TPM Attestation Key; for stronger platform identity,
+    /// verify the EK certificate chain against TPM manufacturer roots.
+    #[serde(rename = "tpm")]
+    Tpm,
 }
 
 /// Self-describing attestation evidence envelope.
@@ -56,6 +64,7 @@ impl std::fmt::Display for PlatformType {
             PlatformType::AzSnp => write!(f, "az-snp"),
             PlatformType::GcpSnp => write!(f, "gcp-snp"),
             PlatformType::GcpTdx => write!(f, "gcp-tdx"),
+            PlatformType::Tpm => write!(f, "tpm"),
         }
     }
 }
@@ -140,6 +149,10 @@ pub enum TcbInfo {
         /// Raw 16-byte TCB SVN from the quote body.
         #[serde(with = "hex_bytes")]
         tcb_svn: Vec<u8>,
+    },
+    Tpm {
+        /// TPM firmware version from TPMS_ATTEST.firmwareVersion.
+        firmware_version: u64,
     },
 }
 
