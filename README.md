@@ -6,13 +6,15 @@ A Rust library providing a unified interface for TEE (Trusted Execution Environm
 
 ## Supported Platforms
 
-| Platform                 | Attest | Verify | WASM Verify |
-| ------------------------ | ------ | ------ | ----------- |
-| AMD SEV-SNP (bare-metal) | Yes    | Yes    | Yes         |
-| Intel TDX (bare-metal)   | Yes    | Yes    | Yes         |
-| Azure SEV-SNP (vTPM)     | Yes    | Yes    | Yes         |
-| Azure TDX (vTPM)         | Yes    | Yes    | Yes         |
-| Dstack TDX               | Yes    | Yes    | Yes         |
+| Platform                      | Attest | Verify | WASM Verify |
+| ----------------------------- | ------ | ------ | ----------- |
+| AMD SEV-SNP (bare-metal)      | Yes    | Yes    | Yes         |
+| Intel TDX (bare-metal)        | Yes    | Yes    | Yes         |
+| Azure SEV-SNP (vTPM)          | Yes    | Yes    | Yes         |
+| Azure TDX (vTPM)              | Yes    | Yes    | Yes         |
+| GCP SEV-SNP (non-vTPM)        | Yes    | Yes    | Yes         |
+| GCP TDX (non-vTPM)            | Yes    | Yes    | Yes         |
+| Dstack TDX                    | Yes    | Yes    | Yes         |
 
 ## Feature Flags
 
@@ -25,13 +27,15 @@ attestation = { path = ".", features = ["snp", "tdx"] }
 | -------- | ------------------------------------------------------------------------- |
 | `snp`    | AMD SEV-SNP support (verify always, attest when `attest` also enabled)    |
 | `tdx`    | Intel TDX support                                                         |
-| `az-snp` | Azure SEV-SNP vTPM support (implies `snp`)                                |
-| `az-tdx` | Azure TDX vTPM support (implies `tdx`)                                    |
-| `dstack` | Dstack TDX support via Unix socket (implies `tdx`)                        |
+| `az-snp`  | Azure SEV-SNP vTPM support (implies `snp`)                               |
+| `az-tdx`  | Azure TDX vTPM support (implies `tdx`)                                   |
+| `gcp-snp` | GCP SEV-SNP non-vTPM support (implies `snp`)                             |
+| `gcp-tdx` | GCP TDX non-vTPM support (implies `tdx`)                                 |
+| `dstack`  | Dstack TDX support via Unix socket (implies `tdx`)                       |
 | `attest` | Enable guest-side evidence generation (Linux-only, requires TEE hardware) |
 | `cli`    | Build the `attestation-cli` binary                                        |
 
-All four platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates all guest-side code that requires hardware access.
+All six platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates all guest-side code that requires hardware access.
 
 ## Usage
 
@@ -102,16 +106,25 @@ async fn main() {
 Each platform has a dedicated example. Run on the appropriate hardware:
 
 ```bash
-cargo run --example snp    --features "snp,attest"
-cargo run --example tdx    --features "tdx,attest"
-cargo run --example az_snp --features "az-snp,attest"
-cargo run --example az_tdx --features "az-tdx,attest"
+cargo run --example snp     --features "snp,attest"
+cargo run --example tdx     --features "tdx,attest"
+cargo run --example az_snp  --features "az-snp,attest"
+cargo run --example az_tdx  --features "az-tdx,attest"
+cargo run --example gcp_snp --features "gcp-snp,attest"
+cargo run --example gcp_tdx --features "gcp-tdx,attest"
 ```
 
 Azure examples accept an optional nonce argument:
 
 ```bash
 cargo run --example az_snp --features "az-snp,attest" -- "my-custom-nonce"
+```
+
+GCP examples accept an optional nonce argument:
+
+```bash
+cargo run --example gcp_snp --features "gcp-snp,attest" -- "my-custom-nonce"
+cargo run --example gcp_tdx --features "gcp-tdx,attest" -- "my-custom-nonce"
 ```
 
 ## CLI
@@ -184,6 +197,32 @@ echo "$EVIDENCE" | ./target/release/attestation-cli verify
 }
 ```
 
+### GCP SNP Evidence
+
+GCP SEV-SNP uses the same wire format as bare-metal SNP. The `platform` field in the evidence envelope is set to `gcp-snp` to distinguish it from bare-metal SNP evidence.
+
+```json
+{
+  "attestation_report": "<base64-encoded 1184-byte SNP report>",
+  "cert_chain": {
+    "vcek": "<base64-encoded DER certificate>",
+    "ask": "<base64-encoded DER certificate, optional>",
+    "ark": "<base64-encoded DER certificate, optional>"
+  }
+}
+```
+
+### GCP TDX Evidence
+
+GCP TDX uses the same wire format as bare-metal TDX. The `platform` field in the evidence envelope is set to `gcp-tdx` to distinguish it from bare-metal TDX evidence.
+
+```json
+{
+  "quote": "<base64-encoded TDX quote bytes>",
+  "cc_eventlog": "<base64-encoded CCEL eventlog, optional>"
+}
+```
+
 ### Dstack TDX Evidence
 
 ```json
@@ -231,6 +270,8 @@ cargo test --features snp
 cargo test --features tdx
 cargo test --features az-snp
 cargo test --features az-tdx
+cargo test --features gcp-snp
+cargo test --features gcp-tdx
 cargo test --features dstack
 
 # Integration tests on Azure SNP CVM
@@ -244,6 +285,8 @@ cargo bench --features snp
 cargo bench --features tdx
 cargo bench --features az-snp
 cargo bench --features az-tdx
+cargo bench --features gcp-snp
+cargo bench --features gcp-tdx
 ```
 
 ## WASM Support
@@ -251,7 +294,7 @@ cargo bench --features az-tdx
 The library compiles to `wasm32-unknown-unknown` for verifier-only use:
 
 ```bash
-cargo check --target wasm32-unknown-unknown --no-default-features --features snp,tdx,az-snp,az-tdx,dstack
+cargo check --target wasm32-unknown-unknown --no-default-features --features snp,tdx,az-snp,az-tdx,gcp-snp,gcp-tdx,dstack
 ```
 
 The `attest` feature is automatically excluded on WASM. All verification uses pure-Rust crypto (no OpenSSL dependency).
