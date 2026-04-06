@@ -39,7 +39,7 @@ pub use collateral::{
     INTEL_PCS_V4_BASE, INTEL_QE_IDENTITY_URL, INTEL_ROOT_CA_CRL_URL, INTEL_TD_QE_IDENTITY_URL,
 };
 pub use error::{AttestationError, Result};
-#[cfg(all(any(feature = "attest", feature = "attest-tdx"), target_os = "linux"))]
+#[cfg(all(feature = "attest", feature = "tdx", target_os = "linux"))]
 pub use platforms::tdx::attest::TdxQuoteMethod;
 #[cfg(feature = "tdx")]
 pub use platforms::tdx::dcap::{
@@ -60,45 +60,34 @@ pub use types::*;
 ///
 /// Order: `az-tdx` → `az-snp` → `gcp-tdx` → `gcp-snp` → `tdx` → `snp`
 ///
-#[cfg(all(
-    any(
-        feature = "attest",
-        feature = "attest-tdx",
-        feature = "attest-snp",
-        feature = "attest-az-snp",
-        feature = "attest-az-tdx",
-        feature = "attest-gcp-snp",
-        feature = "attest-gcp-tdx",
-    ),
-    target_os = "linux"
-))]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 pub fn detect() -> Result<PlatformType> {
-    #[cfg(any(feature = "attest", feature = "attest-az-tdx"))]
+    #[cfg(feature = "az-tdx")]
     if platforms::az_tdx::attest::is_available() {
         return Ok(PlatformType::AzTdx);
     }
 
-    #[cfg(any(feature = "attest", feature = "attest-az-snp"))]
+    #[cfg(feature = "az-snp")]
     if platforms::az_snp::attest::is_available() {
         return Ok(PlatformType::AzSnp);
     }
 
-    #[cfg(any(feature = "attest", feature = "attest-gcp-tdx"))]
+    #[cfg(feature = "gcp-tdx")]
     if platforms::gcp_tdx::attest::is_available() {
         return Ok(PlatformType::GcpTdx);
     }
 
-    #[cfg(any(feature = "attest", feature = "attest-gcp-snp"))]
+    #[cfg(feature = "gcp-snp")]
     if platforms::gcp_snp::attest::is_available() {
         return Ok(PlatformType::GcpSnp);
     }
 
-    #[cfg(any(feature = "attest", feature = "attest-tdx"))]
+    #[cfg(feature = "tdx")]
     if platforms::tdx::attest::is_available() {
         return Ok(PlatformType::Tdx);
     }
 
-    #[cfg(any(feature = "attest", feature = "attest-snp"))]
+    #[cfg(feature = "snp")]
     if platforms::snp::attest::is_available() {
         return Ok(PlatformType::Snp);
     }
@@ -110,23 +99,12 @@ pub fn detect() -> Result<PlatformType> {
 ///
 /// Pass to [`attest_with_options`] to control quote generation behavior.
 /// Non-TDX platforms ignore TDX-specific fields.
-#[cfg(all(
-    any(
-        feature = "attest",
-        feature = "attest-tdx",
-        feature = "attest-snp",
-        feature = "attest-az-snp",
-        feature = "attest-az-tdx",
-        feature = "attest-gcp-snp",
-        feature = "attest-gcp-tdx",
-    ),
-    target_os = "linux"
-))]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 #[derive(Debug, Clone, Default)]
 pub struct AttestOptions {
     /// TDX quote generation method. Only used for TDX-based platforms
     /// (Tdx, AzTdx, GcpTdx). Ignored for SNP platforms.
-    #[cfg(any(feature = "attest", feature = "attest-tdx"))]
+    #[cfg(feature = "tdx")]
     pub tdx_quote_method: platforms::tdx::attest::TdxQuoteMethod,
 }
 
@@ -137,18 +115,7 @@ pub struct AttestOptions {
 ///
 /// Pass `AttestOptions::default()` for standard behavior (auto-detects the
 /// fastest available quote method for TDX platforms).
-#[cfg(all(
-    any(
-        feature = "attest",
-        feature = "attest-tdx",
-        feature = "attest-snp",
-        feature = "attest-az-snp",
-        feature = "attest-az-tdx",
-        feature = "attest-gcp-snp",
-        feature = "attest-gcp-tdx",
-    ),
-    target_os = "linux"
-))]
+#[cfg(all(feature = "attest", target_os = "linux"))]
 pub async fn attest(
     platform: PlatformType,
     report_data: &[u8],
@@ -156,13 +123,13 @@ pub async fn attest(
 ) -> Result<Vec<u8>> {
     #[allow(unreachable_patterns)]
     let evidence_value = match platform {
-        #[cfg(any(feature = "attest", feature = "attest-snp"))]
+        #[cfg(feature = "snp")]
         PlatformType::Snp => {
             let evidence = platforms::snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(any(feature = "attest", feature = "attest-tdx"))]
+        #[cfg(feature = "tdx")]
         PlatformType::Tdx => {
             let evidence = platforms::tdx::attest::generate_evidence_with(
                 report_data,
@@ -172,13 +139,13 @@ pub async fn attest(
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(any(feature = "attest", feature = "attest-az-snp"))]
+        #[cfg(feature = "az-snp")]
         PlatformType::AzSnp => {
             let evidence = platforms::az_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(any(feature = "attest", feature = "attest-az-tdx"))]
+        #[cfg(feature = "az-tdx")]
         PlatformType::AzTdx => {
             let evidence = platforms::az_tdx::attest::generate_evidence_with(
                 report_data,
@@ -188,13 +155,13 @@ pub async fn attest(
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(any(feature = "attest", feature = "attest-gcp-snp"))]
+        #[cfg(feature = "gcp-snp")]
         PlatformType::GcpSnp => {
             let evidence = platforms::gcp_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(any(feature = "attest", feature = "attest-gcp-tdx"))]
+        #[cfg(feature = "gcp-tdx")]
         PlatformType::GcpTdx => {
             let evidence = platforms::gcp_tdx::attest::generate_evidence_with(
                 report_data,

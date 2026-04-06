@@ -1,7 +1,4 @@
 pub mod verify;
 
-#[cfg(all(
-    any(feature = "attest", feature = "attest-gcp-snp"),
-    target_os = "linux"
-))]
+#[cfg(all(feature = "attest", feature = "gcp-snp", target_os = "linux"))]
 pub mod attest;
