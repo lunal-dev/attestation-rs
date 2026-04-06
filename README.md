@@ -12,6 +12,7 @@ A Rust library providing a unified interface for TEE (Trusted Execution Environm
 | Intel TDX (bare-metal)   | Yes    | Yes    | Yes         |
 | Azure SEV-SNP (vTPM)     | Yes    | Yes    | Yes         |
 | Azure TDX (vTPM)         | Yes    | Yes    | Yes         |
+| Dstack TDX               | Yes    | Yes    | Yes         |
 
 ## Feature Flags
 
@@ -26,6 +27,7 @@ attestation = { path = ".", features = ["snp", "tdx"] }
 | `tdx`    | Intel TDX support                                                         |
 | `az-snp` | Azure SEV-SNP vTPM support (implies `snp`)                                |
 | `az-tdx` | Azure TDX vTPM support (implies `tdx`)                                    |
+| `dstack` | Dstack TDX support via Unix socket (implies `tdx`)                        |
 | `attest` | Enable guest-side evidence generation (Linux-only, requires TEE hardware) |
 | `cli`    | Build the `attestation-cli` binary                                        |
 
@@ -182,6 +184,16 @@ echo "$EVIDENCE" | ./target/release/attestation-cli verify
 }
 ```
 
+### Dstack TDX Evidence
+
+```json
+{
+  "quote": "<base64-encoded TDX quote bytes>",
+  "event_log": "<JSON-encoded dstack event log, optional>",
+  "vm_config": "<VM configuration string, optional>"
+}
+```
+
 ### Verification Result
 
 ```json
@@ -219,6 +231,7 @@ cargo test --features snp
 cargo test --features tdx
 cargo test --features az-snp
 cargo test --features az-tdx
+cargo test --features dstack
 
 # Integration tests on Azure SNP CVM
 cargo test --test az_snp_live --features "az-snp,attest" -- --ignored
@@ -238,7 +251,7 @@ cargo bench --features az-tdx
 The library compiles to `wasm32-unknown-unknown` for verifier-only use:
 
 ```bash
-cargo check --target wasm32-unknown-unknown --no-default-features --features snp,tdx,az-snp,az-tdx
+cargo check --target wasm32-unknown-unknown --no-default-features --features snp,tdx,az-snp,az-tdx,dstack
 ```
 
 The `attest` feature is automatically excluded on WASM. All verification uses pure-Rust crypto (no OpenSSL dependency).
