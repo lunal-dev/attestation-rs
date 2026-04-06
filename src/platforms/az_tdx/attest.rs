@@ -73,6 +73,17 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
     }
 }
 
+/// Generate Azure TDX attestation evidence with explicit quote method.
+///
+/// The `method` parameter is ignored — Azure TDX always uses IMDS for
+/// quote generation, not ConfigFS TSM or vsock.
+pub async fn generate_evidence_with(
+    report_data: &[u8],
+    _method: crate::platforms::tdx::attest::TdxQuoteMethod,
+) -> Result<AzTdxEvidence> {
+    generate_evidence(report_data).await
+}
+
 /// Generate Azure TDX attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzTdxEvidence> {
     // Validate size fits in 64-byte report_data field, but do NOT pad:

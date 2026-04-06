@@ -912,10 +912,8 @@ pub fn evaluate_tcb_status(
 /// Check if an ISO 8601 timestamp (e.g. "2024-03-07T00:00:00Z") is in the past.
 /// Returns `None` if the timestamp cannot be parsed.
 fn chrono_parse_is_past(ts: &str) -> Option<bool> {
-    use chrono::Utc;
-
     let dt = chrono::DateTime::parse_from_rfc3339(ts.trim()).ok()?;
-    Some(Utc::now() > dt)
+    Some(chrono::Utc::now() > dt)
 }
 
 /// Parse a TCB status string from Intel PCS into our enum.
@@ -1179,20 +1177,9 @@ pub fn verify_qe_identity(
 /// Root CA CRL endpoint returns raw DER. This function accepts either
 /// format and always returns DER bytes.
 fn normalize_crl_to_der(data: &[u8]) -> Result<Vec<u8>> {
-    // If it looks like PEM (starts with "-----BEGIN"), decode it
-    if data.starts_with(b"-----BEGIN") {
-        let pem_str = std::str::from_utf8(data)
-            .map_err(|e| AttestationError::CertChainError(format!("CRL PEM not UTF-8: {e}")))?;
-        let mut b64 = String::new();
-        for line in pem_str.lines() {
-            if line.starts_with("-----") {
-                continue;
-            }
-            b64.push_str(line.trim());
-        }
-        BASE64
-            .decode(&b64)
-            .map_err(|e| AttestationError::CertChainError(format!("CRL PEM base64 decode: {e}")))
+    if crate::utils::is_pem(data) {
+        crate::utils::decode_pem_to_der(data)
+            .map_err(|_| AttestationError::CertChainError("CRL PEM decode failed".into()))
     } else {
         Ok(data.to_vec())
     }
@@ -1463,7 +1450,6 @@ mod tests {
 
     #[test]
     fn test_parse_tcb_status_strings() {
-        use crate::types::TdxTcbStatus;
         assert_eq!(
             parse_tcb_status("UpToDate").unwrap(),
             TdxTcbStatus::UpToDate
@@ -1541,5 +1527,21 @@ mod tests {
             result.is_err(),
             "intermediate CA should not be accepted as Intel Root CA"
         );
+    }
+
+    #[test]
+    fn test_normalize_crl_to_der_passthrough() {
+        let der = vec![0x30, 0x82, 0x01, 0x00];
+        let result = normalize_crl_to_der(&der).unwrap();
+        assert_eq!(result, der);
+    }
+
+    #[test]
+    fn test_normalize_crl_to_der_decodes_pem() {
+        let der_bytes = vec![0x30, 0x82, 0x01, 0x00, 0xAA, 0xBB];
+        let b64 = BASE64.encode(&der_bytes);
+        let pem = format!("-----BEGIN X509 CRL-----\n{b64}\n-----END X509 CRL-----\n");
+        let result = normalize_crl_to_der(pem.as_bytes()).unwrap();
+        assert_eq!(result, der_bytes);
     }
 }

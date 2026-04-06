@@ -4,6 +4,7 @@
 // (or /dev/tdx_guest) and produces standard Intel DCAP quotes.
 
 use crate::error::Result;
+use crate::platforms::tdx::attest::TdxQuoteMethod;
 use crate::platforms::tdx::evidence::TdxEvidence;
 
 const DMI_BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
@@ -36,8 +37,27 @@ pub fn is_available() -> bool {
 
 /// Generate GCP TDX attestation evidence.
 ///
-/// Delegates to the bare-metal TDX implementation — GCP uses the same
-/// ConfigFS TSM interface and standard Intel DCAP quotes.
+/// Defaults to [`TdxQuoteMethod::ConfigFs`] because GCP routes quote
+/// requests through the hypervisor (QEMU `quote-generation-socket`), not
+/// a guest-reachable QGS on vsock. Using `Auto` would waste ~10s on a
+/// vsock connection timeout before falling back to ConfigFS.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<TdxEvidence> {
-    crate::platforms::tdx::attest::generate_evidence(report_data).await
+    crate::platforms::tdx::attest::generate_evidence_with(report_data, TdxQuoteMethod::ConfigFs)
+        .await
+}
+
+/// Generate GCP TDX attestation evidence with explicit quote method.
+///
+/// `Auto` is overridden to `ConfigFs` because GCP does not expose a
+/// guest-reachable QGS on vsock. Pass `Vsock` explicitly only if you
+/// have confirmed vsock is available in your environment.
+pub async fn generate_evidence_with(
+    report_data: &[u8],
+    method: TdxQuoteMethod,
+) -> Result<TdxEvidence> {
+    let method = match method {
+        TdxQuoteMethod::Auto => TdxQuoteMethod::ConfigFs,
+        explicit => explicit,
+    };
+    crate::platforms::tdx::attest::generate_evidence_with(report_data, method).await
 }

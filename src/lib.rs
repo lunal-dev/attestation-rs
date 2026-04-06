@@ -24,7 +24,7 @@
 //! **Attester** (inside TEE, with `attest` feature):
 //! ```rust,ignore
 //! let platform = attestation::detect()?;
-//! let evidence_json = attestation::attest(platform, b"nonce").await?;
+//! let evidence_json = attestation::attest(platform, b"nonce", &attestation::AttestOptions::default()).await?;
 //! ```
 
 pub mod collateral;
@@ -36,9 +36,12 @@ pub mod utils;
 pub use collateral::{
     snp_crl_url, CertProvider, DefaultCertProvider, DefaultTdxCollateralProvider, HttpTimeouts,
     TdxCollateralProvider, AMD_KDS_VCEK_BASE, AMD_KDS_VLEK_BASE, INTEL_CERTS_BASE,
-    INTEL_PCS_V4_BASE, INTEL_QE_IDENTITY_URL, INTEL_ROOT_CA_CRL_URL, INTEL_TD_QE_IDENTITY_URL,
+    INTEL_PCS_V4_BASE, INTEL_QE_IDENTITY_URL, INTEL_ROOT_CA_CRL_URL, INTEL_TDX_PCS_V4_BASE,
+    INTEL_TD_QE_IDENTITY_URL,
 };
 pub use error::{AttestationError, Result};
+#[cfg(all(feature = "attest", feature = "tdx", target_os = "linux"))]
+pub use platforms::tdx::attest::TdxQuoteMethod;
 #[cfg(feature = "tdx")]
 pub use platforms::tdx::dcap::{
     check_cert_revocation, check_intermediate_ca_revocation, determine_ca_type,
@@ -100,12 +103,32 @@ pub fn detect() -> Result<PlatformType> {
     Err(AttestationError::NoPlatformDetected)
 }
 
+/// Platform-specific attestation options.
+///
+/// Pass to [`attest_with_options`] to control quote generation behavior.
+/// Non-TDX platforms ignore TDX-specific fields.
+#[cfg(all(feature = "attest", target_os = "linux"))]
+#[derive(Debug, Clone, Default)]
+pub struct AttestOptions {
+    /// TDX quote generation method. Only used for TDX-based platforms
+    /// (Tdx, AzTdx, GcpTdx). Ignored for SNP platforms.
+    #[cfg(feature = "tdx")]
+    pub tdx_quote_method: platforms::tdx::attest::TdxQuoteMethod,
+}
+
 /// Generate attestation evidence and wrap it in a self-describing envelope.
 ///
 /// Returns JSON bytes containing an [`AttestationEvidence`] envelope with
 /// the platform tag and platform-specific evidence payload.
+///
+/// Pass `AttestOptions::default()` for standard behavior (auto-detects the
+/// fastest available quote method for TDX platforms).
 #[cfg(all(feature = "attest", target_os = "linux"))]
-pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8>> {
+pub async fn attest(
+    platform: PlatformType,
+    report_data: &[u8],
+    options: &AttestOptions,
+) -> Result<Vec<u8>> {
     #[allow(unreachable_patterns)]
     let evidence_value = match platform {
         #[cfg(feature = "snp")]
@@ -116,7 +139,11 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         }
         #[cfg(feature = "tdx")]
         PlatformType::Tdx => {
-            let evidence = platforms::tdx::attest::generate_evidence(report_data).await?;
+            let evidence = platforms::tdx::attest::generate_evidence_with(
+                report_data,
+                options.tdx_quote_method,
+            )
+            .await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -128,7 +155,11 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         }
         #[cfg(feature = "az-tdx")]
         PlatformType::AzTdx => {
-            let evidence = platforms::az_tdx::attest::generate_evidence(report_data).await?;
+            let evidence = platforms::az_tdx::attest::generate_evidence_with(
+                report_data,
+                options.tdx_quote_method,
+            )
+            .await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -140,7 +171,11 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
         }
         #[cfg(feature = "gcp-tdx")]
         PlatformType::GcpTdx => {
-            let evidence = platforms::gcp_tdx::attest::generate_evidence(report_data).await?;
+            let evidence = platforms::gcp_tdx::attest::generate_evidence_with(
+                report_data,
+                options.tdx_quote_method,
+            )
+            .await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
@@ -151,7 +186,7 @@ pub async fn attest(platform: PlatformType, report_data: &[u8]) -> Result<Vec<u8
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
         _other => {
-            let _ = report_data;
+            let _ = (report_data, options);
             return Err(AttestationError::PlatformNotEnabled(_other.to_string()));
         }
     };
@@ -184,6 +219,7 @@ pub struct Verifier {
 }
 
 impl Verifier {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cert_provider: Box::new(DefaultCertProvider::new()),
@@ -191,11 +227,13 @@ impl Verifier {
         }
     }
 
+    #[must_use]
     pub fn with_cert_provider(mut self, provider: impl CertProvider + 'static) -> Self {
         self.cert_provider = Box::new(provider);
         self
     }
 
+    #[must_use]
     pub fn with_tdx_provider(mut self, provider: impl TdxCollateralProvider + 'static) -> Self {
         self.tdx_provider = Box::new(provider);
         self
@@ -206,6 +244,11 @@ impl Verifier {
     /// The evidence JSON must be an [`AttestationEvidence`] envelope containing
     /// a `platform` field and an `evidence` payload. The platform is auto-detected
     /// from the envelope and the correct verifier is dispatched automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the evidence is too large, malformed, targets a
+    /// platform not compiled in, or fails signature/collateral verification.
     pub async fn verify(
         &self,
         evidence_json: &[u8],
@@ -315,9 +358,9 @@ impl Verifier {
                 )
                 .await
             }
-            _other => {
+            other => {
                 let _ = params;
-                Err(AttestationError::PlatformNotEnabled(_other.to_string()))
+                Err(AttestationError::PlatformNotEnabled(other.to_string()))
             }
         }
     }
@@ -333,6 +376,11 @@ impl Default for Verifier {
 ///
 /// Convenience wrapper around [`Verifier`] with default providers.
 /// For custom providers (e.g. cached certs), construct a [`Verifier`] instead.
+///
+/// # Errors
+///
+/// Returns an error if the evidence is too large, malformed, targets a
+/// platform not compiled in, or fails signature/collateral verification.
 pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<VerificationResult> {
     Verifier::new().verify(evidence_json, params).await
 }
