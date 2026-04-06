@@ -358,7 +358,7 @@ impl Verifier {
                 )
                 .await
             }
-            _other => {
+            other => {
                 let _ = params;
                 Err(AttestationError::PlatformNotEnabled(other.to_string()))
             }
