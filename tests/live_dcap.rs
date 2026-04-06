@@ -2,7 +2,9 @@
 //! Run: cargo test --test live_dcap --features tdx -- --nocapture
 
 use attestation::collateral::{DefaultTdxCollateralProvider, TdxCollateralProvider};
-use attestation::platforms::tdx::dcap::{extract_fmspc_from_pck, parse_auth_data, compute_body_end};
+use attestation::platforms::tdx::dcap::{
+    compute_body_end, extract_fmspc_from_pck, parse_auth_data,
+};
 use attestation::platforms::tdx::evidence::TdxEvidence;
 use attestation::platforms::tdx::verify::{parse_tdx_quote, verify_evidence};
 use attestation::types::VerifyParams;
@@ -120,8 +122,7 @@ async fn test_tcb_info_has_tdx_components() {
     let fmspc = extract_fmspc_from_pck(auth.pck_cert_chain_pem).expect("fmspc");
 
     let tcb_json = provider.get_tcb_info(&fmspc).await.expect("fetch TCB Info");
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&tcb_json).expect("parse TCB Info JSON");
+    let parsed: serde_json::Value = serde_json::from_slice(&tcb_json).expect("parse TCB Info JSON");
 
     let levels = parsed["tcbInfo"]["tcbLevels"]
         .as_array()
