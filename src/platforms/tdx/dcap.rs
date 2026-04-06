@@ -1006,8 +1006,8 @@ struct QeIdentityTcb {
     isvsvn: u16,
 }
 
-/// QE report field offsets within the 384-byte QE report body.
-// SGX Enclave Report body offsets (384-byte structure)
+/// QE report field offsets within the 384-byte SGX report body.
+/// See Intel SDM Vol. 3D, Table 38-21 (REPORTBODY structure).
 const QE_MISCSELECT_OFFSET: usize = 16;
 const QE_ATTRIBUTES_OFFSET: usize = 48;
 const QE_MRSIGNER_OFFSET: usize = 128;
