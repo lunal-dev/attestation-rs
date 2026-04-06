@@ -912,10 +912,8 @@ pub fn evaluate_tcb_status(
 /// Check if an ISO 8601 timestamp (e.g. "2024-03-07T00:00:00Z") is in the past.
 /// Returns `None` if the timestamp cannot be parsed.
 fn chrono_parse_is_past(ts: &str) -> Option<bool> {
-    use chrono::Utc;
-
     let dt = chrono::DateTime::parse_from_rfc3339(ts.trim()).ok()?;
-    Some(Utc::now() > dt)
+    Some(chrono::Utc::now() > dt)
 }
 
 /// Parse a TCB status string from Intel PCS into our enum.
@@ -1173,6 +1171,20 @@ pub fn verify_qe_identity(
     Ok(())
 }
 
+/// Normalize CRL data to DER format.
+///
+/// Intel PCS v4 `pckcrl` endpoint returns PEM-encoded CRLs, while the
+/// Root CA CRL endpoint returns raw DER. This function accepts either
+/// format and always returns DER bytes.
+fn normalize_crl_to_der(data: &[u8]) -> Result<Vec<u8>> {
+    if crate::utils::is_pem(data) {
+        crate::utils::decode_pem_to_der(data)
+            .map_err(|_| AttestationError::CertChainError("CRL PEM decode failed".into()))
+    } else {
+        Ok(data.to_vec())
+    }
+}
+
 /// Check whether the Intermediate CA (Platform or Processor CA) has been
 /// revoked by the Root CA CRL.
 ///
@@ -1200,8 +1212,9 @@ pub fn check_intermediate_ca_revocation_from_der(
         .map_err(|e| AttestationError::CertChainError(format!("Intermediate CA parse: {e}")))?;
     let intermediate_serial = intermediate_cert.raw_serial();
 
-    // Parse the Root CA CRL
-    let (_, crl) = CertificateRevocationList::from_der(root_ca_crl_der)
+    // Parse the Root CA CRL (handle both PEM and DER formats)
+    let root_crl_der_bytes = normalize_crl_to_der(root_ca_crl_der)?;
+    let (_, crl) = CertificateRevocationList::from_der(&root_crl_der_bytes)
         .map_err(|e| AttestationError::CertChainError(format!("Root CA CRL parse: {e}")))?;
 
     // Check if intermediate serial is in the revoked list
@@ -1239,8 +1252,9 @@ pub fn check_cert_revocation_from_der(der_certs: &[Vec<u8>], crl_der: &[u8]) -> 
         .map_err(|e| AttestationError::CertChainError(format!("PCK leaf parse: {e}")))?;
     let leaf_serial = leaf_cert.raw_serial();
 
-    // Parse the CRL
-    let (_, crl) = CertificateRevocationList::from_der(crl_der)
+    // Parse the CRL (handle both PEM and DER formats)
+    let crl_der_bytes = normalize_crl_to_der(crl_der)?;
+    let (_, crl) = CertificateRevocationList::from_der(&crl_der_bytes)
         .map_err(|e| AttestationError::CertChainError(format!("CRL DER parse: {e}")))?;
 
     // Check if leaf serial is in the revoked list
@@ -1436,7 +1450,6 @@ mod tests {
 
     #[test]
     fn test_parse_tcb_status_strings() {
-        use crate::types::TdxTcbStatus;
         assert_eq!(
             parse_tcb_status("UpToDate").unwrap(),
             TdxTcbStatus::UpToDate
@@ -1514,5 +1527,21 @@ mod tests {
             result.is_err(),
             "intermediate CA should not be accepted as Intel Root CA"
         );
+    }
+
+    #[test]
+    fn test_normalize_crl_to_der_passthrough() {
+        let der = vec![0x30, 0x82, 0x01, 0x00];
+        let result = normalize_crl_to_der(&der).unwrap();
+        assert_eq!(result, der);
+    }
+
+    #[test]
+    fn test_normalize_crl_to_der_decodes_pem() {
+        let der_bytes = vec![0x30, 0x82, 0x01, 0x00, 0xAA, 0xBB];
+        let b64 = BASE64.encode(&der_bytes);
+        let pem = format!("-----BEGIN X509 CRL-----\n{b64}\n-----END X509 CRL-----\n");
+        let result = normalize_crl_to_der(pem.as_bytes()).unwrap();
+        assert_eq!(result, der_bytes);
     }
 }

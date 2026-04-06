@@ -1,7 +1,8 @@
 //! Live DCAP verification test - fetches collateral from Intel PCS v4
 //! Run: cargo test --test live_dcap --features tdx -- --nocapture
 
-use attestation::collateral::DefaultTdxCollateralProvider;
+use attestation::collateral::{DefaultTdxCollateralProvider, TdxCollateralProvider};
+use attestation::platforms::tdx::dcap::{extract_fmspc_from_pck, parse_auth_data, compute_body_end};
 use attestation::platforms::tdx::evidence::TdxEvidence;
 use attestation::platforms::tdx::verify::{parse_tdx_quote, verify_evidence};
 use attestation::types::VerifyParams;
@@ -100,6 +101,71 @@ async fn test_live_quote_full_dcap() {
             panic!("Live quote from this host should verify: {e:?}");
         }
     }
+}
+
+/// Validate that the TCB Info endpoint returns TDX-specific fields.
+///
+/// This is the regression test for the SGX vs TDX endpoint bug:
+/// the SGX endpoint (`/sgx/certification/v4/tcb`) omits `tdxtcbcomponents`,
+/// which causes TDX TCB evaluation to silently skip TDX module checks.
+/// The TDX endpoint (`/tdx/certification/v4/tcb`) includes them.
+#[tokio::test]
+async fn test_tcb_info_has_tdx_components() {
+    let provider = DefaultTdxCollateralProvider::new();
+
+    // Extract FMSPC from V5 quote's PCK cert
+    let quote = parse_tdx_quote(V5_QUOTE).expect("parse v5");
+    let body_end = compute_body_end(V5_QUOTE, quote.quote_version).expect("body_end");
+    let auth = parse_auth_data(V5_QUOTE, body_end).expect("auth data");
+    let fmspc = extract_fmspc_from_pck(auth.pck_cert_chain_pem).expect("fmspc");
+
+    let tcb_json = provider.get_tcb_info(&fmspc).await.expect("fetch TCB Info");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&tcb_json).expect("parse TCB Info JSON");
+
+    let levels = parsed["tcbInfo"]["tcbLevels"]
+        .as_array()
+        .expect("tcbLevels should be an array");
+    assert!(!levels.is_empty(), "should have at least one TCB level");
+
+    // The TDX endpoint MUST include tdxtcbcomponents in at least the first level
+    let first_level = &levels[0];
+    assert!(
+        first_level["tcb"]["tdxtcbcomponents"].is_array(),
+        "TCB Info from TDX endpoint must contain tdxtcbcomponents. \
+         If this field is missing, the provider is likely hitting the SGX \
+         endpoint instead of the TDX one. Got: {}",
+        serde_json::to_string_pretty(&first_level["tcb"]).unwrap_or_default()
+    );
+}
+
+/// Validate that the QE Identity endpoint returns TDX QE (TD_QE) identity.
+///
+/// The TDX QE has a different MRSIGNER than the SGX QE. Using the wrong
+/// endpoint would cause QE Identity verification to fail on real TDX quotes.
+#[tokio::test]
+async fn test_qe_identity_is_tdx() {
+    let provider = DefaultTdxCollateralProvider::new();
+    let qe_json = provider
+        .get_td_qe_identity()
+        .await
+        .expect("fetch QE Identity");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&qe_json).expect("parse QE Identity JSON");
+
+    let id = parsed
+        .get("enclaveIdentity")
+        .expect("should have enclaveIdentity");
+    let mrsigner = id["mrsigner"]
+        .as_str()
+        .expect("should have mrsigner string");
+
+    // TD_QE MRSIGNER (from Intel TDX QE Identity endpoint)
+    assert_eq!(
+        mrsigner.to_uppercase(),
+        "DC9E2A7C6F948F17474E34A7FC43ED030F7C1563F1BABDDF6340C82E0E54A8C5",
+        "QE Identity MRSIGNER should match TDX TD_QE, not SGX QE"
+    );
 }
 
 /// Full DCAP verification of V5 quote with live Intel PCS collateral.
