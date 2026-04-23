@@ -10,7 +10,7 @@
 //!
 //! Tests are #[ignore] by default — run with --ignored to execute on real hardware.
 
-#![cfg(feature = "attest")]
+#![cfg(feature = "az-tdx-attest")]
 
 use base64::Engine;
 

@@ -23,10 +23,27 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware).
 # Combine with platform features for per-platform builds:
-#   attest + snp         → bare-metal SNP attestation only
-#   attest + az-tdx      → Azure TDX attestation only
-#   attest (+ defaults)  → all platforms
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-snp-vtpm", "dep:az-tdx-vtpm", "dep:zerocopy"]
+#   attest + snp           → bare-metal SNP attestation only
+#   attest + az-snp-attest → Azure SNP attestation (pulls az-snp-vtpm)
+#   attest (+ defaults)    → bare-metal + GCP attesters only.
+#
+# Azure vTPM attesters are opt-in (not folded into `attest`) because
+# az-snp-vtpm / az-tdx-vtpm 0.8.x pull az-cvm-vtpm *with default features*
+# (their own Cargo.toml omits `default-features = false`), and
+# az-cvm-vtpm's default feature set includes `verifier`, which enables
+# sev/openssl. sev 7 refuses to compile with both openssl and
+# crypto_nossl, and crypto_nossl is required for the WASM verifier build.
+# Setting `default-features = false` on our side of the az-*-vtpm deps
+# does not help — Cargo cannot disable a default feature enabled by a
+# transitive dependent.
+#
+# Long-term fix is upstream: kinvolk/azure-cvm-tooling should propagate
+# `default-features = false` on its az-cvm-vtpm dep in az-snp-vtpm and
+# az-tdx-vtpm. Until then, the opt-in split keeps the generic `attest`
+# build free of the sev/openssl pull.
+attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy"]
+az-snp-attest = ["attest", "az-snp", "dep:az-snp-vtpm"]
+az-tdx-attest = ["attest", "az-tdx", "dep:az-tdx-vtpm"]
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
 cli = ["dep:clap"]
@@ -68,7 +85,7 @@ scroll = "0.12"
 # Attest-side dependencies (cross-platform parts)
 libc = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
-sev = { version = "6", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
+sev = { version = "7", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
 zerocopy = { version = "0.8", optional = true, features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
@@ -117,7 +134,7 @@ required-features = ["az-tdx"]
 [[bench]]
 name = "az_snp_attest"
 harness = false
-required-features = ["az-snp", "attest"]
+required-features = ["az-snp-attest"]
 
 [[example]]
 name = "snp"
@@ -129,11 +146,11 @@ required-features = ["attest", "tdx"]
 
 [[example]]
 name = "az_snp"
-required-features = ["attest", "az-snp"]
+required-features = ["az-snp-attest"]
 
 [[example]]
 name = "az_tdx"
-required-features = ["attest", "az-tdx"]
+required-features = ["az-tdx-attest"]
 
 [[example]]
 name = "gcp_snp"
