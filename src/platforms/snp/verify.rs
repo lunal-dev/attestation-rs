@@ -6,6 +6,7 @@ use x509_parser::prelude::{CertificateRevocationList, FromDer as X509FromDer, X5
 
 use sev::certs::snp::{Certificate, Chain, Verifiable};
 use sev::firmware::guest::AttestationReport;
+use sev::parser::ByteParser;
 
 use crate::collateral::CertProvider;
 use crate::error::{AttestationError, Result};
