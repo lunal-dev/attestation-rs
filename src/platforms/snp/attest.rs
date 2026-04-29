@@ -46,15 +46,26 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<SnpEvidence> {
         AttestationError::HardwareAccessFailed(format!("Firmware::open failed: {}", e))
     })?;
 
-    // Get the extended report (attestation report + certificate table)
-    let (report_bytes, certs) =
-        firmware
-            .get_ext_report(None, Some(data), Some(0))
-            .map_err(|e| {
-                AttestationError::HardwareAccessFailed(format!("get_ext_report failed: {}", e))
-            })?;
-
-    let cert_chain = certs.and_then(certs_to_chain);
+    // Prefer the extended report so evidence can carry the VCEK/VLEK table.
+    // Some cloud kernels expose /dev/sev-guest but fail SNP_GET_EXT_REPORT;
+    // in that case the verifier can still fetch VCEK collateral from KDS
+    // using chip_id and TCB fields in the plain report.
+    let (report_bytes, cert_chain) = match firmware.get_ext_report(None, Some(data), Some(0)) {
+        Ok((report_bytes, certs)) => (report_bytes, certs.and_then(certs_to_chain)),
+        Err(ext_err) => {
+            log::warn!(
+                "get_ext_report failed; falling back to report-only SNP evidence: {ext_err}"
+            );
+            let report_bytes = firmware
+                .get_report(None, Some(data), Some(0))
+                .map_err(|e| {
+                    AttestationError::HardwareAccessFailed(format!(
+                        "get_ext_report failed: {ext_err}; get_report fallback failed: {e}"
+                    ))
+                })?;
+            (report_bytes, None)
+        }
+    };
 
     Ok(SnpEvidence {
         attestation_report: BASE64.encode(&report_bytes),
