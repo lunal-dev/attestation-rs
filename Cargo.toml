@@ -10,7 +10,7 @@ license = "Apache-2.0"
 # library can verify evidence from any supported TEE without extra feature flags.
 # Embedders building minimal binaries should use `default-features = false` and
 # enable only the platforms they need.
-default = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp", "gcp-tdx"]
+default = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp", "gcp-tdx", "tpm"]
 
 # Platform features — gate which TEE platforms are compiled in
 snp = ["dep:sev", "dep:x509-parser"]
@@ -20,12 +20,13 @@ az-tdx = ["tdx"]       # Azure TDX depends on bare-metal TDX for quote parsing
 gcp-snp = ["snp"]      # GCP SNP depends on bare-metal SNP for report parsing
 gcp-tdx = ["tdx"]      # GCP TDX depends on bare-metal TDX for quote parsing
 dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
+tpm = []               # Bare-metal TPM 2.0 attestation (no TEE required)
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware).
 # Combine with platform features for per-platform builds:
 #   attest + snp           → bare-metal SNP attestation only
 #   attest + az-snp-attest → Azure SNP attestation (pulls az-snp-vtpm)
-#   attest (+ defaults)    → bare-metal + GCP attesters only.
+#   attest (+ defaults)    → bare-metal + GCP + TPM attesters only.
 #
 # Azure vTPM attesters are opt-in (not folded into `attest`) because
 # az-snp-vtpm / az-tdx-vtpm 0.8.x pull az-cvm-vtpm *with default features*
@@ -41,7 +42,7 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 # `default-features = false` on its az-cvm-vtpm dep in az-snp-vtpm and
 # az-tdx-vtpm. Until then, the opt-in split keeps the generic `attest`
 # build free of the sev/openssl pull.
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy"]
+attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy", "dep:tss-esapi"]
 az-snp-attest = ["attest", "az-snp", "dep:az-snp-vtpm"]
 az-tdx-attest = ["attest", "az-tdx", "dep:az-tdx-vtpm"]
 
@@ -100,6 +101,7 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-
 [target.'cfg(target_os = "linux")'.dependencies]
 az-snp-vtpm = { version = "0.8.1", default-features = false, features = ["attester"], optional = true }
 az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
+tss-esapi = { version = "7", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
