@@ -135,7 +135,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "az-snp-vtpm",
+ "az-cvm-vtpm",
  "az-tdx-vtpm",
  "base64 0.22.1",
  "cfg-if",
@@ -193,20 +193,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tss-esapi",
  "zerocopy",
-]
-
-[[package]]
-name = "az-snp-vtpm"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d3d6071c96b6306e616d98ff18b8f13de2b55f16f494094f16e22f26d985311"
-dependencies = [
- "az-cvm-vtpm",
- "clap",
- "serde",
- "sev",
- "thiserror 2.0.18",
- "ureq",
 ]
 
 [[package]]

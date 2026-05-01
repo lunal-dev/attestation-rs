@@ -10,7 +10,7 @@
 //!
 //! Tests are #[ignore] by default — run with --ignored to execute on real hardware.
 
-#![cfg(feature = "az-snp-attest")]
+#![cfg(all(feature = "attest", feature = "az-snp"))]
 
 use base64::Engine;
 
