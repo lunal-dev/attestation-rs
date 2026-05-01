@@ -68,7 +68,7 @@ pub fn detect() -> Result<PlatformType> {
         return Ok(PlatformType::AzTdx);
     }
 
-    #[cfg(feature = "az-snp")]
+    #[cfg(feature = "az-snp-attest")]
     if platforms::az_snp::attest::is_available() {
         return Ok(PlatformType::AzSnp);
     }
@@ -147,7 +147,7 @@ pub async fn attest(
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "az-snp")]
+        #[cfg(feature = "az-snp-attest")]
         PlatformType::AzSnp => {
             let evidence = platforms::az_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)

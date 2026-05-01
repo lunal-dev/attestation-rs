@@ -1,7 +1,7 @@
 //! Azure SNP (vTPM) attestation example.
 //!
 //! Run on an Azure SNP Confidential VM:
-//!   cargo run --example az_snp --features "az-snp,attest"
+//!   cargo run --example az_snp --features "az-snp-attest"
 
 use std::env;
 use std::time::Instant;

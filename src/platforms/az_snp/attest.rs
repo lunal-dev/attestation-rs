@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use serde::Deserialize;
 
-use az_cvm_vtpm::{hcl, vtpm};
+use az_cvm_vtpm::vtpm;
 
 use crate::error::{AttestationError, Result};
 use crate::platforms::tpm_common::TpmQuote;
@@ -10,6 +10,10 @@ use crate::utils::pad_report_data;
 use super::evidence::AzSnpEvidence;
 
 const IMDS_CERT_URL: &str = "http://169.254.169.254/metadata/THIM/amd/certification";
+const TPMRM_PATH: &str = "/dev/tpmrm0";
+const TPM_PATH: &str = "/dev/tpm0";
+const DMI_SYS_VENDOR_PATH: &str = "/sys/class/dmi/id/sys_vendor";
+const DMI_BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
 
 #[derive(Deserialize)]
 struct ImdsCertificates {
@@ -19,21 +23,23 @@ struct ImdsCertificates {
 
 /// Check if Azure SNP platform is available.
 pub fn is_available() -> bool {
-    let report = match vtpm::get_report() {
-        Ok(report) => report,
-        Err(e) => {
-            log::warn!("Azure SNP detection failed: {}", e);
-            return false;
-        }
-    };
+    crate::platforms::snp::attest::is_available() && has_tpm_device() && is_azure_vm()
+}
 
-    match hcl::HclReport::new(report) {
-        Ok(hcl_report) => hcl_report.report_type() == hcl::ReportType::Snp,
-        Err(e) => {
-            log::warn!("Azure SNP HCL report parsing failed: {}", e);
-            false
-        }
-    }
+fn has_tpm_device() -> bool {
+    std::path::Path::new(TPMRM_PATH).exists() || std::path::Path::new(TPM_PATH).exists()
+}
+
+fn is_azure_vm() -> bool {
+    [DMI_SYS_VENDOR_PATH, DMI_BOARD_VENDOR_PATH]
+        .into_iter()
+        .any(|path| match std::fs::read_to_string(path) {
+            Ok(value) => value.trim() == "Microsoft Corporation",
+            Err(e) => {
+                log::debug!("Azure SNP detection: failed to read {path}: {e}");
+                false
+            }
+        })
 }
 
 /// Convert a PEM-encoded certificate to DER bytes.
@@ -51,24 +57,6 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
         message: hex::encode(q.message()),
         pcrs: q.pcrs_sha256().map(hex::encode).collect(),
     }
-}
-
-async fn fetch_vcek_der() -> Result<Vec<u8>> {
-    let certs: ImdsCertificates = reqwest::Client::new()
-        .get(IMDS_CERT_URL)
-        .header("Metadata", "true")
-        .send()
-        .await
-        .map_err(|e| AttestationError::CertFetchError(format!("IMDS request failed: {}", e)))?
-        .error_for_status()
-        .map_err(|e| AttestationError::CertFetchError(format!("IMDS returned error: {}", e)))?
-        .json()
-        .await
-        .map_err(|e| {
-            AttestationError::CertFetchError(format!("failed to parse IMDS cert response: {}", e))
-        })?;
-
-    pem_to_der(&certs.vcek)
 }
 
 /// Generate Azure SNP attestation evidence.
@@ -90,7 +78,20 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
     let tpm_quote = quote_to_tpm_quote(quote);
 
     // 3. Fetch VCEK certificate from Azure IMDS
-    let vcek_der = fetch_vcek_der().await?;
+    let certs: ImdsCertificates = reqwest::Client::new()
+        .get(IMDS_CERT_URL)
+        .header("Metadata", "true")
+        .send()
+        .await
+        .map_err(|e| AttestationError::CertFetchError(format!("IMDS request failed: {}", e)))?
+        .error_for_status()
+        .map_err(|e| AttestationError::CertFetchError(format!("IMDS returned error: {}", e)))?
+        .json()
+        .await
+        .map_err(|e| {
+            AttestationError::CertFetchError(format!("failed to parse IMDS cert response: {}", e))
+        })?;
+    let vcek_der = pem_to_der(&certs.vcek)?;
 
     // 4. Assemble evidence
     Ok(AzSnpEvidence {

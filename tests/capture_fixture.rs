@@ -50,7 +50,7 @@ async fn capture_tdx_evidence_fixture() {
     }
 }
 
-#[cfg(feature = "az-snp")]
+#[cfg(feature = "az-snp-attest")]
 #[tokio::test]
 #[ignore]
 async fn capture_az_snp_evidence_fixture() {

@@ -24,16 +24,17 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 # Guest-side evidence generation (Linux-only, requires TEE hardware).
 # Combine with platform features for per-platform builds:
 #   attest + snp           → bare-metal SNP attestation only
-#   attest + az-snp        → Azure SNP attestation over Azure vTPM
+#   az-snp-attest          → Azure SNP attestation over Azure vTPM
 #   az-tdx-attest          → Azure TDX attestation over Azure vTPM
-#   attest (+ defaults)    → bare-metal + Azure SNP + GCP attesters.
+#   attest (+ defaults)    → bare-metal + GCP attesters.
 #
-# Azure SNP uses az-cvm-vtpm directly with default features disabled, so it can
-# live in the generic `attest` build without pulling the verifier/OpenSSL path.
-# Azure TDX remains opt-in because az-tdx-vtpm still enables az-cvm-vtpm's
+# Azure vTPM attesters are separate from generic `attest` so bare-metal and GCP
+# attester builds do not pull TPM/TSS dependencies. Azure SNP uses az-cvm-vtpm
+# directly with default features disabled to avoid the verifier/OpenSSL path.
+# Azure TDX remains separate because az-tdx-vtpm still enables az-cvm-vtpm's
 # default verifier feature transitively.
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-cvm-vtpm", "dep:zerocopy"]
-az-snp-attest = ["attest", "az-snp"] # Compatibility alias; use `attest` + `az-snp`.
+attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy"]
+az-snp-attest = ["attest", "az-snp", "dep:az-cvm-vtpm"]
 az-tdx-attest = ["attest", "az-tdx", "dep:az-tdx-vtpm"]
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
@@ -125,7 +126,7 @@ required-features = ["az-tdx"]
 [[bench]]
 name = "az_snp_attest"
 harness = false
-required-features = ["attest", "az-snp"]
+required-features = ["az-snp-attest"]
 
 [[example]]
 name = "snp"
@@ -137,7 +138,7 @@ required-features = ["attest", "tdx"]
 
 [[example]]
 name = "az_snp"
-required-features = ["attest", "az-snp"]
+required-features = ["az-snp-attest"]
 
 [[example]]
 name = "az_tdx"
