@@ -411,18 +411,32 @@ pub trait TdxCollateralProvider: Send + Sync {
     /// Default implementation fetches CRL data via `get_pck_crl` + `get_root_ca_crl`
     /// and checks both the PCK leaf and Intermediate CA certificates.
     /// Override to use pre-cached CRL data in a service context.
+    ///
+    /// The default body requires the `tdx` cargo feature (for the DCAP parsers).
+    /// Without `tdx`, the trait can still be implemented by users, but the
+    /// default implementation returns an error.
     async fn check_pck_revocation(&self, pck_cert_chain_pem: &[u8]) -> Result<()> {
-        // Preparse PEM once to avoid redundant parsing across multiple checks
-        let der_certs = crate::platforms::tdx::dcap::parse_pem_to_der(pck_cert_chain_pem)?;
-        let ca_type = crate::platforms::tdx::dcap::determine_ca_type_from_der(&der_certs)?;
-        let pck_crl_der = self.get_pck_crl(&ca_type).await?;
-        crate::platforms::tdx::dcap::check_cert_revocation_from_der(&der_certs, &pck_crl_der)?;
-        let root_crl_der = self.get_root_ca_crl().await?;
-        crate::platforms::tdx::dcap::check_intermediate_ca_revocation_from_der(
-            &der_certs,
-            &root_crl_der,
-        )?;
-        Ok(())
+        #[cfg(feature = "tdx")]
+        {
+            // Preparse PEM once to avoid redundant parsing across multiple checks
+            let der_certs = crate::platforms::tdx::dcap::parse_pem_to_der(pck_cert_chain_pem)?;
+            let ca_type = crate::platforms::tdx::dcap::determine_ca_type_from_der(&der_certs)?;
+            let pck_crl_der = self.get_pck_crl(&ca_type).await?;
+            crate::platforms::tdx::dcap::check_cert_revocation_from_der(&der_certs, &pck_crl_der)?;
+            let root_crl_der = self.get_root_ca_crl().await?;
+            crate::platforms::tdx::dcap::check_intermediate_ca_revocation_from_der(
+                &der_certs,
+                &root_crl_der,
+            )?;
+            Ok(())
+        }
+        #[cfg(not(feature = "tdx"))]
+        {
+            let _ = pck_cert_chain_pem;
+            Err(crate::error::AttestationError::PlatformNotEnabled(
+                "default PCK revocation check requires the `tdx` cargo feature".to_string(),
+            ))
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 
 #![cfg(feature = "attest")]
 
+#[cfg(feature = "tdx")]
 #[tokio::test]
 #[ignore]
 async fn capture_tdx_evidence_fixture() {
