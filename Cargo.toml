@@ -29,8 +29,8 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 #   attest (+ defaults)    → bare-metal + Azure + GCP attesters.
 #
 # Azure vTPM attesters use az-cvm-vtpm directly with default features disabled
-# to avoid the verifier/OpenSSL path while composing with the combined SNP/TDX
-# attestation-service feature set.
+# to avoid the az-cvm-vtpm verifier/OpenSSL path while composing with the
+# combined SNP/TDX attestation-service feature set.
 attest = ["snp", "tdx", "dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-cvm-vtpm", "dep:zerocopy"]
 az-snp-attest = ["attest", "az-snp"] # Compatibility alias; use `attest` + `az-snp`.
 az-tdx-attest = ["attest", "az-tdx"] # Compatibility alias; use `attest` + `az-tdx`.
@@ -81,7 +81,7 @@ zerocopy = { version = "0.8", optional = true, features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
 pem = "3.0.6"
 
-# Native (non-WASM) dependencies — needed for cert fetching on any OS
+# Native (non-WASM) dependencies — needed for cert fetching on any OS.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util"] }

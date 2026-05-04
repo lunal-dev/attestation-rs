@@ -1,6 +1,8 @@
 //! Live DCAP verification test - fetches collateral from Intel PCS v4
 //! Run: cargo test --test live_dcap --features tdx -- --nocapture
 
+#![cfg(feature = "tdx")]
+
 use attestation::collateral::{DefaultTdxCollateralProvider, TdxCollateralProvider};
 use attestation::platforms::tdx::dcap::{
     compute_body_end, extract_fmspc_from_pck, parse_auth_data,

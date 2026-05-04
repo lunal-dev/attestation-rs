@@ -124,6 +124,12 @@ pub struct AttestOptions {
 /// Pass `AttestOptions::default()` for standard behavior (auto-detects the
 /// fastest available quote method for TDX platforms).
 #[cfg(all(feature = "attest", target_os = "linux"))]
+// When `attest` is enabled without any platform feature, every match arm
+// below is cfg'd out and the catch-all `_other` arm is the only one left,
+// making the let-binding and trailing code formally unreachable. That is
+// the intended runtime behavior (return PlatformNotEnabled), so silence
+// the warnings instead of complicating the structure.
+#[allow(unreachable_code, unused_variables)]
 pub async fn attest(
     platform: PlatformType,
     report_data: &[u8],
