@@ -6,7 +6,7 @@
 //! - Access to Azure IMDS
 //! - Sufficient permissions for TPM access (root or tss group)
 //!
-//! Run with: cargo test --test az_tdx_live --features "attest" -- --ignored
+//! Run with: cargo test --test az_tdx_live --features "az-tdx,attest" -- --ignored
 //!
 //! Tests are #[ignore] by default — run with --ignored to execute on real hardware.
 
