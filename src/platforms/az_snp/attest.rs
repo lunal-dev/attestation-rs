@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 use serde::Deserialize;
 
-use az_cvm_vtpm::vtpm;
+use az_cvm_vtpm::{hcl, vtpm};
 
 use crate::error::{AttestationError, Result};
 use crate::platforms::tpm_common::TpmQuote;
@@ -10,10 +10,6 @@ use crate::utils::pad_report_data;
 use super::evidence::AzSnpEvidence;
 
 const IMDS_CERT_URL: &str = "http://169.254.169.254/metadata/THIM/amd/certification";
-const TPMRM_PATH: &str = "/dev/tpmrm0";
-const TPM_PATH: &str = "/dev/tpm0";
-const DMI_SYS_VENDOR_PATH: &str = "/sys/class/dmi/id/sys_vendor";
-const DMI_BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
 
 #[derive(Deserialize)]
 struct ImdsCertificates {
@@ -23,23 +19,21 @@ struct ImdsCertificates {
 
 /// Check if Azure SNP platform is available.
 pub fn is_available() -> bool {
-    crate::platforms::snp::attest::is_available() && has_tpm_device() && is_azure_vm()
-}
+    let report = match vtpm::get_report() {
+        Ok(report) => report,
+        Err(e) => {
+            log::warn!("Azure SNP detection failed: {}", e);
+            return false;
+        }
+    };
 
-fn has_tpm_device() -> bool {
-    std::path::Path::new(TPMRM_PATH).exists() || std::path::Path::new(TPM_PATH).exists()
-}
-
-fn is_azure_vm() -> bool {
-    [DMI_SYS_VENDOR_PATH, DMI_BOARD_VENDOR_PATH]
-        .into_iter()
-        .any(|path| match std::fs::read_to_string(path) {
-            Ok(value) => value.trim() == "Microsoft Corporation",
-            Err(e) => {
-                log::debug!("Azure SNP detection: failed to read {path}: {e}");
-                false
-            }
-        })
+    match hcl::HclReport::new(report) {
+        Ok(hcl_report) => hcl_report.report_type() == hcl::ReportType::Snp,
+        Err(e) => {
+            log::warn!("Azure SNP HCL report parsing failed: {}", e);
+            false
+        }
+    }
 }
 
 /// Convert a PEM-encoded certificate to DER bytes.
