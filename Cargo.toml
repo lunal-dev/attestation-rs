@@ -23,17 +23,17 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware).
 # Combine with platform features for per-platform builds:
-#   attest + snp           → bare-metal SNP attestation only
-#   az-snp-attest          → Azure SNP attestation over Azure vTPM
-#   az-tdx-attest          → Azure TDX attestation over Azure vTPM
-#   attest (+ defaults)    → bare-metal + GCP attesters.
+#   attest                 → default SEV-SNP + TDX attestation set
+#   attest + az-snp        → Azure SNP attestation over Azure vTPM
+#   attest + az-tdx        → Azure TDX attestation over Azure vTPM
+#   attest (+ defaults)    → bare-metal + Azure + GCP attesters.
 #
-# Azure vTPM attesters are separate from generic `attest` so bare-metal and GCP
-# attester builds do not pull TPM/TSS dependencies. They use az-cvm-vtpm
-# directly with default features disabled to avoid the verifier/OpenSSL path.
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy"]
-az-snp-attest = ["attest", "az-snp", "dep:az-cvm-vtpm"]
-az-tdx-attest = ["attest", "az-tdx", "dep:az-cvm-vtpm"]
+# Azure vTPM attesters use az-cvm-vtpm directly with default features disabled
+# to avoid the verifier/OpenSSL path while composing with the combined SNP/TDX
+# attestation-service feature set.
+attest = ["snp", "tdx", "dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-cvm-vtpm", "dep:zerocopy"]
+az-snp-attest = ["attest", "az-snp"] # Compatibility alias; use `attest` + `az-snp`.
+az-tdx-attest = ["attest", "az-tdx"] # Compatibility alias; use `attest` + `az-tdx`.
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
 cli = ["dep:clap"]
@@ -123,7 +123,7 @@ required-features = ["az-tdx"]
 [[bench]]
 name = "az_snp_attest"
 harness = false
-required-features = ["az-snp-attest"]
+required-features = ["attest", "az-snp"]
 
 [[example]]
 name = "snp"
@@ -135,11 +135,11 @@ required-features = ["attest", "tdx"]
 
 [[example]]
 name = "az_snp"
-required-features = ["az-snp-attest"]
+required-features = ["attest", "az-snp"]
 
 [[example]]
 name = "az_tdx"
-required-features = ["az-tdx-attest"]
+required-features = ["attest", "az-tdx"]
 
 [[example]]
 name = "gcp_snp"

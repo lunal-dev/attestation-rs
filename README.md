@@ -32,12 +32,12 @@ attestation = { path = ".", features = ["snp", "tdx"] }
 | `gcp-snp` | GCP SEV-SNP non-vTPM support (implies `snp`)                             |
 | `gcp-tdx` | GCP TDX non-vTPM support (implies `tdx`)                                 |
 | `dstack`  | Dstack TDX support via Unix socket (implies `tdx`)                       |
-| `attest` | Enable guest-side evidence generation (Linux-only, requires TEE hardware) |
-| `az-snp-attest` | Enable Azure SNP vTPM evidence generation                         |
-| `az-tdx-attest` | Enable Azure TDX vTPM evidence generation                         |
+| `attest` | Enable guest-side evidence generation for enabled platforms (Linux-only, requires TEE hardware) |
+| `az-snp-attest` | Compatibility alias for `attest` + `az-snp`                      |
+| `az-tdx-attest` | Compatibility alias for `attest` + `az-tdx`                      |
 | `cli`    | Build the `attestation-cli` binary                                        |
 
-All six platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates guest-side code that requires hardware access. Azure vTPM attesters use separate feature flags so non-Azure attester builds do not pull TPM/TSS dependencies.
+All six platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates guest-side code that requires hardware access and includes the default SEV-SNP + TDX attestation set.
 
 ## Usage
 
@@ -110,8 +110,8 @@ Each platform has a dedicated example. Run on the appropriate hardware:
 ```bash
 cargo run --example snp     --features "snp,attest"
 cargo run --example tdx     --features "tdx,attest"
-cargo run --example az_snp  --features "az-snp-attest"
-cargo run --example az_tdx  --features "az-tdx-attest"
+cargo run --example az_snp  --features "attest"
+cargo run --example az_tdx  --features "attest"
 cargo run --example gcp_snp --features "gcp-snp,attest"
 cargo run --example gcp_tdx --features "gcp-tdx,attest"
 ```
@@ -119,7 +119,7 @@ cargo run --example gcp_tdx --features "gcp-tdx,attest"
 Azure examples accept an optional nonce argument:
 
 ```bash
-cargo run --example az_snp --features "az-snp-attest" -- "my-custom-nonce"
+cargo run --example az_snp --features "attest" -- "my-custom-nonce"
 ```
 
 GCP examples accept an optional nonce argument:
@@ -277,10 +277,10 @@ cargo test --features gcp-tdx
 cargo test --features dstack
 
 # Integration tests on Azure SNP CVM
-cargo test --test az_snp_live --features "az-snp-attest" -- --ignored
+cargo test --test az_snp_live --features "attest" -- --ignored
 
 # Integration tests on Azure TDX CVM
-cargo test --test az_tdx_live --features "az-tdx-attest" -- --ignored
+cargo test --test az_tdx_live --features "attest" -- --ignored
 
 # Benchmarks
 cargo bench --features snp

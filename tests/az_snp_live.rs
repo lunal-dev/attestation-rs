@@ -6,11 +6,11 @@
 //! - Access to Azure IMDS
 //! - Sufficient permissions for TPM access (root or tss group)
 //!
-//! Run with: cargo test --test az_snp_live --features "az-snp-attest" -- --ignored
+//! Run with: cargo test --test az_snp_live --features "attest" -- --ignored
 //!
 //! Tests are #[ignore] by default — run with --ignored to execute on real hardware.
 
-#![cfg(feature = "az-snp-attest")]
+#![cfg(all(feature = "attest", feature = "az-snp"))]
 
 use base64::Engine;
 

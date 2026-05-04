@@ -1,7 +1,7 @@
 //! Azure TDX (vTPM) attestation example.
 //!
 //! Run on an Azure TDX Confidential VM:
-//!   cargo run --example az_tdx --features "az-tdx,attest"
+//!   cargo run --example az_tdx --features "attest"
 
 use std::env;
 use std::time::Instant;
