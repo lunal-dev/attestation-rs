@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
 
-use az_tdx_vtpm::{hcl, is_tdx_cvm, tdx, vtpm};
+use az_cvm_vtpm::{hcl, tdx, vtpm};
 use zerocopy::IntoBytes;
 
 use crate::error::{AttestationError, Result};
@@ -55,10 +55,18 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
 
 /// Check if Azure TDX platform is available.
 pub fn is_available() -> bool {
-    match is_tdx_cvm() {
-        Ok(is_tdx) => is_tdx,
+    let report = match vtpm::get_report() {
+        Ok(report) => report,
         Err(e) => {
             log::warn!("Azure TDX detection failed: {}", e);
+            return false;
+        }
+    };
+
+    match hcl::HclReport::new(report) {
+        Ok(hcl_report) => hcl_report.report_type() == hcl::ReportType::Tdx,
+        Err(e) => {
+            log::warn!("Azure TDX HCL report parsing failed: {}", e);
             false
         }
     }

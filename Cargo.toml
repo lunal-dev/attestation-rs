@@ -23,21 +23,17 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 
 # Guest-side evidence generation (Linux-only, requires TEE hardware).
 # Combine with platform features for per-platform builds:
-#   attest + snp           → bare-metal SNP attestation only
-#   attest + az-snp-attest → Azure SNP attestation (pulls az-snp-vtpm)
-#   attest (+ defaults)    → bare-metal + GCP attesters only.
+#   attest                 → default SEV-SNP + TDX attestation set
+#   attest + az-snp        → Azure SNP attestation over Azure vTPM
+#   attest + az-tdx        → Azure TDX attestation over Azure vTPM
+#   attest (+ defaults)    → bare-metal + Azure + GCP attesters.
 #
-# Azure vTPM attesters are opt-in (not folded into `attest`) because
-# az-snp-vtpm / az-tdx-vtpm 0.8.x pull az-cvm-vtpm *with default features*
-# (their own Cargo.toml omits `default-features = false`), and az-cvm-vtpm's
-# default feature set includes `verifier`, which enables sev/openssl and an
-# OpenSSL system-library build dependency. The opt-in split keeps the generic
-# `attest` build free of the openssl pull. We pick `sev/openssl` on native
-# targets so the transitive feature unifies cleanly; WASM stays on
-# `crypto_nossl` (see [target.'cfg(target_arch = "wasm32")'.dependencies]).
-attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy"]
-az-snp-attest = ["attest", "az-snp", "dep:az-snp-vtpm"]
-az-tdx-attest = ["attest", "az-tdx", "dep:az-tdx-vtpm"]
+# Azure vTPM attesters use az-cvm-vtpm directly with default features disabled
+# to avoid the az-cvm-vtpm verifier/OpenSSL path while composing with the
+# combined SNP/TDX attestation-service feature set.
+attest = ["snp", "tdx", "dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-cvm-vtpm", "dep:zerocopy"]
+az-snp-attest = ["attest", "az-snp"] # Compatibility alias; use `attest` + `az-snp`.
+az-tdx-attest = ["attest", "az-tdx"] # Compatibility alias; use `attest` + `az-tdx`.
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
 cli = ["dep:clap"]
@@ -79,33 +75,24 @@ scroll = "0.12"
 # Attest-side dependencies (cross-platform parts)
 libc = { version = "0.2", optional = true }
 tempfile = { version = "3", optional = true }
+sev = { version = "7", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
 zerocopy = { version = "0.8", optional = true, features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
 pem = "3.0.6"
 
 # Native (non-WASM) dependencies — needed for cert fetching on any OS.
-#
-# `sev` is split by target_arch:
-#   - native: `openssl` backend, so `az-snp-attest` (which transitively pulls
-#     `sev/openssl` via `az-cvm-vtpm`'s default `verifier` feature) does not
-#     conflict with our own sev features. Requires system OpenSSL at build time.
-#   - WASM: `crypto_nossl` (pure-Rust) backend; OpenSSL is not buildable on
-#     wasm32, and `az-snp-vtpm` is Linux-only so the conflict cannot arise.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-util"] }
-sev = { version = "7", default-features = false, features = ["snp", "openssl"], optional = true }
 
 # Guest-side attestation crates — Linux-only (require TEE hardware / vTPM)
 [target.'cfg(target_os = "linux")'.dependencies]
-az-snp-vtpm = { version = "0.8.1", default-features = false, features = ["attester"], optional = true }
-az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
+az-cvm-vtpm = { version = "0.8.1", default-features = false, features = ["attester"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 getrandom = { version = "0.2", features = ["js"] }
-sev = { version = "7", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
@@ -136,7 +123,7 @@ required-features = ["az-tdx"]
 [[bench]]
 name = "az_snp_attest"
 harness = false
-required-features = ["az-snp-attest"]
+required-features = ["attest", "az-snp"]
 
 [[example]]
 name = "snp"
@@ -148,11 +135,11 @@ required-features = ["attest", "tdx"]
 
 [[example]]
 name = "az_snp"
-required-features = ["az-snp-attest"]
+required-features = ["attest", "az-snp"]
 
 [[example]]
 name = "az_tdx"
-required-features = ["az-tdx-attest"]
+required-features = ["attest", "az-tdx"]
 
 [[example]]
 name = "gcp_snp"

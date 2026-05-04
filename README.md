@@ -32,10 +32,12 @@ attestation = { path = ".", features = ["snp", "tdx"] }
 | `gcp-snp` | GCP SEV-SNP non-vTPM support (implies `snp`)                             |
 | `gcp-tdx` | GCP TDX non-vTPM support (implies `tdx`)                                 |
 | `dstack`  | Dstack TDX support via Unix socket (implies `tdx`)                       |
-| `attest` | Enable guest-side evidence generation (Linux-only, requires TEE hardware) |
+| `attest` | Enable guest-side evidence generation for enabled platforms (Linux-only, requires TEE hardware) |
+| `az-snp-attest` | Compatibility alias for `attest` + `az-snp`                      |
+| `az-tdx-attest` | Compatibility alias for `attest` + `az-tdx`                      |
 | `cli`    | Build the `attestation-cli` binary                                        |
 
-All six platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates all guest-side code that requires hardware access.
+All six platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates guest-side code that requires hardware access and includes the default SEV-SNP + TDX attestation set.
 
 ## Usage
 

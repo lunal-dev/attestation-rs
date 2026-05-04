@@ -43,6 +43,7 @@ const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum allowed HTTP response body size (5 MiB).
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024;
 
 /// Configuration for HTTP client timeouts.
@@ -117,6 +118,9 @@ impl DefaultCertProvider {
 
     /// Create a new provider with custom HTTP timeouts.
     pub fn with_timeouts(timeouts: HttpTimeouts) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = timeouts;
+
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             client: reqwest::Client::builder()
@@ -454,6 +458,9 @@ impl DefaultTdxCollateralProvider {
 
     /// Create a new provider with custom HTTP timeouts.
     pub fn with_timeouts(timeouts: HttpTimeouts) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = timeouts;
+
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             client: reqwest::Client::builder()

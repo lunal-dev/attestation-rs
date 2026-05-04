@@ -63,12 +63,12 @@ pub use types::*;
 ///
 #[cfg(all(feature = "attest", target_os = "linux"))]
 pub fn detect() -> Result<PlatformType> {
-    #[cfg(feature = "az-tdx-attest")]
+    #[cfg(feature = "az-tdx")]
     if platforms::az_tdx::attest::is_available() {
         return Ok(PlatformType::AzTdx);
     }
 
-    #[cfg(feature = "az-snp-attest")]
+    #[cfg(feature = "az-snp")]
     if platforms::az_snp::attest::is_available() {
         return Ok(PlatformType::AzSnp);
     }
@@ -153,13 +153,13 @@ pub async fn attest(
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "az-snp-attest")]
+        #[cfg(feature = "az-snp")]
         PlatformType::AzSnp => {
             let evidence = platforms::az_snp::attest::generate_evidence(report_data).await?;
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(feature = "az-tdx-attest")]
+        #[cfg(feature = "az-tdx")]
         PlatformType::AzTdx => {
             let evidence = platforms::az_tdx::attest::generate_evidence_with(
                 report_data,

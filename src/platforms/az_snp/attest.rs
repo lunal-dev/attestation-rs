@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL, Engine};
+use serde::Deserialize;
 
-use az_snp_vtpm::{imds, is_snp_cvm, vtpm};
+use az_cvm_vtpm::{hcl, vtpm};
 
 use crate::error::{AttestationError, Result};
 use crate::platforms::tpm_common::TpmQuote;
@@ -8,12 +9,28 @@ use crate::utils::pad_report_data;
 
 use super::evidence::AzSnpEvidence;
 
+const IMDS_CERT_URL: &str = "http://169.254.169.254/metadata/THIM/amd/certification";
+
+#[derive(Deserialize)]
+struct ImdsCertificates {
+    #[serde(rename = "vcekCert")]
+    vcek: String,
+}
+
 /// Check if Azure SNP platform is available.
 pub fn is_available() -> bool {
-    match is_snp_cvm() {
-        Ok(is_snp) => is_snp,
+    let report = match vtpm::get_report() {
+        Ok(report) => report,
         Err(e) => {
             log::warn!("Azure SNP detection failed: {}", e);
+            return false;
+        }
+    };
+
+    match hcl::HclReport::new(report) {
+        Ok(hcl_report) => hcl_report.report_type() == hcl::ReportType::Snp,
+        Err(e) => {
+            log::warn!("Azure SNP HCL report parsing failed: {}", e);
             false
         }
     }
@@ -27,13 +44,29 @@ fn pem_to_der(pem: &str) -> Result<Vec<u8>> {
     Ok(der)
 }
 
-/// Convert az-snp-vtpm Quote to our TpmQuote format.
+/// Convert az-cvm-vtpm Quote to our TpmQuote format.
 fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
     TpmQuote {
         signature: hex::encode(q.signature()),
         message: hex::encode(q.message()),
         pcrs: q.pcrs_sha256().map(hex::encode).collect(),
     }
+}
+
+async fn get_imds_certs() -> Result<ImdsCertificates> {
+    reqwest::Client::new()
+        .get(IMDS_CERT_URL)
+        .header("Metadata", "true")
+        .send()
+        .await
+        .map_err(|e| AttestationError::CertFetchError(format!("IMDS request failed: {}", e)))?
+        .error_for_status()
+        .map_err(|e| AttestationError::CertFetchError(format!("IMDS returned error: {}", e)))?
+        .json()
+        .await
+        .map_err(|e| {
+            AttestationError::CertFetchError(format!("failed to parse IMDS cert response: {}", e))
+        })
 }
 
 /// Generate Azure SNP attestation evidence.
@@ -55,8 +88,7 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
     let tpm_quote = quote_to_tpm_quote(quote);
 
     // 3. Fetch VCEK certificate from Azure IMDS
-    let certs = imds::get_certs()
-        .map_err(|e| AttestationError::CertFetchError(format!("imds::get_certs failed: {}", e)))?;
+    let certs = get_imds_certs().await?;
     let vcek_der = pem_to_der(&certs.vcek)?;
 
     // 4. Assemble evidence

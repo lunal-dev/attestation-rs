@@ -51,7 +51,7 @@ async fn capture_tdx_evidence_fixture() {
     }
 }
 
-#[cfg(feature = "az-snp-attest")]
+#[cfg(all(feature = "attest", feature = "az-snp"))]
 #[tokio::test]
 #[ignore]
 async fn capture_az_snp_evidence_fixture() {
@@ -80,7 +80,7 @@ async fn capture_az_snp_evidence_fixture() {
     assert!(result.signature_valid);
 }
 
-#[cfg(feature = "az-tdx-attest")]
+#[cfg(all(feature = "attest", feature = "az-tdx"))]
 #[tokio::test]
 #[ignore]
 async fn capture_az_tdx_evidence_fixture() {
