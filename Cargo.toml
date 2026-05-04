@@ -29,13 +29,11 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 #   attest (+ defaults)    → bare-metal + GCP attesters.
 #
 # Azure vTPM attesters are separate from generic `attest` so bare-metal and GCP
-# attester builds do not pull TPM/TSS dependencies. Azure SNP uses az-cvm-vtpm
+# attester builds do not pull TPM/TSS dependencies. They use az-cvm-vtpm
 # directly with default features disabled to avoid the verifier/OpenSSL path.
-# Azure TDX remains separate because az-tdx-vtpm still enables az-cvm-vtpm's
-# default verifier feature transitively.
 attest = ["dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:zerocopy"]
 az-snp-attest = ["attest", "az-snp", "dep:az-cvm-vtpm"]
-az-tdx-attest = ["attest", "az-tdx", "dep:az-tdx-vtpm"]
+az-tdx-attest = ["attest", "az-tdx", "dep:az-cvm-vtpm"]
 
 # CLI binary (verify works everywhere; combine with `attest` for evidence generation)
 cli = ["dep:clap"]
@@ -91,7 +89,6 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-
 # Guest-side attestation crates — Linux-only (require TEE hardware / vTPM)
 [target.'cfg(target_os = "linux")'.dependencies]
 az-cvm-vtpm = { version = "0.8.1", default-features = false, features = ["attester"], optional = true }
-az-tdx-vtpm = { version = "0.8", default-features = false, features = ["attester"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
