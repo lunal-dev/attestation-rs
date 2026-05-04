@@ -71,18 +71,16 @@ async fn get_imds_certs() -> Result<ImdsCertificates> {
 
 /// Generate Azure SNP attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
-    // Validate size fits in 64-byte report_data field, but do NOT pad:
-    // TPM2B_DATA (used by vtpm::get_quote) has a smaller max size than 64 bytes
-    // on Azure vTPMs, so we must pass the original unpadded data as the nonce.
-    let _ = pad_report_data(report_data, 64)?;
+    // TPM2B_DATA (used by vtpm::get_quote) has max size of 50 bytes on Azure vTPMs
+    let report_data = pad_report_data(report_data, 50)?;
 
     // 1. Read HCL report from vTPM NVRAM
     let hcl_report_bytes = vtpm::get_report().map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("vtpm::get_report failed: {}", e))
     })?;
 
-    // 2. Generate TPM quote with report_data as nonce (unpadded)
-    let quote = vtpm::get_quote(report_data).map_err(|e| {
+    // 2. Generate TPM quote with report_data as nonce
+    let quote = vtpm::get_quote(&report_data).map_err(|e| {
         AttestationError::HardwareAccessFailed(format!("vtpm::get_quote failed: {}", e))
     })?;
     let tpm_quote = quote_to_tpm_quote(quote);
