@@ -53,6 +53,22 @@ fn quote_to_tpm_quote(q: vtpm::Quote) -> TpmQuote {
     }
 }
 
+async fn get_imds_certs() -> Result<ImdsCertificates> {
+    reqwest::Client::new()
+        .get(IMDS_CERT_URL)
+        .header("Metadata", "true")
+        .send()
+        .await
+        .map_err(|e| AttestationError::CertFetchError(format!("IMDS request failed: {}", e)))?
+        .error_for_status()
+        .map_err(|e| AttestationError::CertFetchError(format!("IMDS returned error: {}", e)))?
+        .json()
+        .await
+        .map_err(|e| {
+            AttestationError::CertFetchError(format!("failed to parse IMDS cert response: {}", e))
+        })
+}
+
 /// Generate Azure SNP attestation evidence.
 pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
     // Validate size fits in 64-byte report_data field, but do NOT pad:
@@ -72,19 +88,7 @@ pub async fn generate_evidence(report_data: &[u8]) -> Result<AzSnpEvidence> {
     let tpm_quote = quote_to_tpm_quote(quote);
 
     // 3. Fetch VCEK certificate from Azure IMDS
-    let certs: ImdsCertificates = reqwest::Client::new()
-        .get(IMDS_CERT_URL)
-        .header("Metadata", "true")
-        .send()
-        .await
-        .map_err(|e| AttestationError::CertFetchError(format!("IMDS request failed: {}", e)))?
-        .error_for_status()
-        .map_err(|e| AttestationError::CertFetchError(format!("IMDS returned error: {}", e)))?
-        .json()
-        .await
-        .map_err(|e| {
-            AttestationError::CertFetchError(format!("failed to parse IMDS cert response: {}", e))
-        })?;
+    let certs = get_imds_certs().await?;
     let vcek_der = pem_to_der(&certs.vcek)?;
 
     // 4. Assemble evidence
