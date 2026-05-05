@@ -236,7 +236,7 @@ fn generate_tdreport(report_data: &[u8; 64]) -> Result<[u8; 1024]> {
 
     // TDX_CMD_GET_REPORT0 = _IOWR('T', 1, struct tdx_report_req)
     // struct tdx_report_req = report_data[64] + td_report[1024] = 1088 bytes
-    const TDX_CMD_GET_REPORT0: u64 = 0xC4405401;
+    const TDX_CMD_GET_REPORT0: libc::c_uint = 0xC4405401;
 
     #[repr(C)]
     struct TdxReportReq {
@@ -255,7 +255,7 @@ fn generate_tdreport(report_data: &[u8; 64]) -> Result<[u8; 1024]> {
     let ret = unsafe {
         libc::ioctl(
             dev.as_raw_fd(),
-            TDX_CMD_GET_REPORT0,
+            TDX_CMD_GET_REPORT0.try_into().unwrap(),
             &mut req as *mut TdxReportReq,
         )
     };
