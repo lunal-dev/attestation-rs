@@ -35,9 +35,6 @@ attest = ["snp", "tdx", "dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-c
 az-snp-attest = ["attest", "az-snp"] # Compatibility alias; use `attest` + `az-snp`.
 az-tdx-attest = ["attest", "az-tdx"] # Compatibility alias; use `attest` + `az-tdx`.
 
-# CLI binary (verify works everywhere; combine with `attest` for evidence generation)
-cli = ["dep:clap"]
-
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
@@ -78,7 +75,6 @@ tempfile = { version = "3", optional = true }
 sev = { version = "7", default-features = false, features = ["snp", "crypto_nossl"], optional = true }
 pem-rfc7468 = { version = "1", optional = true, features = ["alloc"] }
 zerocopy = { version = "0.8", optional = true, features = ["derive"] }
-clap = { version = "4", features = ["derive"], optional = true }
 pem = "3.0.6"
 
 # Native (non-WASM) dependencies — needed for cert fetching on any OS.
@@ -148,14 +144,3 @@ required-features = ["attest", "gcp-snp"]
 [[example]]
 name = "gcp_tdx"
 required-features = ["attest", "gcp-tdx"]
-
-[profile.release]
-# Security crates must panic on integer overflow rather than silently wrapping.
-# Parsers processing untrusted attestation reports and certificate fields are
-# the primary risk sites.
-overflow-checks = true
-
-[[bin]]
-name = "attestation-cli"
-path = "src/bin/cli.rs"
-required-features = ["cli"]
