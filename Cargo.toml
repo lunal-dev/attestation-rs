@@ -2,9 +2,11 @@
 resolver = "2"
 members = [
     "crates/attestation",
+    "crates/attestation-cli",
 ]
 default-members = [
     "crates/attestation",
+    "crates/attestation-cli",
 ]
 
 [workspace.dependencies]
