@@ -1,0 +1,31 @@
+[server]
+bind = "0.0.0.0:8400"
+
+[server.tls]
+enabled = false
+cert_path = ""
+key_path = ""
+
+[auth]
+# If non-empty, all endpoints (except /health) require a Bearer token.
+# If empty or omitted, endpoints are unauthenticated (a warning is logged on startup).
+api_keys = []
+
+[certs]
+cache_max_entries = 1024
+vcek_ttl_hours = 24
+chain_ttl_hours = 168             # 7 days
+crl_refresh_hours = 6
+tdx_collateral_ttl_hours = 24
+prefetch_chains = ["milan"]       # Pre-warm on startup
+require_crl = false               # true = fail-closed on CRL fetch errors
+
+[token]
+enabled = false
+issuer = "attestation-service"
+duration_minutes = 5
+key_path = ""                     # Empty = ephemeral EC key
+
+[attestation]
+enabled = true                    # Set to false to disable the /attest endpoint
+platforms = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp", "gcp-tdx"]

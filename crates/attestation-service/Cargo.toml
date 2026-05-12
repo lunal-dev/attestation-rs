@@ -1,0 +1,55 @@
+[package]
+name = "attestation-service"
+version = "0.1.0"
+edition = "2021"
+description = "REST API service wrapping the attestation library"
+
+[dependencies]
+attestation = { git = "https://github.com/lunal-dev/attestation-rs.git", features = ["attest"] }
+# Web framework
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit", "request-id"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Caching
+moka = { version = "0.12", features = ["future"] }
+
+# Crypto / tokens
+p256 = { version = "0.13", features = ["jwk", "ecdsa"] }
+subtle = "2"
+
+# HTTP client (cert fetching)
+reqwest = { version = "0.12", features = ["rustls-tls"] }
+
+# CLI & logging
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async traits
+async-trait = "0.1"
+
+# PEM parsing
+pem = "3"
+
+# Hashing
+sha2 = "0.10"
+
+# Utilities
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+hex = "0.4"
+
+[[bin]]
+name = "loadtest"
+path = "src/bin/loadtest.rs"
