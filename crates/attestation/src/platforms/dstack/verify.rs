@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn base64_input_is_returned_unchanged() {
         // Real base64 contains characters like +, /, = that fail hex::decode
-        let b64_input = BASE64.encode(&vec![0xFFu8; 700]);
+        let b64_input = BASE64.encode(vec![0xFFu8; 700]);
         let result = normalize_quote_to_base64(&b64_input);
         assert_eq!(result, b64_input);
     }
