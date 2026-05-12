@@ -7,8 +7,8 @@
 // 3. Verifies the evidence + report_data binding entirely in WASM
 //
 // Usage:
-//   cargo build --features cli
-//   cd wasm-test && wasm-pack build --target nodejs
+//   cargo build -p attestation-cli --features attest
+//   cd crates/attestation-wasm-test && wasm-pack build --target nodejs
 //   node example.mjs
 //
 
@@ -17,7 +17,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
+const workspaceRoot = join(__dirname, '..', '..');
 
 // --- Step 1: Generate live evidence with a nonce ---
 console.log('=== Step 1: Generating live SNP attestation evidence ===\n');
@@ -26,7 +26,7 @@ const nonce = 'wasm-verify-' + Date.now();
 console.log(`Nonce: "${nonce}"`);
 
 const cliOutput = execSync(
-  `cargo run --manifest-path ${rootDir}/Cargo.toml --features cli --quiet -- attest --platform snp --report-data "${nonce}"`,
+  `cargo run --manifest-path ${workspaceRoot}/Cargo.toml -p attestation-cli --features attest --quiet -- attest --platform snp --report-data "${nonce}"`,
   { encoding: 'utf-8', timeout: 30000 }
 );
 
