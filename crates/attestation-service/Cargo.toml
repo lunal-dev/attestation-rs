@@ -5,50 +5,50 @@ edition = "2021"
 description = "REST API service wrapping the attestation library"
 
 [dependencies]
-attestation = { git = "https://github.com/lunal-dev/attestation-rs.git", features = ["attest"] }
+attestation = { workspace = true, features = ["attest"] }
 # Web framework
-axum = "0.8"
-tokio = { version = "1", features = ["full"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "limit", "request-id"] }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true, features = ["cors", "trace", "limit", "request-id"] }
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
 
 # Caching
 moka = { version = "0.12", features = ["future"] }
 
 # Crypto / tokens
-p256 = { version = "0.13", features = ["jwk", "ecdsa"] }
-subtle = "2"
+p256 = { workspace = true, features = ["jwk", "ecdsa"] }
+subtle = { workspace = true }
 
 # HTTP client (cert fetching)
-reqwest = { version = "0.12", features = ["rustls-tls"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 
 # CLI & logging
-clap = { version = "4", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # Async traits
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 # PEM parsing
-pem = "3"
+pem = { workspace = true }
 
 # Hashing
-sha2 = "0.10"
+sha2 = { workspace = true }
 
 # Utilities
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-anyhow = "1"
-thiserror = "2"
-uuid = { version = "1", features = ["v4"] }
-rand = "0.8"
-hex = "0.4"
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+rand = { workspace = true }
+hex = { workspace = true }
 
 [[bin]]
 name = "loadtest"
