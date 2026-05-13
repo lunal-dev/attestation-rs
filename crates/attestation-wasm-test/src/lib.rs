@@ -37,8 +37,8 @@ pub fn verify_snp(
         .decode(&evidence.attestation_report)
         .map_err(|e| JsError::new(&format!("base64 decode report: {}", e)))?;
 
-    let report = parse_report(&report_bytes)
-        .map_err(|e| JsError::new(&format!("parse report: {}", e)))?;
+    let report =
+        parse_report(&report_bytes).map_err(|e| JsError::new(&format!("parse report: {}", e)))?;
 
     // Get VCEK from evidence
     let vcek_der = match &evidence.cert_chain {
