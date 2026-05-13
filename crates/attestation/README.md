@@ -130,14 +130,14 @@ cargo run -p attestation --example gcp_tdx --features "gcp-tdx,attest" -- "my-cu
 
 ## CLI
 
-A CLI binary is available for attestation and verification from the command line:
+The CLI lives in the `attestation-cli` package:
 
 ```bash
 # Build the CLI
-cargo build --release --features cli
+cargo build -p attestation-cli --release
 
 # Generate evidence (on TEE hardware, Linux only)
-cargo build --release --features "cli,attest"
+cargo build -p attestation-cli --release --features attest
 ./target/release/attestation-cli attest --report-data "my-nonce"
 
 # Verify evidence (works anywhere)
