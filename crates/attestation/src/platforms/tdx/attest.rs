@@ -255,7 +255,7 @@ fn generate_tdreport(report_data: &[u8; 64]) -> Result<[u8; 1024]> {
     let ret = unsafe {
         libc::ioctl(
             dev.as_raw_fd(),
-            TDX_CMD_GET_REPORT0.try_into().unwrap(),
+            TDX_CMD_GET_REPORT0 as _,
             &mut req as *mut TdxReportReq,
         )
     };
