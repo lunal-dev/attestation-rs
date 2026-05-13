@@ -3,11 +3,13 @@ resolver = "2"
 members = [
     "crates/attestation",
     "crates/attestation-cli",
+    "crates/attestation-service",
     "crates/attestation-wasm-test",
 ]
 default-members = [
     "crates/attestation",
     "crates/attestation-cli",
+    "crates/attestation-service",
     "crates/attestation-wasm-test",
 ]
 
