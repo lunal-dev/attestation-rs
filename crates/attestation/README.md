@@ -20,7 +20,7 @@ A Rust library providing a unified interface for TEE (Trusted Execution Environm
 
 ```toml
 [dependencies]
-attestation = { path = ".", features = ["snp", "tdx"] }
+attestation = { path = "crates/attestation", features = ["snp", "tdx"] }
 ```
 
 | Feature  | Description                                                               |
@@ -35,7 +35,6 @@ attestation = { path = ".", features = ["snp", "tdx"] }
 | `attest` | Enable guest-side evidence generation for enabled platforms (Linux-only, requires TEE hardware) |
 | `az-snp-attest` | Compatibility alias for `attest` + `az-snp`                      |
 | `az-tdx-attest` | Compatibility alias for `attest` + `az-tdx`                      |
-| `cli`    | Build the `attestation-cli` binary                                        |
 
 All six platform features are enabled by default. Verification is always compiled when a platform feature is enabled. The `attest` feature gates guest-side code that requires hardware access and includes the default SEV-SNP + TDX attestation set.
 
@@ -108,25 +107,25 @@ async fn main() {
 Each platform has a dedicated example. Run on the appropriate hardware:
 
 ```bash
-cargo run --example snp     --features "snp,attest"
-cargo run --example tdx     --features "tdx,attest"
-cargo run --example az_snp  --features "az-snp,attest"
-cargo run --example az_tdx  --features "az-tdx,attest"
-cargo run --example gcp_snp --features "gcp-snp,attest"
-cargo run --example gcp_tdx --features "gcp-tdx,attest"
+cargo run -p attestation --example snp     --features "snp,attest"
+cargo run -p attestation --example tdx     --features "tdx,attest"
+cargo run -p attestation --example az_snp  --features "az-snp,attest"
+cargo run -p attestation --example az_tdx  --features "az-tdx,attest"
+cargo run -p attestation --example gcp_snp --features "gcp-snp,attest"
+cargo run -p attestation --example gcp_tdx --features "gcp-tdx,attest"
 ```
 
 Azure examples accept an optional nonce argument:
 
 ```bash
-cargo run --example az_snp --features "az-snp,attest" -- "my-custom-nonce"
+cargo run -p attestation --example az_snp --features "az-snp,attest" -- "my-custom-nonce"
 ```
 
 GCP examples accept an optional nonce argument:
 
 ```bash
-cargo run --example gcp_snp --features "gcp-snp,attest" -- "my-custom-nonce"
-cargo run --example gcp_tdx --features "gcp-tdx,attest" -- "my-custom-nonce"
+cargo run -p attestation --example gcp_snp --features "gcp-snp,attest" -- "my-custom-nonce"
+cargo run -p attestation --example gcp_tdx --features "gcp-tdx,attest" -- "my-custom-nonce"
 ```
 
 ## CLI
