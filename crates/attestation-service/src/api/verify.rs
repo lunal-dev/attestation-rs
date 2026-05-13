@@ -5,11 +5,17 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::normalize_platform;
 use crate::error::ApiError;
 use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct VerifyRequest {
+    /// Platform for split-form evidence returned by /attest.
+    ///
+    /// If `evidence` is already a full attestation envelope with `platform` and
+    /// `evidence` fields, this can be omitted.
+    pub platform: Option<String>,
     pub evidence: Value,
     #[serde(default)]
     pub params: VerifyParamsInput,
@@ -45,8 +51,7 @@ pub async fn handler(
     State(state): State<AppState>,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, ApiError> {
-    let evidence_json = serde_json::to_vec(&req.evidence)
-        .map_err(|e| ApiError::BadRequest(format!("invalid evidence JSON: {e}")))?;
+    let evidence_json = normalize_evidence(req.platform, req.evidence)?;
 
     let expected_report_data = req
         .params
@@ -97,4 +102,68 @@ pub async fn handler(
     };
 
     Ok(Json(VerifyResponse { result, token }))
+}
+
+fn normalize_evidence(platform: Option<String>, evidence: Value) -> Result<Vec<u8>, ApiError> {
+    let envelope = if is_attestation_envelope(&evidence) {
+        evidence
+    } else if let Some(platform) = platform {
+        let platform = normalize_platform(&platform)
+            .ok_or_else(|| ApiError::BadRequest(format!("unknown platform: {platform}")))?;
+
+        serde_json::json!({
+            "platform": platform,
+            "evidence": evidence,
+        })
+    } else {
+        return Err(ApiError::BadRequest(
+            "evidence must be a full attestation envelope or include a platform field".to_string(),
+        ));
+    };
+
+    serde_json::to_vec(&envelope)
+        .map_err(|e| ApiError::BadRequest(format!("invalid evidence JSON: {e}")))
+}
+
+fn is_attestation_envelope(evidence: &Value) -> bool {
+    evidence.get("platform").is_some() && evidence.get("evidence").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::normalize_evidence;
+
+    #[test]
+    fn normalize_evidence_keeps_full_envelope() {
+        let input = json!({
+            "platform": "snp",
+            "evidence": { "report": "abc" }
+        });
+
+        let normalized: Value = serde_json::from_slice(&normalize_evidence(None, input).unwrap())
+            .expect("normalized evidence should be JSON");
+
+        assert_eq!(normalized["platform"], "snp");
+        assert_eq!(normalized["evidence"]["report"], "abc");
+    }
+
+    #[test]
+    fn normalize_evidence_wraps_split_form_with_canonical_platform() {
+        let normalized: Value = serde_json::from_slice(
+            &normalize_evidence(Some("SNP".to_string()), json!({ "report": "abc" })).unwrap(),
+        )
+        .expect("normalized evidence should be JSON");
+
+        assert_eq!(normalized["platform"], "snp");
+        assert_eq!(normalized["evidence"]["report"], "abc");
+    }
+
+    #[test]
+    fn normalize_evidence_rejects_split_form_without_platform() {
+        let err = normalize_evidence(None, json!({ "report": "abc" })).unwrap_err();
+
+        assert!(err.to_string().contains("include a platform field"));
+    }
 }

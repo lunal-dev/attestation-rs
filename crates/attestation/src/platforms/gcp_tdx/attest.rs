@@ -29,7 +29,7 @@ pub fn is_available() -> bool {
     match std::fs::read_to_string(DMI_BOARD_VENDOR_PATH) {
         Ok(vendor) => vendor.trim() == "Google",
         Err(e) => {
-            log::warn!("GCP TDX detection: failed to read {DMI_BOARD_VENDOR_PATH}: {e}");
+            log::debug!("GCP TDX detection: failed to read {DMI_BOARD_VENDOR_PATH}: {e}");
             false
         }
     }

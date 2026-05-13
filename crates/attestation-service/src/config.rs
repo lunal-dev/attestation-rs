@@ -6,12 +6,25 @@ use std::path::Path;
 /// Canonical processor generation names supported by AMD SEV-SNP.
 pub const KNOWN_GENERATIONS: &[&str] = &["Milan", "Genoa", "Turin"];
 
+/// Platform names this service can generate evidence for.
+pub const SUPPORTED_ATTESTATION_PLATFORMS: &[&str] =
+    &["snp", "tdx", "az-snp", "az-tdx", "gcp-snp", "gcp-tdx"];
+
 /// Normalize a generation name to its canonical form (case-insensitive match).
 /// Returns `None` if the generation is not recognized.
 pub fn normalize_generation(name: &str) -> Option<&'static str> {
     KNOWN_GENERATIONS
         .iter()
         .find(|g| g.eq_ignore_ascii_case(name))
+        .copied()
+}
+
+/// Normalize a service platform name to its canonical form.
+/// Returns `None` if the platform is not supported for service-side evidence generation.
+pub fn normalize_platform(name: &str) -> Option<&'static str> {
+    SUPPORTED_ATTESTATION_PLATFORMS
+        .iter()
+        .find(|p| p.eq_ignore_ascii_case(name))
         .copied()
 }
 
@@ -201,6 +214,14 @@ impl Config {
             if normalize_generation(chain).is_none() {
                 return Err(format!(
                     "unknown processor generation '{chain}' in certs.prefetch_chains (known: {KNOWN_GENERATIONS:?})"
+                ));
+            }
+        }
+
+        for platform in &self.attestation.platforms {
+            if normalize_platform(platform).is_none() {
+                return Err(format!(
+                    "unknown platform '{platform}' in attestation.platforms (known: {SUPPORTED_ATTESTATION_PLATFORMS:?})"
                 ));
             }
         }

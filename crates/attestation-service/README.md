@@ -73,7 +73,7 @@ key_path = ""                   # Empty = ephemeral key
 
 [attestation]
 enabled = true                  # Set to false to disable /attest
-platforms = ["snp", "tdx", "az-snp", "az-tdx"]
+platforms = ["snp", "tdx", "az-snp", "az-tdx", "gcp-snp", "gcp-tdx"]
 ```
 
 ## Authentication
@@ -82,7 +82,7 @@ When `auth.api_keys` contains one or more Bearer tokens, all endpoints except `/
 
 ## Attestation
 
-The `/attest` endpoint is available when `attestation.enabled = true` (the default). Set it to `false` on verification-only deployments.
+The `/attest` endpoint is available when `attestation.enabled = true` (the default). Set it to `false` on verification-only deployments. The `attestation.platforms` list controls which platforms the service is allowed to generate evidence for.
 
 ## Usage Examples
 
@@ -100,6 +100,7 @@ curl -X POST http://127.0.0.1:8400/attest \
 curl -X POST http://127.0.0.1:8400/verify \
   -H "Content-Type: application/json" \
   -d '{
+    "platform": "snp",
     "evidence": { ... },
     "params": {
       "expected_report_data": "AQIDBA==",
@@ -107,6 +108,17 @@ curl -X POST http://127.0.0.1:8400/verify \
     },
     "issue_token": true
   }'
+```
+
+`/verify` also accepts a full attestation envelope as `evidence`:
+
+```json
+{
+  "evidence": {
+    "platform": "snp",
+    "evidence": { }
+  }
+}
 ```
 
 ## Key Features

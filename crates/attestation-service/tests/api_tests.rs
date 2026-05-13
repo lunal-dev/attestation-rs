@@ -133,6 +133,7 @@ async fn verify_rejects_invalid_evidence() {
 }
 
 #[tokio::test]
+#[ignore = "requires an accessible TEE attestation device"]
 async fn attest_endpoint() {
     let state = test_state();
     let app = build_api_router(state);
@@ -164,6 +165,38 @@ async fn attest_endpoint() {
     } else {
         assert!(resp.status().is_client_error() || resp.status().is_server_error());
     }
+}
+
+#[tokio::test]
+async fn attest_rejects_disallowed_platform_before_hardware_access() {
+    let state = test_state_with(|c| {
+        c.attestation.platforms = vec!["tdx".to_string()];
+    });
+    let app = build_router(state);
+
+    let body = serde_json::json!({
+        "platform": "snp"
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/attest")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "bad_request");
+    assert!(json["message"].as_str().unwrap().contains("not allowed"));
 }
 
 #[tokio::test]
@@ -465,6 +498,7 @@ async fn jwks_returns_error_when_token_not_configured() {
 // --- End-to-end test: attest then verify ---
 
 #[tokio::test]
+#[ignore = "requires an accessible TEE attestation device"]
 async fn attest_then_verify_roundtrip() {
     if !has_tee() {
         // Skip on non-TEE machines
@@ -497,11 +531,13 @@ async fn attest_then_verify_roundtrip() {
         .await
         .unwrap();
     let attest_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let platform = &attest_json["platform"];
     let evidence = &attest_json["evidence"];
 
     // Step 2: Verify
     let app = build_api_router(state);
     let verify_body = serde_json::json!({
+        "platform": platform,
         "evidence": evidence,
         "params": {}
     });

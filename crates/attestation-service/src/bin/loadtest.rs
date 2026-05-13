@@ -108,8 +108,10 @@ async fn get_evidence(client: &Client, base_url: &str) -> Result<String, String>
         .await
         .map_err(|e| format!("parse attest response: {e}"))?;
 
+    let platform = &json["platform"];
     let evidence = &json["evidence"];
     let verify_body = json!({
+        "platform": platform,
         "evidence": evidence,
         "params": { "allow_debug": true }
     });

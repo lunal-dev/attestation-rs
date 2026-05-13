@@ -61,7 +61,7 @@ pub fn is_available() -> bool {
     let report = match vtpm::get_report() {
         Ok(report) => report,
         Err(e) => {
-            log::warn!("Azure TDX detection failed: {}", e);
+            log::debug!("Azure TDX detection failed: {}", e);
             return false;
         }
     };
@@ -69,7 +69,7 @@ pub fn is_available() -> bool {
     match hcl::HclReport::new(report) {
         Ok(hcl_report) => hcl_report.report_type() == hcl::ReportType::Tdx,
         Err(e) => {
-            log::warn!("Azure TDX HCL report parsing failed: {}", e);
+            log::debug!("Azure TDX HCL report parsing failed: {}", e);
             false
         }
     }

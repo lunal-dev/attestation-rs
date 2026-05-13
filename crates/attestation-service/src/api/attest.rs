@@ -7,6 +7,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::normalize_platform;
 use crate::error::ApiError;
 use crate::AppState;
 
@@ -45,6 +46,7 @@ pub async fn handler(
         };
 
         let platform = resolve_platform(&req.platform)?;
+        ensure_platform_allowed(&state.config.attestation.platforms, platform)?;
         let evidence_bytes = attestation::attest(
             platform,
             &report_data,
@@ -54,10 +56,9 @@ pub async fn handler(
         let envelope: Value = serde_json::from_slice(&evidence_bytes)
             .map_err(|e| ApiError::Internal(format!("failed to parse evidence: {e}")))?;
 
-        // attestation::attest returns an AttestationEvidence envelope
-        // (`{platform, evidence}`); /attest's contract is to return the
-        // platform-specific evidence directly so callers can wrap it
-        // in their own envelope before sending to /verify.
+        // Keep the service response shape stable: top-level `platform` plus
+        // platform-specific `evidence`. /verify accepts this split form when
+        // clients send both fields.
         Ok(Json(AttestResponse {
             platform: format!("{platform}"),
             evidence: envelope.get("evidence").cloned().unwrap_or(envelope),
@@ -82,5 +83,25 @@ fn resolve_platform(name: &str) -> Result<attestation::PlatformType, ApiError> {
         "gcp-snp" => Ok(attestation::PlatformType::GcpSnp),
         "gcp-tdx" => Ok(attestation::PlatformType::GcpTdx),
         other => Err(ApiError::BadRequest(format!("unknown platform: {other}"))),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_platform_allowed(
+    allowed: &[String],
+    platform: attestation::PlatformType,
+) -> Result<(), ApiError> {
+    let platform_name = platform.to_string();
+    let allowed = allowed
+        .iter()
+        .filter_map(|name| normalize_platform(name))
+        .any(|name| name == platform_name);
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(ApiError::BadRequest(format!(
+            "platform '{platform_name}' is not allowed by attestation.platforms"
+        )))
     }
 }

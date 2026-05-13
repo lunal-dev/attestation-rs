@@ -36,6 +36,16 @@ fn config_parse_explicit_values() {
 }
 
 #[test]
+fn config_rejects_unknown_attestation_platform() {
+    let mut config = attestation_service::config::Config::default();
+    config.attestation.platforms = vec!["snp".to_string(), "not-a-platform".to_string()];
+
+    let err = config.validate().unwrap_err();
+    assert!(err.contains("unknown platform"));
+    assert!(err.contains("not-a-platform"));
+}
+
+#[test]
 fn token_issuer_produces_valid_jwt() {
     let signing_key = p256::ecdsa::SigningKey::random(&mut rand::thread_rng());
     let verifying_key = p256::ecdsa::VerifyingKey::from(&signing_key);

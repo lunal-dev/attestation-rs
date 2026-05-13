@@ -25,7 +25,7 @@ pub fn is_available() -> bool {
     let report = match vtpm::get_report() {
         Ok(report) => report,
         Err(e) => {
-            log::warn!("Azure SNP detection failed: {}", e);
+            log::debug!("Azure SNP detection failed: {}", e);
             return false;
         }
     };
@@ -33,7 +33,7 @@ pub fn is_available() -> bool {
     match hcl::HclReport::new(report) {
         Ok(hcl_report) => hcl_report.report_type() == hcl::ReportType::Snp,
         Err(e) => {
-            log::warn!("Azure SNP HCL report parsing failed: {}", e);
+            log::debug!("Azure SNP HCL report parsing failed: {}", e);
             false
         }
     }
