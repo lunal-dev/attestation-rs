@@ -1,6 +1,6 @@
 # Attestation Service
 
-[![CI](https://github.com/lunal-dev/attestation-service/actions/workflows/ci.yml/badge.svg)](https://github.com/lunal-dev/attestation-service/actions/workflows/ci.yml)
+[![CI](https://github.com/lunal-dot-dev/attestation-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lunal-dot-dev/attestation-rs/actions/workflows/ci.yml)
 
 A REST API service for generating and verifying Trusted Execution Environment (TEE) attestation evidence. Built in Rust with Axum, it wraps the `attestation-rs` library to expose attestation workflows over HTTP.
 
@@ -20,21 +20,25 @@ A REST API service for generating and verifying Trusted Execution Environment (T
 | `POST` | `/verify` | Verify evidence, optionally issue a JWT |
 | `GET` | `/certs/status` | Certificate cache status |
 | `POST` | `/certs/refresh` | Force certificate refresh |
+| `GET` | `/token/jwks` | JWKS for issued attestation JWTs |
 
 ## Quick Start
 
 ```bash
 # Build
-cargo build --release
+cargo build -p attestation-service --release
 
 # Run with default config (config.toml)
-cargo run --release
+cargo run -p attestation-service --release
 
 # Run with a custom config
-cargo run --release -- -c /path/to/config.toml
+cargo run -p attestation-service --release -- -c crates/attestation-service/config.example.toml
 
 # Run tests
-cargo test
+cargo test -p attestation-service
+
+# Build the container image from the workspace root
+docker build .
 ```
 
 ## Configuration
@@ -110,6 +114,10 @@ curl -X POST http://127.0.0.1:8400/verify \
 - **Certificate caching** — Multi-layer async cache (Moka) with configurable TTLs and background refresh
 - **JWT issuance** — Optional ES256 token generation after successful verification
 - **TLS support** — Optional HTTPS with configurable cert/key paths
-- **Load testing** — Built-in load test binary (`cargo run --release --bin loadtest`)
+- **Load testing** — Built-in load test binary (`cargo run -p attestation-service --release --bin loadtest`)
 - **Structured logging** — JSON-formatted tracing output
 - **Graceful shutdown** — Handles SIGTERM and Ctrl+C
+
+## Container Image
+
+CI publishes the service image as `ghcr.io/lunal-dev/attestation-service`.
