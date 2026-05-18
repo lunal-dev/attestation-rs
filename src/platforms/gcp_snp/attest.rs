@@ -6,7 +6,8 @@
 use crate::error::Result;
 use crate::platforms::snp::evidence::SnpEvidence;
 
-const SEV_PLATFORM_PATH: &str = "/sys/devices/platform/sev-guest";
+/// SNP guest attestation character device — the device attestation opens.
+const SEV_GUEST_DEVICE_PATH: &str = "/dev/sev-guest";
 const DMI_BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
 
 /// Check if we are running on a GCP Confidential VM with SNP.
@@ -23,7 +24,7 @@ const DMI_BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
 /// is cryptographically valid AMD SNP evidence, but the `GcpSnp` platform tag
 /// in the envelope reflects the attester's self-classification only.
 pub fn is_available() -> bool {
-    if !std::path::Path::new(SEV_PLATFORM_PATH).exists() {
+    if !std::path::Path::new(SEV_GUEST_DEVICE_PATH).exists() {
         return false;
     }
     match std::fs::read_to_string(DMI_BOARD_VENDOR_PATH) {
