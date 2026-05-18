@@ -11,6 +11,28 @@ use crate::utils::strip_trailing_nulls;
 /// Decoded TPM quote components: (signature, message, pcr_values).
 pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
 
+/// The vTPM device path `az_cvm_vtpm` opens (`TctiNameConf::Device` default).
+const VTPM_DEVICE_PATH: &str = "/dev/tpm0";
+
+/// Probe whether the vTPM device can actually be opened.
+///
+/// `az_cvm_vtpm` builds its context with `TctiNameConf::Device`, whose
+/// default path is `/dev/tpm0`. When that device is missing *or* present
+/// but not openable (e.g. owned by `tss` with no access for the caller),
+/// the tss2 C library logs `ERROR:tcti:...` lines straight to stderr.
+///
+/// Probing the open ourselves — read+write, matching the tcti-device
+/// driver — lets platform detection skip `vtpm::get_report()` cleanly when
+/// the call could only fail noisily. The handle is dropped immediately so
+/// it does not contend with the library's own open of the same device.
+pub fn vtpm_device_openable() -> bool {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(VTPM_DEVICE_PATH)
+        .is_ok()
+}
+
 // --- TPM algorithm constants ---
 
 /// TPM_ALG_RSA

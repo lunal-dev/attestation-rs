@@ -55,6 +55,9 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
 
 /// Check if Azure TDX platform is available.
 pub fn is_available() -> bool {
+    if !crate::platforms::tpm_common::vtpm_device_openable() {
+        return false;
+    }
     let report = match vtpm::get_report() {
         Ok(report) => report,
         Err(e) => {

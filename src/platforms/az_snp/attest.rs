@@ -19,6 +19,9 @@ struct ImdsCertificates {
 
 /// Check if Azure SNP platform is available.
 pub fn is_available() -> bool {
+    if !crate::platforms::tpm_common::vtpm_device_openable() {
+        return false;
+    }
     let report = match vtpm::get_report() {
         Ok(report) => report,
         Err(e) => {
