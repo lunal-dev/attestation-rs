@@ -6,7 +6,7 @@ use az_cvm_vtpm::{hcl, tdx, vtpm};
 use zerocopy::IntoBytes;
 
 use crate::error::{AttestationError, Result};
-use crate::platforms::tpm_common::TpmQuote;
+use crate::platforms::tpm_common::{azure_vtpm_available, TpmQuote};
 use crate::utils::pad_report_data;
 
 use super::evidence::AzTdxEvidence;
@@ -55,6 +55,9 @@ async fn get_td_quote_from_imds(td_report: &tdx::TdReport) -> Result<Vec<u8>> {
 
 /// Check if Azure TDX platform is available.
 pub fn is_available() -> bool {
+    if !azure_vtpm_available() {
+        return false;
+    }
     let report = match vtpm::get_report() {
         Ok(report) => report,
         Err(e) => {

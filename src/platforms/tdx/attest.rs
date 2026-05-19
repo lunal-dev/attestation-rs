@@ -413,7 +413,7 @@ fn vsock_send_receive(request: &[u8]) -> Result<Vec<u8>> {
 
     let body_size = u32::from_be_bytes(size_buf) as usize;
 
-    if body_size < 16 || body_size > 65536 {
+    if !(16..=65536).contains(&body_size) {
         return Err(AttestationError::HardwareAccessFailed(format!(
             "vsock response body size out of range: {}",
             body_size

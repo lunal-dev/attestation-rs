@@ -4,12 +4,71 @@ use rsa::signature::Verifier;
 use rsa::RsaPublicKey;
 use serde::{Deserialize, Serialize};
 
+#[cfg(all(feature = "attest", target_os = "linux"))]
+use std::sync::Once;
+
 use crate::error::{AttestationError, Result};
 use crate::types::{Claims, PlatformType, VerificationResult};
 use crate::utils::strip_trailing_nulls;
 
 /// Decoded TPM quote components: (signature, message, pcr_values).
 pub type DecodedTpmQuote = (Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
+
+/// The vTPM device path `az_cvm_vtpm` opens (`TctiNameConf::Device` default).
+#[cfg(all(feature = "attest", target_os = "linux"))]
+const VTPM_DEVICE_PATH: &str = "/dev/tpm0";
+
+/// Azure sets this fixed value on all its VMs
+#[cfg(all(feature = "attest", target_os = "linux"))]
+const AZURE_CHASSIS_ASSET_TAG: &str = "7783-7084-3265-9085-8269-3286-77";
+
+/// Whether an Azure vTPM is present and usable for SNP/TDX detection.
+///
+/// For mysterious reasons, Azure offers TEE attestation via a vTPM,
+/// at device `/dev/tmp0`, exactly like a real bare metal machine with
+/// a real TPM. To avoid sending Azure TEE messages to the real TPMs and
+/// causing ERROR log lines, we see if we are on an Azure VM first.
+#[cfg(all(feature = "attest", target_os = "linux"))]
+pub fn azure_vtpm_available() -> bool {
+    is_azure_cvm() && vtpm_device_accessible()
+}
+
+#[cfg(all(feature = "attest", target_os = "linux"))]
+fn is_azure_cvm() -> bool {
+    std::fs::read_to_string("/sys/class/dmi/id/chassis_asset_tag")
+        .map(|tag| tag.trim() == AZURE_CHASSIS_ASSET_TAG)
+        .unwrap_or(false)
+}
+
+#[cfg(all(feature = "attest", target_os = "linux"))]
+static WARN_FOUND: Once = Once::new();
+
+/// Whether the vTPM device exists and is readable/writable.
+/// Warns if we can see a device but don't have permissions.
+/// Uses a Once guard to avoid one warning each for snp and tdx.
+#[cfg(all(feature = "attest", target_os = "linux"))]
+fn vtpm_device_accessible() -> bool {
+    let access = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(VTPM_DEVICE_PATH);
+    let access_ok = access.is_ok();
+
+    if access.is_err() {
+        let exists = std::fs::exists(VTPM_DEVICE_PATH).unwrap_or(false);
+        if exists {
+            WARN_FOUND.call_once(|| {
+                let e = access.unwrap_err();
+                eprintln!(
+                    "WARNING: found TPM device {} with error {}",
+                    VTPM_DEVICE_PATH, e
+                )
+            });
+        }
+    };
+
+    access_ok
+}
 
 // --- TPM algorithm constants ---
 
