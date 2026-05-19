@@ -12,6 +12,8 @@
 
 #![cfg(all(feature = "attest", feature = "az-tdx"))]
 
+use std::path::Path;
+
 use base64::Engine;
 
 use attestation::types::VerifyParams;
@@ -19,8 +21,7 @@ use attestation::types::VerifyParams;
 /// Helper: check if we're running on an Azure TDX CVM with the required tools.
 fn is_az_tdx_cvm() -> bool {
     // Check for TPM device
-    let has_tpm =
-        std::path::Path::new("/dev/tpmrm0").exists() || std::path::Path::new("/dev/tpm0").exists();
+    let has_tpm = Path::new("/dev/tpmrm0").exists() || Path::new("/dev/tpm0").exists();
 
     // Check for Azure environment via IMDS (more reliable than file checks)
     let is_azure = std::process::Command::new("curl")

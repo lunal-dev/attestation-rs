@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
 use sev::firmware::guest::Firmware;
@@ -13,7 +15,7 @@ const SEV_GUEST_DEVICE_PATH: &str = "/dev/sev-guest";
 
 /// Check if SNP hardware is available on this machine.
 pub fn is_available() -> bool {
-    std::path::Path::new(SEV_GUEST_DEVICE_PATH).exists()
+    Path::new(SEV_GUEST_DEVICE_PATH).exists()
 }
 
 /// Extract certificates from the sev crate's cert table entries.

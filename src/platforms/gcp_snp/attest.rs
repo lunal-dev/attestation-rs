@@ -3,6 +3,8 @@
 // bare-metal SNP implementation. GCP exposes the same /dev/sev-guest device
 // and produces standard AMD SNP attestation reports.
 
+use std::path::Path;
+
 use crate::error::Result;
 use crate::platforms::snp::evidence::SnpEvidence;
 
@@ -24,7 +26,7 @@ const DMI_BOARD_VENDOR_PATH: &str = "/sys/class/dmi/id/board_vendor";
 /// is cryptographically valid AMD SNP evidence, but the `GcpSnp` platform tag
 /// in the envelope reflects the attester's self-classification only.
 pub fn is_available() -> bool {
-    if !std::path::Path::new(SEV_GUEST_DEVICE_PATH).exists() {
+    if !Path::new(SEV_GUEST_DEVICE_PATH).exists() {
         return false;
     }
     match std::fs::read_to_string(DMI_BOARD_VENDOR_PATH) {

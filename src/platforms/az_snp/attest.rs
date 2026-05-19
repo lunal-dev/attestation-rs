@@ -4,7 +4,7 @@ use serde::Deserialize;
 use az_cvm_vtpm::{hcl, vtpm};
 
 use crate::error::{AttestationError, Result};
-use crate::platforms::tpm_common::TpmQuote;
+use crate::platforms::tpm_common::{azure_vtpm_available, TpmQuote};
 use crate::utils::pad_report_data;
 
 use super::evidence::AzSnpEvidence;
@@ -19,7 +19,7 @@ struct ImdsCertificates {
 
 /// Check if Azure SNP platform is available.
 pub fn is_available() -> bool {
-    if !crate::platforms::tpm_common::azure_vtpm_available() {
+    if !azure_vtpm_available() {
         return false;
     }
     let report = match vtpm::get_report() {
