@@ -307,4 +307,4 @@ AMD root certificates (ARK + ASK) for Milan, Genoa, and Turin processors are emb
 
 ## License
 
-Apache-2.0
+MIT
