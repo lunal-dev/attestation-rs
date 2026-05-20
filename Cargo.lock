@@ -170,6 +170,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "attestation-wasm"
+version = "0.1.0"
+dependencies = [
+ "attestation",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

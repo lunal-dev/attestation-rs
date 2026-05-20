@@ -1,6 +1,5 @@
 /target
-/wasm-test/pkg
-/wasm-test/target
+/crates/attestation-wasm/pkg
 .claude/
 security-review.md
 patches/
