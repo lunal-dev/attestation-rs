@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-#[cfg(not(target_arch = "wasm32"))]
 use base64::Engine;
+use web_time::Instant;
 
 use crate::error::Result;
 use crate::types::{ProcessorGeneration, SnpTcb};
@@ -43,7 +43,6 @@ const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum allowed HTTP response body size (5 MiB).
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_RESPONSE_SIZE: usize = 5 * 1024 * 1024;
 
 /// Configuration for HTTP client timeouts.
@@ -64,10 +63,32 @@ impl Default for HttpTimeouts {
     }
 }
 
+/// Build a `reqwest::Client` honoring `timeouts` where the target supports it.
+///
+/// reqwest's wasm32 `ClientBuilder` doesn't expose timeout configuration; on
+/// that target we fall back to a default client and let the browser's fetch
+/// implementation enforce its own timeouts.
+fn build_http_client(timeouts: &HttpTimeouts) -> reqwest::Client {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        reqwest::Client::builder()
+            .timeout(timeouts.request_timeout)
+            .connect_timeout(timeouts.connect_timeout)
+            .build()
+            .expect("failed to build HTTP client")
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeouts;
+        reqwest::Client::new()
+    }
+}
+
 /// Trait for providing platform vendor certificates.
 /// The library ships a default impl that does HTTP fetch with in-memory caching.
 /// Users can plug in their own (Redis, disk, etc.).
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait CertProvider: Send + Sync {
     /// Fetch the VCEK/VLEK cert for an SNP report.
     async fn get_snp_vcek(
@@ -92,7 +113,6 @@ pub trait CertProvider: Send + Sync {
 
 /// Default implementation: try cache first, fetch from vendor on miss.
 pub struct DefaultCertProvider {
-    #[cfg(not(target_arch = "wasm32"))]
     client: reqwest::Client,
     cache: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, CachedCert>>>,
 }
@@ -100,16 +120,16 @@ pub struct DefaultCertProvider {
 #[derive(Clone)]
 struct CachedCert {
     data: Vec<u8>,
-    fetched_at: std::time::Instant,
+    fetched_at: Instant,
 }
 
 impl CachedCert {
-    fn is_expired(&self, ttl: std::time::Duration) -> bool {
+    fn is_expired(&self, ttl: Duration) -> bool {
         self.fetched_at.elapsed() > ttl
     }
 }
 
-const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600); // 1 hour
+const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 
 impl DefaultCertProvider {
     pub fn new() -> Self {
@@ -117,17 +137,14 @@ impl DefaultCertProvider {
     }
 
     /// Create a new provider with custom HTTP timeouts.
+    ///
+    /// On wasm32 the underlying `fetch` API does not expose connection-level
+    /// timeouts, so the `connect_timeout` field is ignored there; the overall
+    /// request timeout is also not supported by reqwest's wasm `ClientBuilder`,
+    /// so the browser's default fetch timeout applies.
     pub fn with_timeouts(timeouts: HttpTimeouts) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let _ = timeouts;
-
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            client: reqwest::Client::builder()
-                .timeout(timeouts.request_timeout)
-                .connect_timeout(timeouts.connect_timeout)
-                .build()
-                .expect("failed to build HTTP client"),
+            client: build_http_client(&timeouts),
             cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
@@ -142,14 +159,13 @@ impl DefaultCertProvider {
         }
     }
 
-    #[allow(dead_code)] // Only used in native (non-WASM) builds
     fn set_cached(&self, key: String, data: Vec<u8>) {
         if let Ok(mut cache) = self.cache.write() {
             cache.insert(
                 key,
                 CachedCert {
                     data,
-                    fetched_at: std::time::Instant::now(),
+                    fetched_at: Instant::now(),
                 },
             );
         }
@@ -191,7 +207,6 @@ impl DefaultCertProvider {
 }
 
 /// Read response body with size limit enforcement.
-#[cfg(not(target_arch = "wasm32"))]
 async fn read_response_with_limit(response: reqwest::Response) -> Result<Vec<u8>> {
     if let Some(len) = response.content_length() {
         if len as usize > MAX_RESPONSE_SIZE {
@@ -218,7 +233,6 @@ async fn read_response_with_limit(response: reqwest::Response) -> Result<Vec<u8>
 }
 
 /// Send a GET request and return the response with status check.
-#[cfg(not(target_arch = "wasm32"))]
 async fn send_get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response> {
     client
         .get(url)
@@ -229,7 +243,6 @@ async fn send_get(client: &reqwest::Client, url: &str) -> Result<reqwest::Respon
         .map_err(|e| crate::error::AttestationError::CertFetchError(format!("HTTP status: {e}")))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl DefaultCertProvider {
     /// Fetch a certificate from AMD KDS, with cache lookup first.
     async fn fetch_cert(&self, url: &str) -> Result<Vec<u8>> {
@@ -245,8 +258,8 @@ impl DefaultCertProvider {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl CertProvider for DefaultCertProvider {
     async fn get_snp_vcek(
         &self,
@@ -305,48 +318,6 @@ impl CertProvider for DefaultCertProvider {
     }
 }
 
-/// WASM implementation: uses bundled certs for chain, no HTTP fetch for VCEK.
-/// In a browser environment, callers should provide their own CertProvider
-/// implementation that uses fetch() or similar for VCEK resolution.
-#[cfg(target_arch = "wasm32")]
-#[async_trait]
-impl CertProvider for DefaultCertProvider {
-    async fn get_snp_vcek(
-        &self,
-        processor_gen: ProcessorGeneration,
-        chip_id: &[u8; 64],
-        reported_tcb: &SnpTcb,
-    ) -> Result<Vec<u8>> {
-        // Check cache first
-        let url = Self::vcek_url(processor_gen, chip_id, reported_tcb);
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-
-        Err(crate::error::AttestationError::CertFetchError(
-            "VCEK fetch requires a custom CertProvider implementation in WASM".to_string(),
-        ))
-    }
-
-    async fn get_snp_cert_chain(
-        &self,
-        processor_gen: ProcessorGeneration,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
-        #[cfg(feature = "snp")]
-        {
-            let (ark, ask) = crate::platforms::snp::certs::get_bundled_certs(processor_gen);
-            Ok((ark.to_vec(), ask.to_vec()))
-        }
-        #[cfg(not(feature = "snp"))]
-        {
-            let _ = processor_gen;
-            Err(crate::error::AttestationError::CertFetchError(
-                "SNP cert chain requires the `snp` feature in WASM".to_string(),
-            ))
-        }
-    }
-}
-
 impl Default for DefaultCertProvider {
     fn default() -> Self {
         Self::new()
@@ -361,7 +332,8 @@ impl Default for DefaultCertProvider {
 ///
 /// The library ships a default impl that fetches from Intel PCS v4.
 /// Users can plug in their own (offline bundles, caching proxies, etc.).
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait TdxCollateralProvider: Send + Sync {
     /// Fetch TDX TCB Info JSON for a given FMSPC.
     async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>>;
@@ -446,7 +418,6 @@ pub trait TdxCollateralProvider: Send + Sync {
 
 /// Default TDX collateral provider: fetches from Intel PCS v4 with caching.
 pub struct DefaultTdxCollateralProvider {
-    #[cfg(not(target_arch = "wasm32"))]
     client: reqwest::Client,
     cache: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, CachedCert>>>,
 }
@@ -456,18 +427,11 @@ impl DefaultTdxCollateralProvider {
         Self::with_timeouts(HttpTimeouts::default())
     }
 
-    /// Create a new provider with custom HTTP timeouts.
+    /// Create a new provider with custom HTTP timeouts. See
+    /// [`DefaultCertProvider::with_timeouts`] for wasm32 caveats.
     pub fn with_timeouts(timeouts: HttpTimeouts) -> Self {
-        #[cfg(target_arch = "wasm32")]
-        let _ = timeouts;
-
         Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            client: reqwest::Client::builder()
-                .timeout(timeouts.request_timeout)
-                .connect_timeout(timeouts.connect_timeout)
-                .build()
-                .expect("failed to build HTTP client"),
+            client: build_http_client(&timeouts),
             cache: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
@@ -482,14 +446,13 @@ impl DefaultTdxCollateralProvider {
         }
     }
 
-    #[allow(dead_code)]
     fn set_cached(&self, key: String, data: Vec<u8>) {
         if let Ok(mut cache) = self.cache.write() {
             cache.insert(
                 key,
                 CachedCert {
                     data,
-                    fetched_at: std::time::Instant::now(),
+                    fetched_at: Instant::now(),
                 },
             );
         }
@@ -528,7 +491,6 @@ impl DefaultTdxCollateralProvider {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl DefaultTdxCollateralProvider {
     async fn fetch(&self, url: &str) -> Result<Vec<u8>> {
         if let Some(cached) = self.get_cached(url) {
@@ -577,8 +539,8 @@ impl DefaultTdxCollateralProvider {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl TdxCollateralProvider for DefaultTdxCollateralProvider {
     async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>> {
         let url = Self::tcb_info_url(fmspc);
@@ -651,60 +613,6 @@ impl TdxCollateralProvider for DefaultTdxCollateralProvider {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-#[async_trait]
-impl TdxCollateralProvider for DefaultTdxCollateralProvider {
-    async fn get_tcb_info(&self, fmspc: &str) -> Result<Vec<u8>> {
-        let url = Self::tcb_info_url(fmspc);
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-        Err(crate::error::AttestationError::CertFetchError(
-            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
-        ))
-    }
-
-    async fn get_qe_identity(&self) -> Result<Vec<u8>> {
-        let url = Self::qe_identity_url();
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-        Err(crate::error::AttestationError::CertFetchError(
-            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
-        ))
-    }
-
-    async fn get_td_qe_identity(&self) -> Result<Vec<u8>> {
-        let url = Self::td_qe_identity_url();
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-        Err(crate::error::AttestationError::CertFetchError(
-            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
-        ))
-    }
-
-    async fn get_root_ca_crl(&self) -> Result<Vec<u8>> {
-        let url = Self::root_ca_crl_url();
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-        Err(crate::error::AttestationError::CertFetchError(
-            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
-        ))
-    }
-
-    async fn get_pck_crl(&self, ca: &str) -> Result<Vec<u8>> {
-        let url = Self::pck_crl_url(ca);
-        if let Some(cached) = self.get_cached(&url) {
-            return Ok(cached);
-        }
-        Err(crate::error::AttestationError::CertFetchError(
-            "TDX collateral fetch requires a custom TdxCollateralProvider in WASM".to_string(),
-        ))
-    }
-}
-
 impl Default for DefaultTdxCollateralProvider {
     fn default() -> Self {
         Self::new()
@@ -715,7 +623,6 @@ impl Default for DefaultTdxCollateralProvider {
 ///
 /// Decodes percent-encoded bytes and pushes them as raw bytes into a `Vec<u8>`,
 /// which is then losslessly converted to a UTF-8 `String` (PEM data is ASCII).
-#[cfg(not(target_arch = "wasm32"))]
 fn percent_decode(input: &str) -> String {
     let mut result = Vec::with_capacity(input.len());
     let mut chars = input.bytes();
@@ -737,7 +644,6 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8(result).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),

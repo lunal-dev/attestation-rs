@@ -54,6 +54,7 @@ log = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["std", "now"] }
 cfg-if = "1"
 subtle = "2"
+web-time = "1"
 
 # Crypto
 p256 = { version = "0.13", features = ["ecdsa"] }
@@ -84,6 +85,11 @@ zerocopy = { version = "0.8", optional = true, features = ["derive"] }
 clap = { version = "4", features = ["derive"], optional = true }
 pem = "3.0.6"
 
+[dependencies.reqwest]
+version = "0.12"
+default-features = false
+features = ["json"]
+
 # Native (non-WASM) dependencies — needed for cert fetching on any OS.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
@@ -94,7 +100,6 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "io-
 az-cvm-vtpm = { version = "0.8.1", default-features = false, features = ["attester"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
