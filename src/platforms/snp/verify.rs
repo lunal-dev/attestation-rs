@@ -277,7 +277,14 @@ fn verify_vek_validity_period(vek_der: &[u8]) -> Result<()> {
         AttestationError::CertChainError(format!("VEK x509 parse for validity: {e}"))
     })?;
     let validity = cert.validity();
-    let now = x509_parser::time::ASN1Time::now();
+    // web_time::SystemTime so this works on wasm32 — std::time::SystemTime::now()
+    // panics under wasm32-unknown-unknown ("time not implemented on this platform").
+    let secs = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .map_err(|e| AttestationError::CertChainError(format!("system time before UNIX epoch: {e}")))?
+        .as_secs() as i64;
+    let now = x509_parser::time::ASN1Time::from_timestamp(secs)
+        .map_err(|e| AttestationError::CertChainError(format!("invalid current time: {e}")))?;
     if now < validity.not_before {
         return Err(AttestationError::CertChainError(format!(
             "VEK certificate is not yet valid (notBefore: {})",

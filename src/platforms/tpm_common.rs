@@ -464,14 +464,17 @@ pub fn extract_tpm_nonce(message: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Verify TPM nonce matches expected report_data.
+///
+/// Some vTPM attesters (Azure) zero-pad the caller's report_data up to a
+/// fixed TPM2B_DATA size before issuing the quote, so the on-quote nonce
+/// can be longer than what the caller originally passed. We mirror the
+/// bare-metal SNP verifier's approach: pad `expected` up to the nonce
+/// length with zeros, then constant-time compare. If `expected` is longer
+/// than the on-quote nonce, that's a hard error.
 pub fn verify_tpm_nonce(message: &[u8], expected: &[u8]) -> Result<()> {
     let nonce = extract_tpm_nonce(message)?;
-    if nonce.len() != expected.len() {
-        return Err(AttestationError::QuoteParseFailed(
-            "TPM nonce length mismatch".to_string(),
-        ));
-    }
-    if !crate::utils::constant_time_eq(&nonce, expected) {
+    let padded_expected = crate::utils::pad_report_data(expected, nonce.len())?;
+    if !crate::utils::constant_time_eq(&nonce, &padded_expected) {
         return Err(AttestationError::ReportDataMismatch);
     }
     Ok(())
@@ -825,14 +828,16 @@ mod tests {
     }
 
     #[test]
-    fn test_tpm_nonce_length_mismatch() {
+    fn test_tpm_nonce_expected_longer_than_nonce_rejected() {
+        // Expected longer than on-quote nonce: there's no way that can
+        // match — verifier rejects with ReportDataTooLarge.
         let nonce = b"short";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
         let result = verify_tpm_nonce(&msg, b"much longer expected data");
         assert!(
-            result.is_err(),
-            "different length nonce should return error"
+            matches!(result, Err(AttestationError::ReportDataTooLarge { .. })),
+            "expected longer than nonce should be rejected, got {result:?}"
         );
     }
 
@@ -1223,15 +1228,16 @@ mod tests {
         );
     }
 
-    // --- Regression: TPM nonce must NOT be zero-padded ---
-    // Azure vTPMs have a TPM2B_DATA max size smaller than 64 bytes.
-    // Passing zero-padded report_data to vtpm::get_quote() causes TPM_RC_SIZE.
-    // The attest path must pass unpadded data; the verify path must match
-    // the original unpadded data against the unpadded nonce in the quote.
+    // --- TPM nonce / expected_report_data length symmetry ---
+    // Azure vTPMs require a fixed-size TPM2B_DATA, so the attest path may
+    // zero-pad the caller's report_data before issuing the quote. The
+    // verifier accepts a shorter `expected` and zero-pads it up to the
+    // on-quote nonce length before comparing — matching what bare-metal
+    // SNP already does for the 64-byte report_data field.
 
     #[test]
     fn test_check_report_data_unpadded_nonce_matches_original() {
-        // Simulate: attester passes unpadded "hello" as TPM nonce.
+        // Attester passes unpadded "hello" as TPM nonce.
         // Verifier checks with the same unpadded "hello" → should match.
         let nonce = b"hello";
         let pcr_digest = [0u8; 32];
@@ -1247,10 +1253,10 @@ mod tests {
     }
 
     #[test]
-    fn test_check_report_data_unpadded_nonce_rejects_padded_expected() {
-        // Simulate: attester passes unpadded "hello" (5 bytes) as TPM nonce.
-        // Verifier checks with zero-padded 64-byte version → should fail
-        // because lengths differ.
+    fn test_check_report_data_expected_larger_than_nonce_rejected() {
+        // Caller asks the verifier to check a 64-byte expected nonce
+        // against a 5-byte on-quote nonce. There's no way that can match
+        // — the verifier rejects with ReportDataTooLarge.
         let nonce = b"hello";
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
@@ -1260,26 +1266,46 @@ mod tests {
 
         let result = check_report_data(&msg, Some(&padded_expected));
         assert!(
-            result.is_err(),
-            "padded expected should not match unpadded nonce"
+            matches!(result, Err(AttestationError::ReportDataTooLarge { .. })),
+            "expected longer than nonce should be rejected, got {:?}",
+            result
         );
     }
 
     #[test]
-    fn test_check_report_data_padded_nonce_rejects_unpadded_expected() {
-        // Simulate the bug scenario: attester mistakenly passes zero-padded
-        // 64-byte nonce to TPM. Verifier checks with original unpadded data.
-        // This should fail because the nonce in the quote is 64 bytes but
-        // the expected is 5 bytes.
-        let mut padded_nonce = vec![0u8; 64];
+    fn test_check_report_data_padded_nonce_accepts_unpadded_expected() {
+        // Azure path: attester padded "hello" with zeros up to a fixed-size
+        // TPM2B_DATA. Verifier called with the original unpadded "hello"
+        // should match — the verifier zero-pads expected to the nonce
+        // length, matching the bare-metal SNP report_data behavior.
+        let mut padded_nonce = vec![0u8; 50];
         padded_nonce[..5].copy_from_slice(b"hello");
         let pcr_digest = [0u8; 32];
         let msg = build_tpms_attest(&padded_nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
 
         let result = check_report_data(&msg, Some(b"hello"));
         assert!(
-            result.is_err(),
-            "unpadded expected should not match padded nonce (length mismatch)"
+            result.is_ok(),
+            "unpadded expected should match zero-padded nonce: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), Some(true));
+    }
+
+    #[test]
+    fn test_check_report_data_padded_nonce_rejects_wrong_unpadded_expected() {
+        // Padded nonce holds "hello" + zeros. Caller checks "world" — must
+        // fail because the prefix bytes differ even after zero-padding.
+        let mut padded_nonce = vec![0u8; 50];
+        padded_nonce[..5].copy_from_slice(b"hello");
+        let pcr_digest = [0u8; 32];
+        let msg = build_tpms_attest(&padded_nonce, &[3, 0xFF, 0xFF, 0xFF], &pcr_digest);
+
+        let result = check_report_data(&msg, Some(b"world"));
+        assert!(
+            matches!(result, Err(AttestationError::ReportDataMismatch)),
+            "wrong content should be rejected, got {:?}",
+            result
         );
     }
 

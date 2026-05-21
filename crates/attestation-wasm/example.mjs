@@ -8,10 +8,11 @@
 //    caller only needs to pass the envelope and the nonce.
 //
 // Usage:
-//   cargo build --features cli
+//   cargo build --features cli,attest
 //   cd crates/attestation-wasm && wasm-pack build --target nodejs
 //   node example.mjs
 //
+// Auto-detects the local TEE platform (snp / tdx / az-snp / az-tdx / gcp-*).
 
 import { execSync } from 'child_process';
 import { dirname, join } from 'path';
@@ -27,8 +28,8 @@ const nonce = 'wasm-verify-' + Date.now();
 console.log(`Nonce: "${nonce}"`);
 
 const evidenceJson = execSync(
-  `cargo run --manifest-path ${rootDir}/Cargo.toml --features cli --quiet -- attest --platform snp --report-data "${nonce}"`,
-  { encoding: 'utf-8', timeout: 30000 }
+  `cargo run --manifest-path ${rootDir}/Cargo.toml --features cli,attest --quiet -- attest --report-data "${nonce}"`,
+  { encoding: 'utf-8', timeout: 300000 }
 ).trim();
 
 console.log(`Evidence envelope: ${evidenceJson.length} bytes`);
@@ -51,9 +52,13 @@ console.log(JSON.stringify(result, null, 2));
 console.log('\n=== Step 3: Verifying wrong report_data is rejected ===\n');
 
 const wrongNonce = new TextEncoder().encode('wrong-nonce');
-const mismatchJson = await wasm.verify(evidenceJson, wrongNonce);
-const mismatch = JSON.parse(mismatchJson);
-console.log(`report_data_match with wrong nonce: ${mismatch.report_data_match}`);
+let mismatchThrew = false;
+try {
+  await wasm.verify(evidenceJson, wrongNonce);
+} catch (e) {
+  mismatchThrew = true;
+  console.log(`wrong nonce rejected: ${e.message}`);
+}
 
 // --- Step 4: Verify without report_data check ---
 console.log('\n=== Step 4: Verifying without report_data check ===\n');
@@ -77,7 +82,7 @@ if (result.report_data_match !== true) {
   console.error('\nFAILED: report_data did not match nonce');
   process.exit(1);
 }
-if (mismatch.report_data_match !== false) {
+if (!mismatchThrew) {
   console.error('\nFAILED: wrong nonce was not rejected');
   process.exit(1);
 }
