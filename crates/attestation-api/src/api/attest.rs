@@ -48,12 +48,8 @@ pub async fn handler(
 
         let platform = resolve_platform(&req.platform)?;
         ensure_platform_allowed(&state.config.attestation.platforms, platform)?;
-        let evidence_bytes = attestation::attest(
-            platform,
-            &report_data,
-            &attestation::AttestOptions::default(),
-        )
-        .await?;
+        let options = state.config.attestation.attest_options();
+        let evidence_bytes = attestation::attest(platform, &report_data, &options).await?;
         let envelope: Value = serde_json::from_slice(&evidence_bytes)
             .map_err(|e| ApiError::Internal(format!("failed to parse evidence: {e}")))?;
 

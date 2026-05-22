@@ -98,6 +98,11 @@ pub struct AttestationConfig {
     pub platforms: Vec<String>,
     /// If false, requests with `allow_debug: true` are rejected.
     pub allow_debug: bool,
+    /// TDX quote generation method: "auto", "vsock", or "configfs".
+    /// - "auto": try vsock first (~2-4ms), fall back to ConfigFS TSM (~1015ms).
+    /// - "vsock": direct AF_VSOCK to QGS only. Requires vhost-vsock-pci + QGS.
+    /// - "configfs": kernel ConfigFS TSM only. Use on GCP and other cloud platforms.
+    pub tdx_quote_method: String,
 }
 
 // --- Defaults ---
@@ -149,6 +154,21 @@ impl Default for AttestationConfig {
                 "gcp-tdx".to_string(),
             ],
             allow_debug: false,
+            tdx_quote_method: "auto".to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl AttestationConfig {
+    /// Convert the `tdx_quote_method` config string to `AttestOptions`.
+    pub fn attest_options(&self) -> attestation::AttestOptions {
+        attestation::AttestOptions {
+            tdx_quote_method: match self.tdx_quote_method.as_str() {
+                "vsock" => attestation::TdxQuoteMethod::Vsock,
+                "configfs" => attestation::TdxQuoteMethod::ConfigFs,
+                _ => attestation::TdxQuoteMethod::Auto,
+            },
         }
     }
 }
@@ -207,6 +227,16 @@ impl Config {
         }
         if self.certs.tdx_collateral_ttl_hours == 0 {
             return Err("certs.tdx_collateral_ttl_hours must be > 0".to_string());
+        }
+
+        // Validate tdx_quote_method
+        match self.attestation.tdx_quote_method.as_str() {
+            "auto" | "vsock" | "configfs" => {}
+            other => {
+                return Err(format!(
+                    "invalid attestation.tdx_quote_method '{other}' (expected: auto, vsock, configfs)"
+                ));
+            }
         }
 
         // Validate prefetch_chains are known generations
