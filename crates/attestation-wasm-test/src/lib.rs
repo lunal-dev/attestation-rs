@@ -74,6 +74,5 @@ pub fn verify_snp(
         "claims": claims,
     });
 
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| JsError::new(&format!("json serialize: {e}")))
+    serde_json::to_string_pretty(&result).map_err(|e| JsError::new(&format!("json serialize: {e}")))
 }
