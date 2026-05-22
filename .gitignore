@@ -1,6 +1,41 @@
+# Cargo / Rust build artifacts
 /target
-/wasm-test/pkg
-/wasm-test/target
+**/target/
+**/*.rs.bk
+*.pdb
+
+# Coverage output (cargo-llvm-cov, grcov, etc.)
+*.profraw
+*.profdata
+/coverage/
+
+# Criterion benchmark output
+/criterion/
+
+# wasm-pack / wasm-bindgen output
+**/pkg/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+.zed/
+
+# macOS / Windows / Linux junk
+.DS_Store
+Thumbs.db
+*~
+
+# Direnv / local env
+.envrc
+.env
+.env.local
+
+# Local-only Claude state & ad-hoc review outputs
 .claude/
 security-review.md
+
+# Patch directory (local-only overrides)
 patches/

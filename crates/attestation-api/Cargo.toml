@@ -1,0 +1,55 @@
+[package]
+name = "attestation-api"
+version = "0.1.0"
+edition = "2021"
+description = "REST API service wrapping the attestation library"
+
+[dependencies]
+attestation = { workspace = true, features = ["attest"] }
+# Web framework
+axum = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true, features = ["cors", "trace", "limit", "request-id"] }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# Caching
+moka = { version = "0.12", features = ["future"] }
+
+# Crypto / tokens
+p256 = { workspace = true, features = ["jwk", "ecdsa"] }
+subtle = { workspace = true }
+
+# HTTP client (cert fetching)
+reqwest = { workspace = true, features = ["rustls-tls"] }
+
+# CLI & logging
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+# Async traits
+async-trait = { workspace = true }
+
+# PEM parsing
+pem = { workspace = true }
+
+# Hashing
+sha2 = { workspace = true }
+
+# Utilities
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+rand = { workspace = true }
+hex = { workspace = true }
+
+[[bin]]
+name = "loadtest"
+path = "src/bin/loadtest.rs"
