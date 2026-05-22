@@ -11,10 +11,7 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct VerifyRequest {
-    /// Platform for split-form evidence returned by /attest.
-    ///
-    /// If `evidence` is already a full attestation envelope with `platform` and
-    /// `evidence` fields, this can be omitted.
+    /// Platform for the platform-specific evidence returned by /attest.
     pub platform: Option<String>,
     pub evidence: Value,
     #[serde(default)]
@@ -51,7 +48,7 @@ pub async fn handler(
     State(state): State<AppState>,
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, ApiError> {
-    let evidence_json = normalize_evidence(req.platform, req.evidence)?;
+    let evidence_json = build_evidence_envelope(req.platform, req.evidence)?;
 
     let expected_report_data = req
         .params
@@ -104,22 +101,27 @@ pub async fn handler(
     Ok(Json(VerifyResponse { result, token }))
 }
 
-fn normalize_evidence(platform: Option<String>, evidence: Value) -> Result<Vec<u8>, ApiError> {
-    let envelope = if is_attestation_envelope(&evidence) {
-        evidence
-    } else if let Some(platform) = platform {
-        let platform = normalize_platform(&platform)
-            .ok_or_else(|| ApiError::BadRequest(format!("unknown platform: {platform}")))?;
-
-        serde_json::json!({
-            "platform": platform,
-            "evidence": evidence,
-        })
-    } else {
+fn build_evidence_envelope(platform: Option<String>, evidence: Value) -> Result<Vec<u8>, ApiError> {
+    let Some(platform) = platform else {
         return Err(ApiError::BadRequest(
-            "evidence must be a full attestation envelope or include a platform field".to_string(),
+            "platform is required for evidence verification".to_string(),
         ));
     };
+
+    if is_attestation_envelope(&evidence) {
+        return Err(ApiError::BadRequest(
+            "evidence must be platform-specific evidence; put platform at the top level"
+                .to_string(),
+        ));
+    }
+
+    let platform = normalize_platform(&platform)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown platform: {platform}")))?;
+
+    let envelope = serde_json::json!({
+        "platform": platform,
+        "evidence": evidence,
+    });
 
     serde_json::to_vec(&envelope)
         .map_err(|e| ApiError::BadRequest(format!("invalid evidence JSON: {e}")))
@@ -133,26 +135,12 @@ fn is_attestation_envelope(evidence: &Value) -> bool {
 mod tests {
     use serde_json::{json, Value};
 
-    use super::normalize_evidence;
+    use super::build_evidence_envelope;
 
     #[test]
-    fn normalize_evidence_keeps_full_envelope() {
-        let input = json!({
-            "platform": "snp",
-            "evidence": { "report": "abc" }
-        });
-
-        let normalized: Value = serde_json::from_slice(&normalize_evidence(None, input).unwrap())
-            .expect("normalized evidence should be JSON");
-
-        assert_eq!(normalized["platform"], "snp");
-        assert_eq!(normalized["evidence"]["report"], "abc");
-    }
-
-    #[test]
-    fn normalize_evidence_wraps_split_form_with_canonical_platform() {
+    fn build_evidence_envelope_wraps_split_form_with_canonical_platform() {
         let normalized: Value = serde_json::from_slice(
-            &normalize_evidence(Some("SNP".to_string()), json!({ "report": "abc" })).unwrap(),
+            &build_evidence_envelope(Some("SNP".to_string()), json!({ "report": "abc" })).unwrap(),
         )
         .expect("normalized evidence should be JSON");
 
@@ -161,9 +149,42 @@ mod tests {
     }
 
     #[test]
-    fn normalize_evidence_rejects_split_form_without_platform() {
-        let err = normalize_evidence(None, json!({ "report": "abc" })).unwrap_err();
+    fn build_evidence_envelope_rejects_full_envelope_evidence() {
+        let err = build_evidence_envelope(
+            Some("snp".to_string()),
+            json!({
+                "platform": "snp",
+                "evidence": { "report": "abc" }
+            }),
+        )
+        .unwrap_err();
 
-        assert!(err.to_string().contains("include a platform field"));
+        assert!(err.to_string().contains("platform-specific evidence"));
+    }
+
+    #[test]
+    fn build_evidence_envelope_requires_platform() {
+        let err = build_evidence_envelope(None, json!({ "report": "abc" })).unwrap_err();
+
+        assert!(err.to_string().contains("platform is required"));
+    }
+
+    #[test]
+    fn build_evidence_envelope_rejects_unknown_platform() {
+        let err = build_evidence_envelope(
+            Some("not-a-platform".to_string()),
+            json!({ "report": "abc" }),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown platform"));
+    }
+
+    #[test]
+    fn is_attestation_envelope_detects_nested_envelope_shape() {
+        assert!(super::is_attestation_envelope(&json!({
+            "platform": "snp",
+            "evidence": { "report": "abc" }
+        })));
     }
 }

@@ -110,17 +110,6 @@ curl -X POST http://127.0.0.1:8400/verify \
   }'
 ```
 
-`/verify` also accepts a full attestation envelope as `evidence`:
-
-```json
-{
-  "evidence": {
-    "platform": "snp",
-    "evidence": { }
-  }
-}
-```
-
 ## Key Features
 
 - **Certificate caching** — Multi-layer async cache (Moka) with configurable TTLs and background refresh
