@@ -1,24 +1,67 @@
 //! Load tester for the attestation service.
 //!
+//! Measures throughput and latency for the `/attest` and `/verify` endpoints
+//! under controlled request rates. Intended to run inside the same VM as the
+//! service (localhost) to avoid network overhead skewing results.
+//!
 //! Usage:
 //!   cargo run --release --bin loadtest -- [OPTIONS]
 //!
-//! Options:
-//!   --url <BASE_URL>       Service base URL (default: http://127.0.0.1:8400)
-//!   --rps <N>              Target requests per second (default: 50)
-//!   --duration <SECS>      Test duration in seconds (default: 10)
-//!   --endpoint <ENDPOINT>  "verify", "attest", or "both" (default: verify)
-//!   --concurrency <N>      Max concurrent requests (default: rps * 2)
+//! Examples:
+//!   # Verify at 1000 RPS for 10s
+//!   loadtest --endpoint verify --rps 1000 --duration 10
+//!
+//!   # Attest at 500 RPS for 5s
+//!   loadtest --endpoint attest --rps 500 --duration 5
+//!
+//!   # Both endpoints sequentially
+//!   loadtest --endpoint both --rps 200 --duration 10
 
-use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use clap::{Parser, ValueEnum};
 use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time;
+
+#[derive(Parser)]
+#[command(name = "loadtest", about = "Attestation service load tester")]
+struct Cli {
+    /// Service base URL.
+    #[arg(long, default_value = "http://127.0.0.1:8400")]
+    url: String,
+
+    /// Target requests per second.
+    #[arg(long, default_value_t = 100)]
+    rps: u64,
+
+    /// Test duration in seconds.
+    #[arg(long, default_value_t = 10)]
+    duration: u64,
+
+    /// Which endpoint to benchmark.
+    #[arg(long, default_value = "verify")]
+    endpoint: Endpoint,
+
+    /// Max concurrent in-flight requests. Defaults to rps * 2.
+    #[arg(long)]
+    concurrency: Option<u64>,
+
+    /// Send `params.allow_debug = true` on verify requests so debug-mode TEEs
+    /// are accepted. Only enable when load-testing against a debug VM.
+    #[arg(long)]
+    allow_debug: bool,
+}
+
+#[derive(Clone, ValueEnum)]
+enum Endpoint {
+    Verify,
+    Attest,
+    Both,
+}
 
 #[derive(Clone)]
 struct Stats {
@@ -89,40 +132,11 @@ impl Stats {
     }
 }
 
-async fn get_evidence(client: &Client, base_url: &str) -> Result<String, String> {
-    let resp = client
-        .post(format!("{base_url}/attest"))
-        .json(&json!({"platform": "auto"}))
-        .send()
-        .await
-        .map_err(|e| format!("attest request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("attest returned {status}: {body}"));
-    }
-
-    let json: Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("parse attest response: {e}"))?;
-
-    let platform = &json["platform"];
-    let evidence = &json["evidence"];
-    let verify_body = json!({
-        "platform": platform,
-        "evidence": evidence,
-        "params": { "allow_debug": true }
-    });
-
-    serde_json::to_string(&verify_body).map_err(|e| format!("serialize: {e}"))
-}
-
-async fn run_verify_load(
+/// Fire requests at a fixed rate, recording latencies.
+async fn run_load(
     client: &Client,
-    base_url: &str,
-    body: &str,
+    url: &str,
+    body: Option<&str>,
     rps: u64,
     duration_secs: u64,
     concurrency: u64,
@@ -130,9 +144,7 @@ async fn run_verify_load(
     let stats = Stats::new();
     let sem = Arc::new(Semaphore::new(concurrency as usize));
     let interval = Duration::from_secs_f64(1.0 / rps as f64);
-    let start = Instant::now();
-    let deadline = start + Duration::from_secs(duration_secs);
-    let url = format!("{base_url}/verify");
+    let deadline = Instant::now() + Duration::from_secs(duration_secs);
 
     println!("  Firing at {rps} req/s for {duration_secs}s (concurrency cap: {concurrency})");
 
@@ -147,19 +159,20 @@ async fn run_verify_load(
 
         let permit = sem.clone().acquire_owned().await.unwrap();
         let client = client.clone();
-        let url = url.clone();
-        let body = body.to_string();
+        let url = url.to_string();
+        let body = body.map(|s| s.to_string());
         let stats = stats.clone();
         spawned += 1;
 
         tokio::spawn(async move {
             let t0 = Instant::now();
-            let result = client
-                .post(&url)
-                .header("content-type", "application/json")
-                .body(body)
-                .send()
-                .await;
+            let mut req = client.post(&url).header("content-type", "application/json");
+            if let Some(b) = body {
+                req = req.body(b);
+            } else {
+                req = req.json(&json!({"platform": "auto"}));
+            }
+            let result = req.send().await;
 
             let latency = t0.elapsed();
             let ok = match result {
@@ -178,92 +191,53 @@ async fn run_verify_load(
     stats
 }
 
-async fn run_attest_load(
+/// Fetch evidence from /attest and build a verify request body.
+async fn get_verify_payload(
     client: &Client,
     base_url: &str,
-    rps: u64,
-    duration_secs: u64,
-    concurrency: u64,
-) -> Stats {
-    let stats = Stats::new();
-    // TPM is serial, so cap concurrency low
-    let effective_concurrency = concurrency.min(4);
-    let sem = Arc::new(Semaphore::new(effective_concurrency as usize));
-    let interval = Duration::from_secs_f64(1.0 / rps as f64);
-    let start = Instant::now();
-    let deadline = start + Duration::from_secs(duration_secs);
-    let url = format!("{base_url}/attest");
+    allow_debug: bool,
+) -> Result<String, String> {
+    let resp = client
+        .post(format!("{base_url}/attest"))
+        .json(&json!({"platform": "auto"}))
+        .send()
+        .await
+        .map_err(|e| format!("attest request failed: {e}"))?;
 
-    println!(
-        "  Firing at {rps} req/s for {duration_secs}s (concurrency cap: {effective_concurrency}, TPM-limited)"
-    );
-
-    let mut ticker = time::interval(interval);
-    let mut spawned = 0u64;
-
-    loop {
-        ticker.tick().await;
-        if Instant::now() >= deadline {
-            break;
-        }
-
-        let permit = sem.clone().acquire_owned().await.unwrap();
-        let client = client.clone();
-        let url = url.clone();
-        let stats = stats.clone();
-        spawned += 1;
-
-        tokio::spawn(async move {
-            let t0 = Instant::now();
-            let result = client
-                .post(&url)
-                .json(&json!({"platform": "auto"}))
-                .send()
-                .await;
-
-            let latency = t0.elapsed();
-            let ok = match result {
-                Ok(resp) => resp.status().is_success(),
-                Err(_) => false,
-            };
-            stats.record(ok, latency).await;
-            drop(permit);
-        });
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("attest returned {status}: {body}"));
     }
 
-    let _ = sem.acquire_many(effective_concurrency as u32).await;
+    let json: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse attest response: {e}"))?;
 
-    println!("  Spawned {spawned} requests");
-    stats
-}
+    let mut verify_body = json!({ "evidence": json });
+    if allow_debug {
+        verify_body["params"] = json!({ "allow_debug": true });
+    }
 
-fn parse_arg(args: &[String], flag: &str, default: &str) -> String {
-    args.windows(2)
-        .find(|w| w[0] == flag)
-        .map(|w| w[1].clone())
-        .unwrap_or_else(|| default.to_string())
+    serde_json::to_string(&verify_body).map_err(|e| format!("serialize: {e}"))
 }
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
-    let base_url = parse_arg(&args, "--url", "http://127.0.0.1:8400");
-    let rps: u64 = parse_arg(&args, "--rps", "50")
-        .parse()
-        .expect("invalid --rps");
-    let duration: u64 = parse_arg(&args, "--duration", "10")
-        .parse()
-        .expect("invalid --duration");
-    let endpoint = parse_arg(&args, "--endpoint", "verify");
-    let concurrency: u64 = parse_arg(&args, "--concurrency", &(rps * 2).to_string())
-        .parse()
-        .expect("invalid --concurrency");
+    let cli = Cli::parse();
+    let concurrency = cli.concurrency.unwrap_or(cli.rps * 2);
 
     println!("Attestation Service Load Test");
-    println!("  URL:         {base_url}");
-    println!("  Endpoint:    {endpoint}");
-    println!("  Target RPS:  {rps}");
-    println!("  Duration:    {duration}s");
+    println!("  URL:         {}", cli.url);
+    let endpoint_name = match cli.endpoint {
+        Endpoint::Verify => "verify",
+        Endpoint::Attest => "attest",
+        Endpoint::Both => "both",
+    };
+    println!("  Endpoint:    {endpoint_name}");
+    println!("  Target RPS:  {}", cli.rps);
+    println!("  Duration:    {}s", cli.duration);
     println!("  Concurrency: {concurrency}");
 
     let client = Client::builder()
@@ -274,7 +248,7 @@ async fn main() {
 
     // Health check
     let health = client
-        .get(format!("{base_url}/health"))
+        .get(format!("{}/health", cli.url))
         .send()
         .await
         .expect("service not reachable — is it running?");
@@ -285,9 +259,12 @@ async fn main() {
     );
     println!("  Health:      OK\n");
 
-    if endpoint == "verify" || endpoint == "both" {
-        println!("[1/2] Generating attestation evidence for verify payload...");
-        let body = get_evidence(&client, &base_url)
+    let run_verify = matches!(cli.endpoint, Endpoint::Verify | Endpoint::Both);
+    let run_attest = matches!(cli.endpoint, Endpoint::Attest | Endpoint::Both);
+
+    if run_verify {
+        println!("Generating attestation evidence for verify payload...");
+        let body = get_verify_payload(&client, &cli.url, cli.allow_debug)
             .await
             .expect("failed to get evidence");
         println!("  Evidence size: {} bytes", body.len());
@@ -295,30 +272,46 @@ async fn main() {
         // Warmup: single request to prime caches
         println!("  Warming up (1 request)...");
         let _ = client
-            .post(format!("{base_url}/verify"))
+            .post(format!("{}/verify", cli.url))
             .header("content-type", "application/json")
             .body(body.clone())
             .send()
             .await;
 
-        println!("\n[2/2] Running VERIFY load test...");
+        println!("\nRunning VERIFY load test...");
+        let verify_url = format!("{}/verify", cli.url);
         let start = Instant::now();
-        let stats = run_verify_load(&client, &base_url, &body, rps, duration, concurrency).await;
+        let stats = run_load(
+            &client,
+            &verify_url,
+            Some(&body),
+            cli.rps,
+            cli.duration,
+            concurrency,
+        )
+        .await;
         stats.report("VERIFY", start.elapsed()).await;
     }
 
-    if endpoint == "attest" || endpoint == "both" {
+    if run_attest {
         println!("\nRunning ATTEST load test...");
-        let attest_rps = rps.min(20); // TPM can't handle high RPS
-        println!("  (Capping attest RPS to {attest_rps} — TPM is a serial device)");
+        let attest_url = format!("{}/attest", cli.url);
         let start = Instant::now();
-        let stats = run_attest_load(&client, &base_url, attest_rps, duration, concurrency).await;
+        let stats = run_load(
+            &client,
+            &attest_url,
+            None,
+            cli.rps,
+            cli.duration,
+            concurrency,
+        )
+        .await;
         stats.report("ATTEST", start.elapsed()).await;
     }
 
     // Final cache status
     println!("\n--- Cache Status ---");
-    if let Ok(resp) = client.get(format!("{base_url}/health")).send().await {
+    if let Ok(resp) = client.get(format!("{}/health", cli.url)).send().await {
         if let Ok(json) = resp.json::<Value>().await {
             println!(
                 "  {}",
