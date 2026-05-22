@@ -13,7 +13,6 @@
 /criterion/
 
 # wasm-pack / wasm-bindgen output
-/wasm-test/pkg
 **/pkg/
 
 # Editor / IDE

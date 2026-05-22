@@ -30,7 +30,7 @@ dstack = ["tdx"]       # dstack proxies TDX quotes via Unix socket
 #
 # Azure vTPM attesters use az-cvm-vtpm directly with default features disabled
 # to avoid the az-cvm-vtpm verifier/OpenSSL path while composing with the
-# combined SNP/TDX attestation-service feature set.
+# combined SNP/TDX attestation-api feature set.
 attest = ["snp", "tdx", "dep:libc", "dep:tempfile", "dep:pem-rfc7468", "dep:az-cvm-vtpm", "dep:zerocopy"]
 az-snp-attest = ["attest", "az-snp"] # Compatibility alias; use `attest` + `az-snp`.
 az-tdx-attest = ["attest", "az-tdx"] # Compatibility alias; use `attest` + `az-tdx`.

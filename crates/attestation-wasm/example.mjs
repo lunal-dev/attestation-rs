@@ -8,7 +8,7 @@
 //
 // Usage:
 //   cargo build -p attestation-cli --features attest
-//   cd crates/attestation-wasm-test && wasm-pack build --target nodejs
+//   cd crates/attestation-wasm && wasm-pack build --target nodejs
 //   node example.mjs
 //
 
@@ -77,7 +77,7 @@ console.log(`Full evidence with cert chain: ${JSON.stringify(evidence).length} b
 // --- Step 3: Verify in WASM with report_data binding ---
 console.log('\n=== Step 3: Verifying in WASM (with report_data check) ===\n');
 
-const wasm = await import('./pkg/attestation_wasm_test.js');
+const wasm = await import('./pkg/attestation_wasm.js');
 const nonceBytes = new TextEncoder().encode(nonce);
 
 const t0 = performance.now();

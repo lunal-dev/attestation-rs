@@ -1,5 +1,5 @@
 [package]
-name = "attestation-service"
+name = "attestation-api"
 version = "0.1.0"
 edition = "2021"
 description = "REST API service wrapping the attestation library"

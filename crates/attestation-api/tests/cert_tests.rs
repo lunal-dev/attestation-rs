@@ -1,4 +1,4 @@
-use attestation_service::token::issuer::TokenIssuer;
+use attestation_api::token::issuer::TokenIssuer;
 
 #[test]
 fn config_parse_explicit_values() {
@@ -22,7 +22,7 @@ fn config_parse_explicit_values() {
         enabled = false
     "#;
 
-    let config: attestation_service::config::Config = toml::from_str(toml_str).unwrap();
+    let config: attestation_api::config::Config = toml::from_str(toml_str).unwrap();
     assert_eq!(config.server.bind, "0.0.0.0:9000");
     assert_eq!(config.auth.api_keys.len(), 2);
     assert!(!config.attestation.enabled);
@@ -37,7 +37,7 @@ fn config_parse_explicit_values() {
 
 #[test]
 fn config_rejects_unknown_attestation_platform() {
-    let mut config = attestation_service::config::Config::default();
+    let mut config = attestation_api::config::Config::default();
     config.attestation.platforms = vec!["snp".to_string(), "not-a-platform".to_string()];
 
     let err = config.validate().unwrap_err();

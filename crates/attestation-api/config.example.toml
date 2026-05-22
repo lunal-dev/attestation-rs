@@ -22,7 +22,7 @@ require_crl = false               # true = fail-closed on CRL fetch errors
 
 [token]
 enabled = false
-issuer = "attestation-service"
+issuer = "attestation-api"
 duration_minutes = 5
 key_path = ""                     # Empty = ephemeral EC key
 

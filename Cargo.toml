@@ -3,14 +3,14 @@ resolver = "2"
 members = [
     "crates/attestation",
     "crates/attestation-cli",
-    "crates/attestation-service",
-    "crates/attestation-wasm-test",
+    "crates/attestation-api",
+    "crates/attestation-wasm",
 ]
 default-members = [
     "crates/attestation",
     "crates/attestation-cli",
-    "crates/attestation-service",
-    "crates/attestation-wasm-test",
+    "crates/attestation-api",
+    "crates/attestation-wasm",
 ]
 
 [workspace.dependencies]

@@ -26,16 +26,16 @@ A REST API service for generating and verifying Trusted Execution Environment (T
 
 ```bash
 # Build
-cargo build -p attestation-service --release
+cargo build -p attestation-api --release
 
 # Run with default config (config.toml)
-cargo run -p attestation-service --release
+cargo run -p attestation-api --release
 
 # Run with a custom config
-cargo run -p attestation-service --release -- -c crates/attestation-service/config.example.toml
+cargo run -p attestation-api --release -- -c crates/attestation-api/config.example.toml
 
 # Run tests
-cargo test -p attestation-service
+cargo test -p attestation-api
 
 # Build the container image from the workspace root
 docker build .
@@ -67,7 +67,7 @@ prefetch_chains = ["milan"]
 
 [token]
 enabled = false
-issuer = "attestation-service"
+issuer = "attestation-api"
 duration_minutes = 5
 key_path = ""                   # Empty = ephemeral key
 
@@ -115,10 +115,10 @@ curl -X POST http://127.0.0.1:8400/verify \
 - **Certificate caching** — Multi-layer async cache (Moka) with configurable TTLs and background refresh
 - **JWT issuance** — Optional ES256 token generation after successful verification
 - **TLS support** — Optional HTTPS with configurable cert/key paths
-- **Load testing** — Built-in load test binary (`cargo run -p attestation-service --release --bin loadtest`)
+- **Load testing** — Built-in load test binary (`cargo run -p attestation-api --release --bin loadtest`)
 - **Structured logging** — JSON-formatted tracing output
 - **Graceful shutdown** — Handles SIGTERM and Ctrl+C
 
 ## Container Image
 
-CI publishes the service image as `ghcr.io/lunal-dev/attestation-service`.
+CI publishes the service image as `ghcr.io/lunal-dev/attestation-api`.

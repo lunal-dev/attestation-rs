@@ -129,7 +129,7 @@ impl Default for TokenConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            issuer: "attestation-service".to_string(),
+            issuer: "attestation-api".to_string(),
             duration_minutes: 5,
             key_path: String::new(),
         }

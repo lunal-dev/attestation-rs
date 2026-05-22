@@ -189,18 +189,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "attestation-cli"
-version = "0.4.0"
-dependencies = [
- "attestation",
- "clap",
- "hex",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "attestation-service"
+name = "attestation-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -231,7 +220,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "attestation-wasm-test"
+name = "attestation-cli"
+version = "0.4.0"
+dependencies = [
+ "attestation",
+ "clap",
+ "hex",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "attestation-wasm"
 version = "0.1.0"
 dependencies = [
  "attestation",

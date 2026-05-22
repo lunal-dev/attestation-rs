@@ -5,16 +5,16 @@ use std::time::Duration;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use attestation_service::certs::cache::CertCache;
-use attestation_service::certs::manager;
-use attestation_service::certs::snp_provider::CachedCertProvider;
-use attestation_service::certs::tdx_provider::CachedTdxProvider;
-use attestation_service::config::Config;
-use attestation_service::token::{issuer::TokenIssuer, keys};
-use attestation_service::AppState;
+use attestation_api::certs::cache::CertCache;
+use attestation_api::certs::manager;
+use attestation_api::certs::snp_provider::CachedCertProvider;
+use attestation_api::certs::tdx_provider::CachedTdxProvider;
+use attestation_api::config::Config;
+use attestation_api::token::{issuer::TokenIssuer, keys};
+use attestation_api::AppState;
 
 #[derive(Parser)]
-#[command(name = "attestation-service", about = "TEE Attestation REST API")]
+#[command(name = "attestation-api", about = "TEE Attestation REST API")]
 struct Cli {
     /// Path to config file (TOML)
     #[arg(short, long, default_value = "config.toml")]
@@ -103,5 +103,5 @@ async fn main() -> anyhow::Result<()> {
         verifier,
     };
 
-    attestation_service::server::run(state).await
+    attestation_api::server::run(state).await
 }

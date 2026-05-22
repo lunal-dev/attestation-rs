@@ -3,10 +3,10 @@ use axum::http::{Request, StatusCode};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-use attestation_service::certs::cache::CertCache;
-use attestation_service::config::Config;
-use attestation_service::server::{build_api_router, build_router};
-use attestation_service::AppState;
+use attestation_api::certs::cache::CertCache;
+use attestation_api::config::Config;
+use attestation_api::server::{build_api_router, build_router};
+use attestation_api::AppState;
 
 /// Build a test state with no auth and attestation enabled (default).
 fn test_state() -> AppState {
@@ -18,12 +18,10 @@ fn test_state_with(f: impl FnOnce(&mut Config)) -> AppState {
     let mut config = Config::default();
     f(&mut config);
     let cert_cache = Arc::new(CertCache::new(&Default::default()));
-    let cert_provider = attestation_service::certs::snp_provider::CachedCertProvider::new(
-        cert_cache.clone(),
-        false,
-    );
+    let cert_provider =
+        attestation_api::certs::snp_provider::CachedCertProvider::new(cert_cache.clone(), false);
     let tdx_provider =
-        attestation_service::certs::tdx_provider::CachedTdxProvider::new(cert_cache.clone());
+        attestation_api::certs::tdx_provider::CachedTdxProvider::new(cert_cache.clone());
     let verifier = Arc::new(
         attestation::Verifier::new()
             .with_cert_provider(cert_provider)
@@ -438,7 +436,7 @@ async fn verify_rejects_non_json_body() {
 async fn health_reflects_token_issuer_configured() {
     let mut state = test_state();
     let signing_key = p256::ecdsa::SigningKey::random(&mut rand::thread_rng());
-    let issuer = attestation_service::token::issuer::TokenIssuer::new(
+    let issuer = attestation_api::token::issuer::TokenIssuer::new(
         signing_key,
         "test-issuer".to_string(),
         std::time::Duration::from_secs(300),
@@ -472,7 +470,7 @@ async fn health_reflects_token_issuer_configured() {
 async fn jwks_returns_keys_when_token_configured() {
     let mut state = test_state();
     let signing_key = p256::ecdsa::SigningKey::random(&mut rand::thread_rng());
-    let issuer = attestation_service::token::issuer::TokenIssuer::new(
+    let issuer = attestation_api::token::issuer::TokenIssuer::new(
         signing_key,
         "test-issuer".to_string(),
         std::time::Duration::from_secs(300),
