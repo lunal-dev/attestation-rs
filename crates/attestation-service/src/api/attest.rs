@@ -7,6 +7,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(target_os = "linux")]
 use crate::config::normalize_platform;
 use crate::error::ApiError;
 use crate::AppState;
