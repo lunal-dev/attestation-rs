@@ -242,7 +242,7 @@ pub const MAX_EVIDENCE_SIZE: usize = 10 * 1024 * 1024;
 /// overridden.
 ///
 /// ```rust,ignore
-/// let verifier = Verifier::new()?
+/// let verifier = Verifier::new()
 ///     .with_cert_provider(my_cached_provider);
 /// let result = verifier.verify(&evidence_json, &VerifyParams::default()).await?;
 /// ```
@@ -254,13 +254,14 @@ pub struct Verifier {
 }
 
 impl Verifier {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             cert_provider: Box::new(DefaultCertProvider::new()),
             tdx_provider: Box::new(DefaultTdxCollateralProvider::new()),
             #[cfg(feature = "nvidia-gpu")]
-            nras_provider: Box::new(platforms::nvidia_gpu::DefaultNrasProvider::new()?),
-        })
+            nras_provider: Box::new(platforms::nvidia_gpu::DefaultNrasProvider::new()),
+        }
     }
 
     #[must_use]
@@ -458,7 +459,7 @@ impl Verifier {
 
 impl Default for Verifier {
     fn default() -> Self {
-        Self::new().expect("Verifier::new() failed in Default impl")
+        Self::new()
     }
 }
 
@@ -472,5 +473,5 @@ impl Default for Verifier {
 /// Returns an error if the evidence is too large, malformed, targets a
 /// platform not compiled in, or fails signature/collateral verification.
 pub async fn verify(evidence_json: &[u8], params: &VerifyParams) -> Result<VerificationResult> {
-    Verifier::new()?.verify(evidence_json, params).await
+    Verifier::new().verify(evidence_json, params).await
 }

@@ -143,12 +143,19 @@ impl JwksCacheEntry {
     }
 }
 
+impl Default for DefaultNrasProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DefaultNrasProvider {
-    pub fn new() -> Result<Self> {
+    #[must_use]
+    pub fn new() -> Self {
         Self::with_urls(default_gpu_url(), default_switch_url())
     }
 
-    pub fn with_urls(gpu_url: String, switch_url: String) -> Result<Self> {
+    pub fn with_urls(gpu_url: String, switch_url: String) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         let builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -157,15 +164,15 @@ impl DefaultNrasProvider {
         let builder = reqwest::Client::builder();
         let client = builder
             .build()
-            .map_err(|e| AttestationError::NrasRequestFailed(format!("HTTP client init: {e}")))?;
-        Ok(Self {
+            .expect("reqwest client builder with default config never fails");
+        Self {
             gpu_url,
             switch_url,
             claims_version: "2.0".into(),
             allow_hold_cert: env_allow_hold_cert(),
             client,
             jwks_cache: std::sync::Arc::new(std::sync::RwLock::new(JwksCache::default())),
-        })
+        }
     }
 
     /// Override the claims schema version NRAS includes in tokens (default 2.0).
