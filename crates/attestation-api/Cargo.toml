@@ -4,8 +4,16 @@ version = "0.1.0"
 edition = "2021"
 description = "REST API service wrapping the attestation library"
 
+[features]
+default = []
+# Enable the SDK-FFI path so /attest can produce NVIDIA GPU evidence on
+# CC-mode Hopper/Blackwell hosts. Builds require libclang + cmake; runtime
+# needs libnvat.so. Deployments that only verify (no attester role) should
+# leave this off.
+nvidia-gpu-attest = ["attestation/nvidia-gpu-attest"]
+
 [dependencies]
-attestation = { workspace = true, features = ["attest"] }
+attestation = { workspace = true, features = ["attest", "nvidia-gpu"] }
 # Web framework
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
