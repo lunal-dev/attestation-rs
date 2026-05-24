@@ -184,7 +184,15 @@ pub async fn attest(
             serde_json::to_value(&evidence)
                 .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?
         }
-        #[cfg(not(all(feature = "snp", feature = "tdx", feature = "az-snp", feature = "az-tdx", feature = "gcp-snp", feature = "gcp-tdx", feature = "dstack")))]
+        #[cfg(not(all(
+            feature = "snp",
+            feature = "tdx",
+            feature = "az-snp",
+            feature = "az-tdx",
+            feature = "gcp-snp",
+            feature = "gcp-tdx",
+            feature = "dstack"
+        )))]
         other => return Err(AttestationError::PlatformNotEnabled(other.to_string())),
     };
 
@@ -319,7 +327,9 @@ impl Verifier {
             }
         }
 
-        let result = self.verify_platform(envelope.platform, envelope.evidence, params).await?;
+        let result = self
+            .verify_platform(envelope.platform, envelope.evidence, params)
+            .await?;
 
         #[cfg(feature = "nvidia-gpu")]
         let result = self
@@ -339,17 +349,15 @@ impl Verifier {
         match platform {
             #[cfg(feature = "snp")]
             PlatformType::Snp => {
-                let ev: platforms::snp::evidence::SnpEvidence =
-                    serde_json::from_value(evidence)
-                        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+                let ev: platforms::snp::evidence::SnpEvidence = serde_json::from_value(evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
                 platforms::snp::verify::verify_evidence(&ev, params, self.cert_provider.as_ref())
                     .await
             }
             #[cfg(feature = "tdx")]
             PlatformType::Tdx => {
-                let ev: platforms::tdx::evidence::TdxEvidence =
-                    serde_json::from_value(evidence)
-                        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+                let ev: platforms::tdx::evidence::TdxEvidence = serde_json::from_value(evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
                 platforms::tdx::verify::verify_evidence(
                     &ev,
                     params,
@@ -379,9 +387,8 @@ impl Verifier {
             }
             #[cfg(feature = "gcp-snp")]
             PlatformType::GcpSnp => {
-                let ev: platforms::snp::evidence::SnpEvidence =
-                    serde_json::from_value(evidence)
-                        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+                let ev: platforms::snp::evidence::SnpEvidence = serde_json::from_value(evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
                 platforms::gcp_snp::verify::verify_evidence(
                     &ev,
                     params,
@@ -391,9 +398,8 @@ impl Verifier {
             }
             #[cfg(feature = "gcp-tdx")]
             PlatformType::GcpTdx => {
-                let ev: platforms::tdx::evidence::TdxEvidence =
-                    serde_json::from_value(evidence)
-                        .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
+                let ev: platforms::tdx::evidence::TdxEvidence = serde_json::from_value(evidence)
+                    .map_err(|e| AttestationError::EvidenceDeserialize(e.to_string()))?;
                 platforms::gcp_tdx::verify::verify_evidence(
                     &ev,
                     params,
@@ -413,7 +419,15 @@ impl Verifier {
                 )
                 .await
             }
-            #[cfg(not(all(feature = "snp", feature = "tdx", feature = "az-snp", feature = "az-tdx", feature = "gcp-snp", feature = "gcp-tdx", feature = "dstack")))]
+            #[cfg(not(all(
+                feature = "snp",
+                feature = "tdx",
+                feature = "az-snp",
+                feature = "az-tdx",
+                feature = "gcp-snp",
+                feature = "gcp-tdx",
+                feature = "dstack"
+            )))]
             other => Err(AttestationError::PlatformNotEnabled(other.to_string())),
         }
     }

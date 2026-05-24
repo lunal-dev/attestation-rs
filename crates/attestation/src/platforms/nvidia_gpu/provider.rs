@@ -133,9 +133,13 @@ struct JwksCacheEntry {
 impl JwksCacheEntry {
     fn is_fresh(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        { self.fetched_at.elapsed() < JWKS_TTL }
+        {
+            self.fetched_at.elapsed() < JWKS_TTL
+        }
         #[cfg(target_arch = "wasm32")]
-        { true }
+        {
+            true
+        }
     }
 }
 
@@ -188,16 +192,18 @@ impl DefaultNrasProvider {
             .await
             .map_err(|e| AttestationError::JwksFetch(format!("parse: {e}")))?;
         if let Ok(mut cache) = self.jwks_cache.write() {
-            cache.entries.insert(url, JwksCacheEntry {
-                jwks: jwks.clone(),
-                #[cfg(not(target_arch = "wasm32"))]
-                fetched_at: std::time::Instant::now(),
-            });
+            cache.entries.insert(
+                url,
+                JwksCacheEntry {
+                    jwks: jwks.clone(),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    fetched_at: std::time::Instant::now(),
+                },
+            );
         }
         Ok(jwks)
     }
 }
-
 
 /// Derive the JWKS URL for a given NRAS endpoint by replacing the path with
 /// `/.well-known/jwks.json` and dropping any query/fragment.
@@ -205,12 +211,13 @@ impl DefaultNrasProvider {
 /// Hand-rolled to avoid pulling in the `url` crate (keeps the WASM bundle
 /// small); the input space is the tightly controlled NRAS endpoint URLs.
 pub fn jwks_url_for_endpoint(endpoint: &str) -> Result<String> {
-    let (scheme, rest) = endpoint.split_once("://").ok_or_else(|| {
-        AttestationError::JwksFetch(format!("invalid NRAS URL: {endpoint}"))
-    })?;
-    let host = rest.split('/').next().ok_or_else(|| {
-        AttestationError::JwksFetch(format!("invalid NRAS URL: {endpoint}"))
-    })?;
+    let (scheme, rest) = endpoint
+        .split_once("://")
+        .ok_or_else(|| AttestationError::JwksFetch(format!("invalid NRAS URL: {endpoint}")))?;
+    let host = rest
+        .split('/')
+        .next()
+        .ok_or_else(|| AttestationError::JwksFetch(format!("invalid NRAS URL: {endpoint}")))?;
     Ok(format!("{scheme}://{host}/.well-known/jwks.json"))
 }
 
@@ -291,9 +298,7 @@ impl NrasProvider for DefaultNrasProvider {
             .await
             .map_err(|e| AttestationError::NrasRequestFailed(format!("read body: {e}")))?;
         if !status.is_success() {
-            let body_preview = String::from_utf8_lossy(
-                &bytes[..bytes.len().min(512)],
-            );
+            let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
             return Err(AttestationError::NrasRequestFailed(format!(
                 "status {status}: {body_preview}"
             )));

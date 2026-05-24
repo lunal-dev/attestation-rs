@@ -8,23 +8,26 @@
 //!   # SNP host:
 //!   cargo run --example gpu_nras --features "attest snp nvidia-gpu-attest"
 
-use attestation::{AttestOptions, VerifyParams};
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("This example requires Linux.");
+}
 
+#[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() {
+    use attestation::{AttestOptions, VerifyParams};
+
     let user_nonce: Vec<u8> = (0..32).map(|i| i as u8).collect();
 
     let platform = attestation::detect().expect("no TEE platform detected");
     eprintln!("Detected platform: {platform}");
 
     eprintln!("Generating {platform} quote + NVIDIA GPU bundle…");
-    let envelope = attestation::attest_with_nvidia_gpu(
-        platform,
-        &user_nonce,
-        &AttestOptions::default(),
-    )
-    .await
-    .expect("attest_with_nvidia_gpu failed");
+    let envelope =
+        attestation::attest_with_nvidia_gpu(platform, &user_nonce, &AttestOptions::default())
+            .await
+            .expect("attest_with_nvidia_gpu failed");
 
     eprintln!("Envelope: {} bytes", envelope.len());
 

@@ -363,7 +363,9 @@ pub enum NvidiaGpuBinding {
 #[cfg(feature = "nvidia-gpu")]
 impl Default for NvidiaGpuBinding {
     fn default() -> Self {
-        NvidiaGpuBinding::Concat { algo: NvidiaGpuHashAlgo::Sha256 }
+        NvidiaGpuBinding::Concat {
+            algo: NvidiaGpuHashAlgo::Sha256,
+        }
     }
 }
 
