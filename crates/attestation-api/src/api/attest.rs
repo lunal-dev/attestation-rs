@@ -67,7 +67,8 @@ pub async fn handler(
             {
                 return Err(ApiError::BadRequest(
                     "nvidia_gpu=true requires this service to be built with the \
-                     `nvidia-gpu-attest` cargo feature".to_string(),
+                     `nvidia-gpu-attest` cargo feature"
+                        .to_string(),
                 ));
             }
         } else {

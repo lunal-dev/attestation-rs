@@ -69,11 +69,8 @@ async fn main() -> anyhow::Result<()> {
     // fail if URLs are malformed — treat that as a hard config error.
     let gpu_url = resolve_nras_gpu_url(&config.certs);
     let switch_url = resolve_nras_switch_url(&config.certs);
-    let nras_provider = CachedNrasProvider::new(
-        cert_cache.clone(),
-        gpu_url.clone(),
-        switch_url.clone(),
-    )?;
+    let nras_provider =
+        CachedNrasProvider::new(cert_cache.clone(), gpu_url.clone(), switch_url.clone())?;
     let jwks_handle = nras_provider.refresh_handle();
     tracing::info!(gpu = %gpu_url, switch = %switch_url, "configured NRAS endpoints");
 
@@ -84,11 +81,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Spawn background cert tasks and monitor for panics
-    let bg_handles = manager::spawn_background_tasks(
-        cert_cache.clone(),
-        &config.certs,
-        Some(jwks_handle),
-    );
+    let bg_handles =
+        manager::spawn_background_tasks(cert_cache.clone(), &config.certs, Some(jwks_handle));
     for handle in bg_handles {
         tokio::spawn(async move {
             if let Err(e) = handle.await {
@@ -114,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
     let cert_provider = CachedCertProvider::new(cert_cache.clone(), config.certs.require_crl);
     let tdx_provider = CachedTdxProvider::new(cert_cache.clone());
     let verifier = Arc::new(
-        attestation::Verifier::new()?
+        attestation::Verifier::new()
             .with_cert_provider(cert_provider)
             .with_tdx_provider(tdx_provider)
             .with_nras_provider(nras_provider),

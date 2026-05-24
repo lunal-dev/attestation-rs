@@ -30,7 +30,7 @@ impl CachedNrasProvider {
     ) -> attestation::Result<Self> {
         let gpu_jwks_url = jwks_url_for_endpoint(&gpu_url)?;
         let switch_jwks_url = jwks_url_for_endpoint(&switch_url)?;
-        let inner = DefaultNrasProvider::with_urls(gpu_url, switch_url)?;
+        let inner = DefaultNrasProvider::with_urls(gpu_url, switch_url);
         Ok(Self {
             cache,
             inner,
@@ -115,4 +115,3 @@ impl CachedNrasProvider {
         }
     }
 }
-

@@ -24,7 +24,6 @@ fn test_state_with(f: impl FnOnce(&mut Config)) -> AppState {
         attestation_api::certs::tdx_provider::CachedTdxProvider::new(cert_cache.clone());
     let verifier = Arc::new(
         attestation::Verifier::new()
-            .expect("Verifier::new()")
             .with_cert_provider(cert_provider)
             .with_tdx_provider(tdx_provider),
     );
@@ -202,6 +201,7 @@ async fn attest_endpoint() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn attest_rejects_disallowed_platform_before_hardware_access() {
     let state = test_state_with(|c| {
