@@ -11,8 +11,10 @@ use nv_attestation_sdk::{GpuEvidenceSource, Nonce, NvatSdk, SdkOptions, SwitchEv
 use serde::Deserialize;
 
 use crate::error::{AttestationError, Result};
-use crate::platforms::nvidia_gpu::binding::{gpu_nonce, switch_nonce};
-use crate::types::{NvidiaGpuArch, NvidiaGpuBinding, NvidiaGpuDeviceEvidence, NvidiaGpuEvidenceBundle};
+use crate::platforms::nvidia_gpu::{gpu_nonce, switch_nonce};
+use crate::types::{
+    NvidiaGpuArch, NvidiaGpuBinding, NvidiaGpuDeviceEvidence, NvidiaGpuEvidenceBundle,
+};
 
 /// The NVAT SDK must be initialized exactly once and the handle kept alive
 /// for the lifetime of all subsequent calls. We initialize lazily, leak the
@@ -30,7 +32,9 @@ fn ensure_sdk_init() -> Result<()> {
             Ok(())
         })
         .as_ref()
-        .map_err(|e| AttestationError::NvidiaGpuEvidenceCollection(format!("NVAT SDK init: {e}")))?;
+        .map_err(|e| {
+            AttestationError::NvidiaGpuEvidenceCollection(format!("NVAT SDK init: {e}"))
+        })?;
     Ok(())
 }
 
@@ -60,10 +64,15 @@ pub async fn collect_bundle(
     let user_nonce = user_nonce.to_vec();
     tokio::task::spawn_blocking(move || collect_blocking(&user_nonce, binding))
         .await
-        .map_err(|e| AttestationError::NvidiaGpuEvidenceCollection(format!("spawn_blocking: {e}")))?
+        .map_err(|e| {
+            AttestationError::NvidiaGpuEvidenceCollection(format!("spawn_blocking: {e}"))
+        })?
 }
 
-fn collect_blocking(user_nonce: &[u8], binding: NvidiaGpuBinding) -> Result<NvidiaGpuEvidenceBundle> {
+fn collect_blocking(
+    user_nonce: &[u8],
+    binding: NvidiaGpuBinding,
+) -> Result<NvidiaGpuEvidenceBundle> {
     ensure_sdk_init()?;
 
     let gpu_n_bytes = gpu_nonce(user_nonce, &binding);
@@ -76,9 +85,9 @@ fn collect_blocking(user_nonce: &[u8], binding: NvidiaGpuBinding) -> Result<Nvid
     let mut entries: Vec<SdkEvidenceEntry> = Vec::new();
 
     // Per-source failures (constructor or .collect()) mean "this device
-    // class isn't present here" — log and move on. Matches CoCo's
-    // nvidia-attester. The assertion at the bottom guarantees we collected
-    // *something*. Only a JSON-decode error from the SDK output is fatal.
+    // class isn't present here" — log and move on. The assertion at the
+    // bottom guarantees we collected *something*. Only a JSON-decode error
+    // from the SDK output is fatal.
     if let Ok(src) = GpuEvidenceSource::from_nvml() {
         match src.collect(&gpu_n) {
             Ok(ev) if !ev.is_empty() => {

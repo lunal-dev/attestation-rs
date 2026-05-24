@@ -4,10 +4,11 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 
 use crate::error::{AttestationError, Result};
-use crate::platforms::nvidia_gpu::binding::{gpu_nonce, switch_nonce};
-use crate::platforms::nvidia_gpu::claims::device_claims_from_submodule;
 use crate::platforms::nvidia_gpu::provider::{Jwks, NrasEvidenceEntry, NrasProvider, NrasRequest};
-use crate::types::{NvidiaGpuArch, NvidiaGpuClaims, NvidiaGpuEvidenceBundle, VerifyParams};
+use crate::platforms::nvidia_gpu::{gpu_nonce, switch_nonce};
+use crate::types::{
+    NvidiaGpuArch, NvidiaGpuClaims, NvidiaGpuDeviceClaims, NvidiaGpuEvidenceBundle, VerifyParams,
+};
 
 /// Verify a GPU bundle end-to-end:
 /// - Group devices by arch (NRAS requires one arch per request).
@@ -52,14 +53,18 @@ pub async fn verify_bundle(
     if let Some(whitelist) = &params.nvidia_gpu_expected_archs {
         for dev in &bundle.devices {
             if !whitelist.contains(&dev.arch) {
-                return Err(AttestationError::NvidiaGpuArchNotAllowed(dev.arch.to_string()));
+                return Err(AttestationError::NvidiaGpuArchNotAllowed(
+                    dev.arch.to_string(),
+                ));
             }
         }
     }
 
     // NRAS contract: one request per arch. Group accordingly.
-    let mut by_arch: std::collections::BTreeMap<NvidiaGpuArch, Vec<&crate::types::NvidiaGpuDeviceEvidence>> =
-        Default::default();
+    let mut by_arch: std::collections::BTreeMap<
+        NvidiaGpuArch,
+        Vec<&crate::types::NvidiaGpuDeviceEvidence>,
+    > = Default::default();
     for dev in &bundle.devices {
         by_arch.entry(dev.arch).or_default().push(dev);
     }
@@ -136,7 +141,8 @@ pub async fn verify_bundle(
     if aggregated.devices.len() != bundle.devices.len() {
         log::warn!(
             "NVIDIA GPU attestation: device count mismatch (expected {}, got {})",
-            bundle.devices.len(), aggregated.devices.len()
+            bundle.devices.len(),
+            aggregated.devices.len()
         );
         return Err(AttestationError::NvidiaGpuDeviceCountMismatch {
             expected: bundle.devices.len(),
@@ -189,11 +195,9 @@ fn split_eat_response(v: &serde_json::Value) -> Result<(String, Vec<(String, Str
     }
     if let Some(arr) = v.as_array() {
         if arr.len() == 2 {
-            let inner = arr[0]
-                .as_array()
-                .ok_or_else(|| {
-                    AttestationError::NrasResponseParse("EAT[0] is not an array".into())
-                })?;
+            let inner = arr[0].as_array().ok_or_else(|| {
+                AttestationError::NrasResponseParse("EAT[0] is not an array".into())
+            })?;
             if inner.first().and_then(|v| v.as_str()) != Some("JWT") {
                 return Err(AttestationError::NrasResponseParse(
                     "EAT[0][0] is not \"JWT\"".into(),
@@ -221,7 +225,9 @@ fn split_eat_response(v: &serde_json::Value) -> Result<(String, Vec<(String, Str
         let s = v.to_string();
         if s.len() > 512 {
             let mut end = 512;
-            while !s.is_char_boundary(end) { end -= 1; }
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
             format!("{}...", &s[..end])
         } else {
             s
@@ -237,7 +243,9 @@ fn split_eat_response(v: &serde_json::Value) -> Result<(String, Vec<(String, Str
 pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
-        return Err(AttestationError::JwsVerification("not a compact JWS".into()));
+        return Err(AttestationError::JwsVerification(
+            "not a compact JWS".into(),
+        ));
     }
     let header_bytes = URL_SAFE_NO_PAD
         .decode(parts[0])
@@ -288,7 +296,9 @@ pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         if now > exp {
-            return Err(AttestationError::JwsVerification("JWT has expired (exp)".into()));
+            return Err(AttestationError::JwsVerification(
+                "JWT has expired (exp)".into(),
+            ));
         }
     }
 
@@ -334,24 +344,23 @@ fn es384_verifying_key_from_jwks_entry(
 /// GPU/Switch Intermediate 004 — valid 2025-12-08 to 2029-12-08
 /// Subject: CN=NVIDIA Attestation Service GPU Intermediate 004
 /// Issuer:  CN=NVIDIA Attestation Service CA 001
-const NRAS_TRUSTED_SPKI_SHA256: &[&str] = &[
-    "fd32837f954e2c45db073105166dfe6985ae0480bb113fba63b091a75affe896",
-];
+const NRAS_TRUSTED_SPKI_SHA256: &[&str] =
+    &["fd32837f954e2c45db073105166dfe6985ae0480bb113fba63b091a75affe896"];
 
 /// Validate the x5c certificate chain and return the leaf's P-384 verifying key.
 ///
 /// Checks: each cert is signed by the next in the chain (EC or RSA), all
 /// certs are within their validity period, and the topmost cert's SPKI
 /// matches a pinned NVIDIA trust anchor.
-fn verify_x5c_chain_and_extract_key(
-    chain: &[String],
-) -> Result<p384::ecdsa::VerifyingKey> {
+fn verify_x5c_chain_and_extract_key(chain: &[String]) -> Result<p384::ecdsa::VerifyingKey> {
     use sha2::Digest;
     use spki::DecodePublicKey;
     use x509_cert::der::Decode;
 
     if chain.is_empty() {
-        return Err(AttestationError::JwsVerification("x5c chain is empty".into()));
+        return Err(AttestationError::JwsVerification(
+            "x5c chain is empty".into(),
+        ));
     }
 
     let certs: Vec<(Vec<u8>, x509_cert::Certificate)> = chain
@@ -379,21 +388,29 @@ fn verify_x5c_chain_and_extract_key(
             .map_err(|_| AttestationError::JwsVerification("system time overflow".into()))?;
         for (i, (_der, cert)) in certs.iter().enumerate() {
             let validity = &cert.tbs_certificate.validity;
-            let nb_unix: i64 = validity.not_before.to_date_time().unix_duration().as_secs()
+            let nb_unix: i64 = validity
+                .not_before
+                .to_date_time()
+                .unix_duration()
+                .as_secs()
                 .try_into()
-                .map_err(|_| AttestationError::JwsVerification(
-                    format!("x5c[{i}] not_before overflow"),
-                ))?;
+                .map_err(|_| {
+                    AttestationError::JwsVerification(format!("x5c[{i}] not_before overflow"))
+                })?;
             if now_secs < nb_unix {
                 return Err(AttestationError::JwsVerification(format!(
                     "x5c[{i}] certificate not yet valid"
                 )));
             }
-            let na_unix: i64 = validity.not_after.to_date_time().unix_duration().as_secs()
+            let na_unix: i64 = validity
+                .not_after
+                .to_date_time()
+                .unix_duration()
+                .as_secs()
                 .try_into()
-                .map_err(|_| AttestationError::JwsVerification(
-                    format!("x5c[{i}] not_after overflow"),
-                ))?;
+                .map_err(|_| {
+                    AttestationError::JwsVerification(format!("x5c[{i}] not_after overflow"))
+                })?;
             if now_secs > na_unix {
                 return Err(AttestationError::JwsVerification(format!(
                     "x5c[{i}] certificate has expired"
@@ -422,12 +439,10 @@ fn verify_x5c_chain_and_extract_key(
 
     // Extract leaf public key.
     let leaf_spki = &certs[0].1.tbs_certificate.subject_public_key_info;
-    let leaf_spki_der = spki::der::Encode::to_der(leaf_spki).map_err(|e| {
-        AttestationError::JwsVerification(format!("x5c leaf spki encode: {e}"))
-    })?;
-    p384::ecdsa::VerifyingKey::from_public_key_der(&leaf_spki_der).map_err(|e| {
-        AttestationError::JwsVerification(format!("x5c leaf ES384 key: {e}"))
-    })
+    let leaf_spki_der = spki::der::Encode::to_der(leaf_spki)
+        .map_err(|e| AttestationError::JwsVerification(format!("x5c leaf spki encode: {e}")))?;
+    p384::ecdsa::VerifyingKey::from_public_key_der(&leaf_spki_der)
+        .map_err(|e| AttestationError::JwsVerification(format!("x5c leaf ES384 key: {e}")))
 }
 
 /// Verify that `cert` was signed by `issuer`, dispatching on the certificate's
@@ -476,35 +491,90 @@ fn verify_cert_signature(
 fn verify_ecdsa_p384(issuer_spki: &[u8], tbs: &[u8], sig_bytes: &[u8]) -> bool {
     use p384::ecdsa::signature::Verifier as _;
     use spki::DecodePublicKey as _;
-    let Ok(key) = p384::ecdsa::VerifyingKey::from_public_key_der(issuer_spki) else { return false; };
-    let Ok(sig) = p384::ecdsa::DerSignature::from_bytes(sig_bytes.into()) else { return false; };
+    let Ok(key) = p384::ecdsa::VerifyingKey::from_public_key_der(issuer_spki) else {
+        return false;
+    };
+    let Ok(sig) = p384::ecdsa::DerSignature::from_bytes(sig_bytes) else {
+        return false;
+    };
     key.verify(tbs, &sig).is_ok()
 }
 
 fn verify_ecdsa_p256(issuer_spki: &[u8], tbs: &[u8], sig_bytes: &[u8]) -> bool {
     use p256::ecdsa::signature::Verifier as _;
     use spki::DecodePublicKey as _;
-    let Ok(key) = p256::ecdsa::VerifyingKey::from_public_key_der(issuer_spki) else { return false; };
-    let Ok(sig) = p256::ecdsa::DerSignature::from_bytes(sig_bytes.into()) else { return false; };
+    let Ok(key) = p256::ecdsa::VerifyingKey::from_public_key_der(issuer_spki) else {
+        return false;
+    };
+    let Ok(sig) = p256::ecdsa::DerSignature::from_bytes(sig_bytes) else {
+        return false;
+    };
     key.verify(tbs, &sig).is_ok()
 }
 
 fn verify_rsa_sha256(issuer_spki: &[u8], tbs: &[u8], sig_bytes: &[u8]) -> bool {
     use signature::Verifier as _;
     use spki::DecodePublicKey as _;
-    let Ok(key) = rsa::RsaPublicKey::from_public_key_der(issuer_spki) else { return false; };
+    let Ok(key) = rsa::RsaPublicKey::from_public_key_der(issuer_spki) else {
+        return false;
+    };
     let verifier = rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(key);
-    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(sig_bytes) else { return false; };
+    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(sig_bytes) else {
+        return false;
+    };
     verifier.verify(tbs, &sig).is_ok()
 }
 
 fn verify_rsa_sha384(issuer_spki: &[u8], tbs: &[u8], sig_bytes: &[u8]) -> bool {
     use signature::Verifier as _;
     use spki::DecodePublicKey as _;
-    let Ok(key) = rsa::RsaPublicKey::from_public_key_der(issuer_spki) else { return false; };
+    let Ok(key) = rsa::RsaPublicKey::from_public_key_der(issuer_spki) else {
+        return false;
+    };
     let verifier = rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(key);
-    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(sig_bytes) else { return false; };
+    let Ok(sig) = rsa::pkcs1v15::Signature::try_from(sig_bytes) else {
+        return false;
+    };
     verifier.verify(tbs, &sig).is_ok()
+}
+
+/// Decode a single GPU submodule JWT body into [`NvidiaGpuDeviceClaims`].
+fn device_claims_from_submodule(body: &serde_json::Value) -> NvidiaGpuDeviceClaims {
+    let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(String::from);
+    let b = |k: &str| body.get(k).and_then(|v| v.as_bool());
+
+    NvidiaGpuDeviceClaims {
+        arch: body
+            .get("hwmodel")
+            .and_then(|v| v.as_str())
+            .and_then(arch_from_hwmodel),
+        ueid: s("ueid"),
+        hwmodel: s("hwmodel"),
+        measres: s("measres"),
+        secboot: b("secboot"),
+        dbgstat: s("dbgstat"),
+        driver_version: s("x-nvidia-gpu-driver-version"),
+        vbios_version: s("x-nvidia-gpu-vbios-version"),
+        arch_check: b("x-nvidia-gpu-arch-check"),
+        nonce_match: b("x-nvidia-gpu-attestation-report-nonce-match"),
+        report_signature_verified: b("x-nvidia-gpu-attestation-report-signature-verified"),
+        driver_rim_fetched: b("x-nvidia-gpu-driver-rim-fetched"),
+        vbios_rim_fetched: b("x-nvidia-gpu-vbios-rim-fetched"),
+        raw: body.clone(),
+    }
+}
+
+fn arch_from_hwmodel(s: &str) -> Option<NvidiaGpuArch> {
+    let up = s.to_ascii_uppercase();
+    if up.contains("HOPPER") || up.starts_with("GH100") {
+        Some(NvidiaGpuArch::Hopper)
+    } else if up.contains("BLACKWELL") || up.starts_with("GB") {
+        Some(NvidiaGpuArch::Blackwell)
+    } else if up.contains("LS10") || up.contains("SWITCH") {
+        Some(NvidiaGpuArch::Ls10)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -569,4 +639,3 @@ mod tests {
         }
     }
 }
-
