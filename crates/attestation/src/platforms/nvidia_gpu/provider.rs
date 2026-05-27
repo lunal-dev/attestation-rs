@@ -111,20 +111,21 @@ pub struct DefaultNrasProvider {
     pub switch_url: String,
     pub claims_version: String,
     pub allow_hold_cert: bool,
+    pub service_key: Option<String>,
     client: reqwest::Client,
-    jwks_cache: std::sync::Arc<std::sync::RwLock<JwksCache>>,
+    // NRAS serves a single JWKS at `/.well-known/jwks.json` per host, and both
+    // the GPU and switch endpoints (per `with_urls`) share that host in
+    // practice. A single slot is enough — reconfiguring to a different host
+    // simply evicts the prior entry on the next fetch.
+    jwks_cache: std::sync::Arc<std::sync::RwLock<Option<JwksCacheEntry>>>,
 }
 
-/// 1-hour TTL for cached JWKS entries.
+/// TTL for cached JWKS entries.
 #[cfg(not(target_arch = "wasm32"))]
-const JWKS_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
-
-#[derive(Default)]
-struct JwksCache {
-    entries: std::collections::HashMap<String, JwksCacheEntry>,
-}
+pub const JWKS_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 struct JwksCacheEntry {
+    url: String,
     jwks: Jwks,
     #[cfg(not(target_arch = "wasm32"))]
     fetched_at: std::time::Instant,
@@ -170,15 +171,10 @@ impl DefaultNrasProvider {
             switch_url,
             claims_version: "2.0".into(),
             allow_hold_cert: env_allow_hold_cert(),
+            service_key: env_service_key(),
             client,
-            jwks_cache: std::sync::Arc::new(std::sync::RwLock::new(JwksCache::default())),
+            jwks_cache: std::sync::Arc::new(std::sync::RwLock::new(None)),
         }
-    }
-
-    /// Override the claims schema version NRAS includes in tokens (default 2.0).
-    pub fn with_claims_version(mut self, v: impl Into<String>) -> Self {
-        self.claims_version = v.into();
-        self
     }
 
     fn jwks_url_for(&self, arch: NvidiaGpuArch) -> Result<String> {
@@ -198,15 +194,21 @@ impl DefaultNrasProvider {
             .json()
             .await
             .map_err(|e| AttestationError::JwksFetch(format!("parse: {e}")))?;
-        if let Ok(mut cache) = self.jwks_cache.write() {
-            cache.entries.insert(
-                url,
-                JwksCacheEntry {
-                    jwks: jwks.clone(),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    fetched_at: std::time::Instant::now(),
-                },
-            );
+        let entry = JwksCacheEntry {
+            url,
+            jwks: jwks.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            fetched_at: std::time::Instant::now(),
+        };
+        match self.jwks_cache.write() {
+            Ok(mut slot) => *slot = Some(entry),
+            Err(poisoned) => {
+                // A prior holder panicked. The cached `Option<JwksCacheEntry>`
+                // has no invariants that a partial write could violate, so
+                // recover the lock and overwrite with the fresh entry.
+                log::warn!("JWKS cache lock was poisoned; recovering and continuing");
+                *poisoned.into_inner() = Some(entry);
+            }
         }
         Ok(jwks)
     }
@@ -292,7 +294,7 @@ impl NrasProvider for DefaultNrasProvider {
         if self.allow_hold_cert {
             req = req.header(HEADER_OCSP_ALLOW_CERT_HOLD, "true");
         }
-        if let Some(key) = env_service_key() {
+        if let Some(key) = &self.service_key {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
         let resp = req
@@ -316,12 +318,20 @@ impl NrasProvider for DefaultNrasProvider {
 
     async fn jwks(&self, arch: NvidiaGpuArch) -> Result<Jwks> {
         let url = self.jwks_url_for(arch)?;
-        if let Ok(cache) = self.jwks_cache.read() {
-            if let Some(entry) = cache.entries.get(&url) {
-                if entry.is_fresh() {
-                    return Ok(entry.jwks.clone());
-                }
+        let cached = match self.jwks_cache.read() {
+            Ok(slot) => slot
+                .as_ref()
+                .and_then(|e| (e.url == url && e.is_fresh()).then(|| e.jwks.clone())),
+            Err(poisoned) => {
+                log::warn!("JWKS cache lock was poisoned; recovering and continuing");
+                poisoned
+                    .into_inner()
+                    .as_ref()
+                    .and_then(|e| (e.url == url && e.is_fresh()).then(|| e.jwks.clone()))
             }
+        };
+        if let Some(jwks) = cached {
+            return Ok(jwks);
         }
         self.fetch_jwks_uncached(arch).await
     }
@@ -350,5 +360,25 @@ mod tests {
     #[test]
     fn jwks_url_rejects_missing_scheme() {
         assert!(jwks_url_for_endpoint("nras.attestation.nvidia.com/x").is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn jwks_cache_entry_expires_after_ttl() {
+        let stale = JwksCacheEntry {
+            url: "https://example.invalid/.well-known/jwks.json".into(),
+            jwks: Jwks { keys: vec![] },
+            fetched_at: std::time::Instant::now()
+                .checked_sub(JWKS_TTL + std::time::Duration::from_secs(1))
+                .expect("instant arithmetic underflow"),
+        };
+        assert!(!stale.is_fresh(), "entry older than JWKS_TTL must be stale");
+
+        let fresh = JwksCacheEntry {
+            url: "https://example.invalid/.well-known/jwks.json".into(),
+            jwks: Jwks { keys: vec![] },
+            fetched_at: std::time::Instant::now(),
+        };
+        assert!(fresh.is_fresh(), "just-inserted entry must be fresh");
     }
 }
