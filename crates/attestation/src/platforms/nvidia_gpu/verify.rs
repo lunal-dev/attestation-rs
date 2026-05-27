@@ -24,7 +24,37 @@ pub async fn verify_bundle(
     params: &VerifyParams,
     provider: &dyn NrasProvider,
 ) -> Result<NvidiaGpuClaims> {
-    const MAX_GPU_DEVICES: usize = 32;
+    let user_nonce = check_preconditions(bundle, params)?;
+
+    let mut aggregated = NvidiaGpuClaims {
+        overall_ok: true,
+        eat_nonce: None,
+        nonce_binding_ok: true,
+        devices: Vec::with_capacity(bundle.devices.len()),
+        overall_raw: serde_json::Value::Null,
+    };
+
+    for (arch, devices) in group_by_arch(bundle) {
+        let group = verify_arch_group(arch, &devices, user_nonce, bundle, provider).await?;
+        fold_arch_group(&mut aggregated, group);
+    }
+
+    final_checks(&aggregated, bundle.devices.len())?;
+    log::info!(
+        "NVIDIA GPU attestation passed: {} device(s), nonce_binding_ok=true",
+        aggregated.devices.len()
+    );
+    Ok(aggregated)
+}
+
+const MAX_GPU_DEVICES: usize = 32;
+
+/// Validate bundle and params before any network or crypto work. Returns the
+/// validated `user_nonce` slice on success.
+fn check_preconditions<'a>(
+    bundle: &NvidiaGpuEvidenceBundle,
+    params: &'a VerifyParams,
+) -> Result<&'a [u8]> {
     if bundle.devices.is_empty() {
         return Err(AttestationError::NvidiaGpuBundleEmpty);
     }
@@ -60,7 +90,13 @@ pub async fn verify_bundle(
         }
     }
 
-    // NRAS contract: one request per arch. Group accordingly.
+    Ok(user_nonce)
+}
+
+/// NRAS requires one request per arch. Group the bundle accordingly.
+fn group_by_arch(
+    bundle: &NvidiaGpuEvidenceBundle,
+) -> std::collections::BTreeMap<NvidiaGpuArch, Vec<&crate::types::NvidiaGpuDeviceEvidence>> {
     let mut by_arch: std::collections::BTreeMap<
         NvidiaGpuArch,
         Vec<&crate::types::NvidiaGpuDeviceEvidence>,
@@ -68,84 +104,111 @@ pub async fn verify_bundle(
     for dev in &bundle.devices {
         by_arch.entry(dev.arch).or_default().push(dev);
     }
+    by_arch
+}
 
-    let mut aggregated = NvidiaGpuClaims {
-        overall_ok: true,
-        eat_nonce: None,
-        nonce_binding_ok: true,
-        devices: Vec::with_capacity(bundle.devices.len()),
-        overall_raw: serde_json::Value::Null,
+/// Result of attesting + verifying one arch group. The caller folds these
+/// into the running [`NvidiaGpuClaims`] aggregate.
+struct ArchGroupResult {
+    overall_ok: bool,
+    eat_nonce: Option<String>,
+    nonce_binding_ok: bool,
+    overall_raw: serde_json::Value,
+    devices: Vec<crate::types::NvidiaGpuDeviceClaims>,
+}
+
+/// Build the NRAS request, attest, JWS-verify the overall + each submodule,
+/// and check the eat_nonce binding against the derived SPDM nonce.
+async fn verify_arch_group(
+    arch: NvidiaGpuArch,
+    devices: &[&crate::types::NvidiaGpuDeviceEvidence],
+    user_nonce: &[u8],
+    bundle: &NvidiaGpuEvidenceBundle,
+    provider: &dyn NrasProvider,
+) -> Result<ArchGroupResult> {
+    let nonce_bytes = match arch {
+        NvidiaGpuArch::Ls10 => switch_nonce(user_nonce, &bundle.binding),
+        _ => gpu_nonce(user_nonce, &bundle.binding),
+    };
+    let nonce_hex = hex::encode(nonce_bytes);
+
+    let request = NrasRequest {
+        nonce: nonce_hex.clone(),
+        evidence_list: devices
+            .iter()
+            .map(|d| NrasEvidenceEntry {
+                evidence: d.evidence_b64.clone(),
+                certificate: d.cert_chain_b64.clone(),
+            })
+            .collect(),
+        arch,
+        claims_version: "2.0".into(),
     };
 
-    for (arch, devices) in by_arch {
-        let nonce_bytes = match arch {
-            NvidiaGpuArch::Ls10 => switch_nonce(user_nonce, &bundle.binding),
-            _ => gpu_nonce(user_nonce, &bundle.binding),
-        };
-        let nonce_hex = hex::encode(nonce_bytes);
+    let response = provider.attest(&request).await?;
+    let (overall_jwt, submodule_jwts) = split_eat_response(&response)?;
+    let mut jwks = provider.jwks(arch).await?;
 
-        let request = NrasRequest {
-            nonce: nonce_hex.clone(),
-            evidence_list: devices
-                .iter()
-                .map(|d| NrasEvidenceEntry {
-                    evidence: d.evidence_b64.clone(),
-                    certificate: d.cert_chain_b64.clone(),
-                })
-                .collect(),
-            arch,
-            claims_version: "2.0".into(),
-        };
+    let overall_claims =
+        verify_jws_with_kid_rotation(&overall_jwt, &mut jwks, arch, provider).await?;
+    let overall_ok = overall_claims
+        .get("x-nvidia-overall-att-result")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let eat_nonce = overall_claims
+        .get("eat_nonce")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let nonce_binding_ok = eat_nonce
+        .as_deref()
+        .map(|n| {
+            use subtle::ConstantTimeEq;
+            n.as_bytes().ct_eq(nonce_hex.as_bytes()).into()
+        })
+        .unwrap_or(false);
 
-        let response = provider.attest(&request).await?;
-        let (overall_jwt, submodule_jwts) = split_eat_response(&response)?;
-        let mut jwks = provider.jwks(arch).await?;
-
-        let overall_claims =
-            verify_jws_with_kid_rotation(&overall_jwt, &mut jwks, arch, provider).await?;
-        let overall_ok = overall_claims
-            .get("x-nvidia-overall-att-result")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let eat_nonce = overall_claims
-            .get("eat_nonce")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        let nonce_binding_ok = eat_nonce
-            .as_deref()
-            .map(|n| {
-                use subtle::ConstantTimeEq;
-                n.as_bytes().ct_eq(nonce_hex.as_bytes()).into()
-            })
-            .unwrap_or(false);
-
-        aggregated.overall_ok &= overall_ok;
-        aggregated.nonce_binding_ok &= nonce_binding_ok;
-        if aggregated.eat_nonce.is_none() {
-            aggregated.eat_nonce = eat_nonce;
+    let mut device_claims = Vec::with_capacity(submodule_jwts.len());
+    for (_name, sub_jwt) in submodule_jwts {
+        let sub_claims = verify_jws_with_kid_rotation(&sub_jwt, &mut jwks, arch, provider).await?;
+        let mut dc = device_claims_from_submodule(&sub_claims);
+        if dc.arch.is_none() {
+            dc.arch = Some(arch);
         }
-        // Last overall_raw wins; fine for v1 (rare to have multiple arches).
-        aggregated.overall_raw = overall_claims;
-
-        for (_name, sub_jwt) in submodule_jwts {
-            let sub_claims =
-                verify_jws_with_kid_rotation(&sub_jwt, &mut jwks, arch, provider).await?;
-            let mut dc = device_claims_from_submodule(&sub_claims);
-            if dc.arch.is_none() {
-                dc.arch = Some(arch);
-            }
-            aggregated.devices.push(dc);
-        }
+        device_claims.push(dc);
     }
 
-    if aggregated.devices.len() != bundle.devices.len() {
+    Ok(ArchGroupResult {
+        overall_ok,
+        eat_nonce,
+        nonce_binding_ok,
+        overall_raw: overall_claims,
+        devices: device_claims,
+    })
+}
+
+/// Merge a per-arch result into the running aggregate. `overall_raw` overwrites
+/// each iteration — fine for v1, where multiple arches in one bundle is rare.
+fn fold_arch_group(aggregated: &mut NvidiaGpuClaims, group: ArchGroupResult) {
+    aggregated.overall_ok &= group.overall_ok;
+    aggregated.nonce_binding_ok &= group.nonce_binding_ok;
+    if aggregated.eat_nonce.is_none() {
+        aggregated.eat_nonce = group.eat_nonce;
+    }
+    aggregated.overall_raw = group.overall_raw;
+    aggregated.devices.extend(group.devices);
+}
+
+/// Post-aggregation invariants: every device produced claims, overall passed,
+/// and the eat_nonce bound to our derived SPDM nonce.
+fn final_checks(aggregated: &NvidiaGpuClaims, expected_devices: usize) -> Result<()> {
+    if aggregated.devices.len() != expected_devices {
         log::warn!(
             "NVIDIA GPU attestation: device count mismatch (expected {}, got {})",
-            bundle.devices.len(),
+            expected_devices,
             aggregated.devices.len()
         );
         return Err(AttestationError::NvidiaGpuDeviceCountMismatch {
-            expected: bundle.devices.len(),
+            expected: expected_devices,
             got: aggregated.devices.len(),
         });
     }
@@ -157,11 +220,7 @@ pub async fn verify_bundle(
         log::warn!("NVIDIA GPU attestation: nonce binding mismatch");
         return Err(AttestationError::NvidiaGpuBindingMismatch);
     }
-    log::info!(
-        "NVIDIA GPU attestation passed: {} device(s), nonce_binding_ok=true",
-        aggregated.devices.len()
-    );
-    Ok(aggregated)
+    Ok(())
 }
 
 /// Verify a JWS, transparently refetching the JWKS once on `kid` miss.
