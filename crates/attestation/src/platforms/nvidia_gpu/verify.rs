@@ -675,7 +675,7 @@ mod tests {
     }
 
     /// Real bug this catches: removing the `check_user_nonce_len(user_nonce)?`
-    /// call site from `verify_bundle` (verify_nras.rs:40). The helper would
+    /// call site from `verify_bundle` (verify.rs:40). The helper would
     /// still exist, the unit-level branch would still work, but a short nonce
     /// would silently flow into the NRAS request. The `PanicProvider` exists
     /// to assert the rejection happens *before* any network call.
