@@ -10,7 +10,7 @@
 //! See `README.md` for the C++ SDK build prereq this feature pulls in.
 
 use std::fmt::Display;
-use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use nv_attestation_sdk::{GpuEvidenceSource, Nonce, NvatSdk, SdkOptions, SwitchEvidenceSource};
 use serde::Deserialize;
@@ -33,24 +33,27 @@ impl<T, E: Display> GpuCollectionCtx<T> for std::result::Result<T, E> {
     }
 }
 
-/// The NVAT SDK must be initialized exactly once and the handle kept alive
-/// for the lifetime of all subsequent calls. We initialize lazily, leak the
-/// handle, and stash the (success-or-error) result so callers can re-check
-/// without re-initializing.
-static SDK_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+/// Tracks whether the NVAT SDK has been successfully initialized. The SDK must
+/// be initialized exactly once and its handle kept alive for the lifetime of
+/// all subsequent calls, so we leak the handle and latch this flag to `true` on
+/// success. Crucially we only cache *success*: a transient init failure (driver
+/// not ready, NSCQ race) leaves the flag `false` so a later call can retry,
+/// rather than poisoning the whole process.
+static SDK_INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 fn ensure_sdk_init() -> Result<()> {
-    SDK_INIT
-        .get_or_init(|| -> std::result::Result<(), String> {
-            let opts = SdkOptions::new().map_err(|e| format!("SdkOptions::new: {e}"))?;
-            let sdk = NvatSdk::init(opts).map_err(|e| format!("NvatSdk::init: {e}"))?;
-            // SDK handle must outlive every call — leak it on purpose.
-            std::mem::forget(sdk);
-            Ok(())
-        })
-        .as_ref()
-        .map(|_| ())
-        .gpu_ctx("NVAT SDK init")
+    let mut initialized = SDK_INITIALIZED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *initialized {
+        return Ok(());
+    }
+    let opts = SdkOptions::new().gpu_ctx("NVAT SDK init: SdkOptions::new")?;
+    let sdk = NvatSdk::init(opts).gpu_ctx("NVAT SDK init: NvatSdk::init")?;
+    // SDK handle must outlive every call — leak it on purpose.
+    std::mem::forget(sdk);
+    *initialized = true;
+    Ok(())
 }
 
 /// Wire shape of one entry as the NVIDIA SDK serializes it via `to_json()`.
