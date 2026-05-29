@@ -161,9 +161,10 @@ async fn verify_arch_group(
         .map(String::from);
     let nonce_binding_ok = eat_nonce
         .as_deref()
-        .map(|n| {
+        .and_then(|n| hex::decode(n).ok())
+        .map(|decoded| {
             use subtle::ConstantTimeEq;
-            n.as_bytes().ct_eq(nonce_hex.as_bytes()).into()
+            decoded.ct_eq(&nonce_bytes).into()
         })
         .unwrap_or(false);
 
