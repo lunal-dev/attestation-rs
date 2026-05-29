@@ -247,11 +247,24 @@ async fn verify_jws_with_kid_rotation(
     }
 }
 
-/// NRAS returns either a single JWT string or a 2-tuple "detached EAT" of
-/// the shape `[ ["JWT", "<overall>"], { "<name>": "<jwt>", ... } ]`.
+/// NRAS returns a 2-tuple "detached EAT" of the shape
+/// `[ ["JWT", "<overall>"], { "<name>": "<jwt>", ... } ]`, where the object
+/// carries one signed submodule JWT per attested device.
+///
+/// A bare JWT string is *not* a usable attestation here: it carries no
+/// per-device submodules, so it would always fail the downstream device-count
+/// check. We reject it at the parse site with a clear error rather than letting
+/// it surface as a misleading `DeviceCountMismatch`. Likewise, a submodule
+/// whose value is not a string is a malformed entry and is reported as a parse
+/// error instead of being silently dropped (which would also masquerade as a
+/// count mismatch).
 fn split_eat_response(v: &serde_json::Value) -> Result<(String, Vec<(String, String)>)> {
-    if let Some(s) = v.as_str() {
-        return Ok((s.to_string(), vec![]));
+    if v.is_string() {
+        return Err(AttestationError::NrasResponseParse(
+            "NRAS returned a bare JWT string with no per-device submodules; \
+             expected a detached EAT 2-tuple"
+                .into(),
+        ));
     }
     if let Some(arr) = v.as_array() {
         if arr.len() == 2 {
@@ -270,13 +283,17 @@ fn split_eat_response(v: &serde_json::Value) -> Result<(String, Vec<(String, Str
                     AttestationError::NrasResponseParse("missing overall JWT in EAT".into())
                 })?
                 .to_string();
-            let mut subs = Vec::new();
-            if let Some(map) = arr[1].as_object() {
-                for (k, val) in map {
-                    if let Some(s) = val.as_str() {
-                        subs.push((k.clone(), s.to_string()));
-                    }
-                }
+            let map = arr[1].as_object().ok_or_else(|| {
+                AttestationError::NrasResponseParse("EAT[1] is not a submodule object".into())
+            })?;
+            let mut subs = Vec::with_capacity(map.len());
+            for (k, val) in map {
+                let s = val.as_str().ok_or_else(|| {
+                    AttestationError::NrasResponseParse(format!(
+                        "EAT submodule \"{k}\" value is not a JWT string"
+                    ))
+                })?;
+                subs.push((k.clone(), s.to_string()));
             }
             return Ok((overall, subs));
         }
@@ -691,6 +708,55 @@ mod tests {
                 assert_eq!(n, too_short.len());
             }
             other => panic!("expected NvidiaGpuNonceTooShort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn split_eat_parses_valid_detached_eat() {
+        let v = serde_json::json!([
+            ["JWT", "overall.jwt.sig"],
+            { "GPU-0": "gpu0.jwt.sig", "GPU-1": "gpu1.jwt.sig" }
+        ]);
+        let (overall, mut subs) = split_eat_response(&v).expect("valid EAT must parse");
+        assert_eq!(overall, "overall.jwt.sig");
+        subs.sort();
+        assert_eq!(
+            subs,
+            vec![
+                ("GPU-0".to_string(), "gpu0.jwt.sig".to_string()),
+                ("GPU-1".to_string(), "gpu1.jwt.sig".to_string()),
+            ]
+        );
+    }
+
+    /// A bare JWT string carries no per-device submodules. It used to parse to
+    /// zero submodules and fail later as a `DeviceCountMismatch`; now it errors
+    /// at the parse site with a precise message.
+    #[test]
+    fn split_eat_rejects_bare_jwt_string() {
+        let v = serde_json::json!("just.a.jwt");
+        match split_eat_response(&v) {
+            Err(AttestationError::NrasResponseParse(msg)) => {
+                assert!(msg.contains("bare JWT string"), "got: {msg}");
+            }
+            other => panic!("expected NrasResponseParse, got {other:?}"),
+        }
+    }
+
+    /// A submodule entry whose value is not a string is malformed and must be
+    /// reported as a parse error, not silently dropped (which would surface as
+    /// a misleading count mismatch).
+    #[test]
+    fn split_eat_rejects_non_string_submodule() {
+        let v = serde_json::json!([
+            ["JWT", "overall.jwt.sig"],
+            { "GPU-0": "gpu0.jwt.sig", "GPU-1": 42 }
+        ]);
+        match split_eat_response(&v) {
+            Err(AttestationError::NrasResponseParse(msg)) => {
+                assert!(msg.contains("GPU-1"), "got: {msg}");
+            }
+            other => panic!("expected NrasResponseParse, got {other:?}"),
         }
     }
 }
