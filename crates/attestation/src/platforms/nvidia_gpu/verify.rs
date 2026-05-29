@@ -349,12 +349,11 @@ pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
     let claims: serde_json::Value = serde_json::from_slice(&payload)
         .map_err(|e| AttestationError::JwsVerification(format!("payload json: {e}")))?;
 
-    #[cfg(not(target_arch = "wasm32"))]
+    // Enforce `exp` on all targets, including wasm32. `chrono::Utc::now()` is a
+    // non-optional dependency and works on wasm, so we avoid `SystemTime` (which
+    // we previously cfg'd out, silently accepting expired EATs in the browser).
     if let Some(exp) = claims.get("exp").and_then(|v| v.as_i64()) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let now = chrono::Utc::now().timestamp();
         if now > exp {
             return Err(AttestationError::JwsVerification(
                 "JWT has expired (exp)".into(),
@@ -437,15 +436,11 @@ fn verify_x5c_chain_and_extract_key(chain: &[String]) -> Result<p384::ecdsa::Ver
         })
         .collect::<Result<Vec<_>>>()?;
 
-    #[cfg(not(target_arch = "wasm32"))]
+    // Enforce certificate validity periods on all targets, including wasm32.
+    // `chrono::Utc::now()` works on wasm (unlike `SystemTime`, which we used to
+    // cfg out — silently accepting expired NRAS signing certs in the browser).
     {
-        use std::time::SystemTime;
-        let now_secs: i64 = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|_| AttestationError::JwsVerification("system clock before epoch".into()))?
-            .as_secs()
-            .try_into()
-            .map_err(|_| AttestationError::JwsVerification("system time overflow".into()))?;
+        let now_secs = chrono::Utc::now().timestamp();
         for (i, (_der, cert)) in certs.iter().enumerate() {
             let validity = &cert.tbs_certificate.validity;
             let nb_unix: i64 = validity
