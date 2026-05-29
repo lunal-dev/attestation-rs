@@ -142,7 +142,7 @@ async fn verify_arch_group(
             })
             .collect(),
         arch,
-        claims_version: "2.0".into(),
+        claims_version: provider.claims_version().to_string(),
     };
 
     let response = provider.attest(&request).await?;

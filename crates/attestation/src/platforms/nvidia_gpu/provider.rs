@@ -78,6 +78,13 @@ pub trait NrasProvider: Send + Sync {
     /// Which URL to use for a given arch. GPU vs. switch endpoints differ.
     fn url_for(&self, arch: NvidiaGpuArch) -> &str;
 
+    /// Claims schema version to request from NRAS (the `claims_version` field
+    /// of the POST body). Defaults to `"2.0"`, which pairs with the
+    /// `/v3/attest/*` endpoints.
+    fn claims_version(&self) -> &str {
+        "2.0"
+    }
+
     /// POST `request` to the appropriate NRAS endpoint and return the raw
     /// response body. NRAS returns a JSON value that is either a single JWT
     /// string or a "detached EAT" 2-tuple `[ ["JWT", "<top>"], { sub: "<jwt>" } ]`.
@@ -282,6 +289,10 @@ impl NrasProvider for DefaultNrasProvider {
             NvidiaGpuArch::Ls10 => &self.switch_url,
             _ => &self.gpu_url,
         }
+    }
+
+    fn claims_version(&self) -> &str {
+        &self.claims_version
     }
 
     async fn attest(&self, request: &NrasRequest) -> Result<serde_json::Value> {
