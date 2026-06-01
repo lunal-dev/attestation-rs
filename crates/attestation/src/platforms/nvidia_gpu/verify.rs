@@ -334,7 +334,6 @@ pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
     let header: serde_json::Value = serde_json::from_slice(&header_bytes)
         .map_err(|e| AttestationError::JwsVerification(format!("header json: {e}")))?;
     let alg = header.get("alg").and_then(|v| v.as_str()).unwrap_or("");
-    let alg = header.get("alg").and_then(|v| v.as_str()).unwrap_or("");
     if alg != "ES384" {
         return Err(AttestationError::JwsVerification(format!(
             "unsupported alg {alg}"
@@ -347,6 +346,8 @@ pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
             "unsupported crit header parameter".into(),
         ));
     }
+    let kid = header
+        .get("kid")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AttestationError::JwsVerification("missing kid".into()))?;
     let key = jwks
@@ -767,6 +768,24 @@ mod tests {
                 assert!(msg.contains("GPU-1"), "got: {msg}");
             }
             other => panic!("expected NrasResponseParse, got {other:?}"),
+        }
+    }
+
+    /// RFC 7515 §4.1.11: a JWS carrying a critical (`crit`) header extension we
+    /// don't understand must be rejected. The check must fire before key
+    /// lookup, so an empty JWKS still yields the crit error (not a kid miss).
+    #[test]
+    fn verify_jws_rejects_crit_header() {
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::json!({ "alg": "ES384", "kid": "k1", "crit": ["exp"] }).to_string(),
+        );
+        let token = format!("{header}.eyJhIjoxfQ.c2ln");
+        let jwks = Jwks { keys: vec![] };
+        match verify_jws_es384(&token, &jwks) {
+            Err(AttestationError::JwsVerification(msg)) => {
+                assert!(msg.contains("crit"), "got: {msg}");
+            }
+            other => panic!("expected JwsVerification crit error, got {other:?}"),
         }
     }
 }
