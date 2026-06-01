@@ -155,6 +155,10 @@ async fn verify_arch_group(
         .get("x-nvidia-overall-att-result")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    // DEVIATION (RFC 9711): the spec encodes the JSON `eat_nonce` as a base64url
+    // string (and permits an array of strings). NRAS instead returns a single
+    // hex string, so we hex-decode below. An array form is not produced by NRAS;
+    // if one appears, `as_str()` yields None and the binding check fails closed.
     let eat_nonce = overall_claims
         .get("eat_nonce")
         .and_then(|v| v.as_str())
