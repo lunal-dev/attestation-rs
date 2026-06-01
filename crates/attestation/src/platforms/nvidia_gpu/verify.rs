@@ -330,13 +330,19 @@ pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
     let header: serde_json::Value = serde_json::from_slice(&header_bytes)
         .map_err(|e| AttestationError::JwsVerification(format!("header json: {e}")))?;
     let alg = header.get("alg").and_then(|v| v.as_str()).unwrap_or("");
+    let alg = header.get("alg").and_then(|v| v.as_str()).unwrap_or("");
     if alg != "ES384" {
         return Err(AttestationError::JwsVerification(format!(
             "unsupported alg {alg}"
         )));
     }
-    let kid = header
-        .get("kid")
+    // RFC 7515 §4.1.11: any extension marked critical that we don't understand
+    // makes the JWS invalid. We support no extensions, so reject any `crit`.
+    if header.get("crit").is_some() {
+        return Err(AttestationError::JwsVerification(
+            "unsupported crit header parameter".into(),
+        ));
+    }
         .and_then(|v| v.as_str())
         .ok_or_else(|| AttestationError::JwsVerification("missing kid".into()))?;
     let key = jwks
