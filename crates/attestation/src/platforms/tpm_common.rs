@@ -1313,6 +1313,8 @@ mod tests {
                 fmc: None,
             },
             platform_data: serde_json::json!({}),
+            #[cfg(feature = "nvidia-gpu")]
+            nvidia_gpu: None,
         };
 
         let result = build_tpm_verification_result(
@@ -1368,6 +1370,8 @@ mod tests {
                 fmc: None,
             },
             platform_data: serde_json::json!({}),
+            #[cfg(feature = "nvidia-gpu")]
+            nvidia_gpu: None,
         };
 
         let result = build_tpm_verification_result(
