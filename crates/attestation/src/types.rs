@@ -41,12 +41,20 @@ pub enum PlatformType {
 ///
 /// Wraps platform-specific evidence with a platform identifier so that
 /// verifiers can auto-detect which platform produced the evidence.
+///
+/// Optionally carries a GPU evidence bundle when the workload runs on a
+/// CC-mode NVIDIA GPU bound to the CPU TEE. The bundle is additive: pre-GPU
+/// envelopes deserialize unchanged because the field is `Option` with default.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttestationEvidence {
     /// Which platform produced this evidence.
     pub platform: PlatformType,
     /// Platform-specific evidence payload.
     pub evidence: serde_json::Value,
+    /// Optional NVIDIA GPU attestation bundle bound to this CPU TEE evidence.
+    #[cfg(feature = "nvidia-gpu")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nvidia_gpu: Option<NvidiaGpuEvidenceBundle>,
 }
 
 impl std::fmt::Display for PlatformType {
@@ -74,6 +82,21 @@ pub struct VerifyParams {
     pub allow_debug: bool,
     /// If set, enforce minimum TCB version for SNP (each component must be >=).
     pub min_tcb: Option<SnpTcb>,
+    /// User nonce used to derive the GPU SPDM nonce. Required when verifying
+    /// an envelope that carries a `gpu` bundle.
+    #[cfg(feature = "nvidia-gpu")]
+    pub nvidia_gpu_user_nonce: Option<Vec<u8>>,
+    /// If true, reject envelopes that do not include an NVIDIA GPU bundle.
+    #[cfg(feature = "nvidia-gpu")]
+    pub nvidia_gpu_required: bool,
+    /// Optional whitelist of acceptable GPU/switch architectures.
+    #[cfg(feature = "nvidia-gpu")]
+    pub nvidia_gpu_expected_archs: Option<Vec<NvidiaGpuArch>>,
+    /// Allowed nonce-binding algorithms. If `None`, only the default
+    /// (`Concat { Sha256 }`) is accepted. Set explicitly to permit future
+    /// binding variants.
+    #[cfg(feature = "nvidia-gpu")]
+    pub nvidia_gpu_allowed_bindings: Option<Vec<NvidiaGpuBinding>>,
 }
 
 /// Result of verification — the caller decides pass/fail based on this.
@@ -124,6 +147,10 @@ pub struct Claims {
     pub tcb: TcbInfo,
     /// All platform-specific claim fields as a JSON map.
     pub platform_data: serde_json::Value,
+    /// GPU claims aggregated from the optional NVIDIA bundle, if present.
+    #[cfg(feature = "nvidia-gpu")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nvidia_gpu: Option<NvidiaGpuClaims>,
 }
 
 /// TCB version information, varies by platform.
@@ -282,6 +309,138 @@ mod tests {
         assert_eq!(ProcessorGeneration::from_cpuid(0x19, 0x20), None); // Gap between Milan/Genoa
         assert_eq!(ProcessorGeneration::from_cpuid(0x1A, 0x12), None); // Just past Turin range
     }
+}
+
+// ── NVIDIA GPU attestation types ─────────────────────────────────────────────
+
+/// NVIDIA confidential-compute device architecture as advertised to NRAS.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum NvidiaGpuArch {
+    Hopper,
+    Blackwell,
+    /// NVSwitch (LS10). Switches use a different NRAS endpoint and are
+    /// modeled here so a bundle can co-locate GPU and switch evidence.
+    Ls10,
+}
+
+#[cfg(feature = "nvidia-gpu")]
+impl std::fmt::Display for NvidiaGpuArch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NvidiaGpuArch::Hopper => write!(f, "HOPPER"),
+            NvidiaGpuArch::Blackwell => write!(f, "BLACKWELL"),
+            NvidiaGpuArch::Ls10 => write!(f, "LS10"),
+        }
+    }
+}
+
+/// Hash algorithm used in GPU nonce / binding derivations.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum NvidiaGpuHashAlgo {
+    #[default]
+    Sha256,
+}
+
+/// How the GPU nonce is derived from the user nonce.
+///
+/// `Concat` is the v1 binding: `gpu_nonce = H(user_nonce || domain_tag)` where
+/// `domain_tag` is `b"NVIDIA-GPU-EAT-v1"` for GPU evidence and
+/// `b"NVIDIA-SWITCH-EAT-v1"` for NVSwitch evidence.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum NvidiaGpuBinding {
+    Concat {
+        #[serde(default)]
+        algo: NvidiaGpuHashAlgo,
+    },
+}
+
+#[cfg(feature = "nvidia-gpu")]
+impl Default for NvidiaGpuBinding {
+    fn default() -> Self {
+        NvidiaGpuBinding::Concat {
+            algo: NvidiaGpuHashAlgo::Sha256,
+        }
+    }
+}
+
+/// Per-device evidence as it is sent to NRAS.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NvidiaGpuDeviceEvidence {
+    pub arch: NvidiaGpuArch,
+    pub uuid: String,
+    /// Base64 SPDM blob.
+    pub evidence_b64: String,
+    /// Base64-encoded PEM cert chain (leaf first).
+    pub cert_chain_b64: String,
+}
+
+/// A bundle of GPU/switch evidence bound to the enclosing CPU TEE quote.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NvidiaGpuEvidenceBundle {
+    /// Devices, sorted by UUID for stable serialization.
+    pub devices: Vec<NvidiaGpuDeviceEvidence>,
+    /// How the SPDM nonce was derived from the user nonce.
+    /// Required — the attester must declare the binding algorithm explicitly.
+    pub binding: NvidiaGpuBinding,
+}
+
+/// Per-device claims as surfaced by NRAS in the detached EAT submodule JWT.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NvidiaGpuDeviceClaims {
+    pub arch: Option<NvidiaGpuArch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ueid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hwmodel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measres: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secboot: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dbgstat: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vbios_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch_check: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce_match: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_signature_verified: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_rim_fetched: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vbios_rim_fetched: Option<bool>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub raw: serde_json::Value,
+}
+
+/// Aggregated GPU claims surfaced at the top level of `VerificationResult`.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NvidiaGpuClaims {
+    /// Always `true` when returned by `verify_bundle` (verification errors
+    /// if NRAS reports failure). Retained for serialization round-tripping.
+    pub overall_ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eat_nonce: Option<String>,
+    /// Always `true` when returned by `verify_bundle`. See `overall_ok`.
+    pub nonce_binding_ok: bool,
+    pub devices: Vec<NvidiaGpuDeviceClaims>,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub overall_raw: serde_json::Value,
 }
 
 /// Helper module for serializing Vec<u8> as hex strings.

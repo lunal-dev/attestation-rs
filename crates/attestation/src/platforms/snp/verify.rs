@@ -382,8 +382,17 @@ pub fn verify_vcek_tcb(report: &AttestationReport, vcek_der: &[u8]) -> Result<()
         let chip_id_bytes = get_oid_octets(ext.value).ok_or_else(|| {
             AttestationError::TcbMismatch("VCEK HW_ID OID has unparseable value".to_string())
         })?;
-        if chip_id_bytes.len() != report.chip_id[..].len()
-            || !crate::utils::constant_time_eq(chip_id_bytes, &report.chip_id[..])
+        // VCEK HW_ID may be shorter than the report's 64-byte chip_id field on
+        // Turin (8 meaningful bytes + 56 zero pad). Compare the meaningful
+        // prefix in constant time and confirm the remainder is zero.
+        // Minimum 8 bytes: the smallest known AMD HW_ID (Turin).
+        const MIN_CHIP_ID_LEN: usize = 8;
+        let report_chip_id = &report.chip_id[..];
+        let prefix_len = chip_id_bytes.len();
+        if prefix_len < MIN_CHIP_ID_LEN
+            || prefix_len > report_chip_id.len()
+            || !crate::utils::constant_time_eq(chip_id_bytes, &report_chip_id[..prefix_len])
+            || report_chip_id[prefix_len..].iter().any(|b| *b != 0)
         {
             return Err(AttestationError::TcbMismatch(
                 "VCEK chip_id does not match report chip_id".to_string(),
