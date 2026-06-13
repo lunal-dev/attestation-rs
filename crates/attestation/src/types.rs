@@ -97,6 +97,52 @@ pub struct VerifyParams {
     /// binding variants.
     #[cfg(feature = "nvidia-gpu")]
     pub nvidia_gpu_allowed_bindings: Option<Vec<NvidiaGpuBinding>>,
+    /// Per-device security policy applied to each NRAS submodule, independent of
+    /// NRAS's opaque overall boolean. Defaults reject debug-enabled devices and
+    /// require secure boot, per-device report-nonce match, and a successful
+    /// measurement result. See [`NvidiaGpuDevicePolicy`].
+    #[cfg(feature = "nvidia-gpu")]
+    pub nvidia_gpu_device_policy: NvidiaGpuDevicePolicy,
+}
+
+/// Per-device policy gates evaluated against each NRAS submodule's claims.
+///
+/// NRAS folds all device checks into a single opaque, `claims_version`-dependent
+/// `x-nvidia-overall-att-result` boolean. These gates let a caller enforce the
+/// individual per-device claims directly, so that (a) an unexpired NRAS-signed
+/// submodule spliced from another session is rejected via its `eat_nonce`, and
+/// (b) policy-relevant device state (debug, secure boot, measurement result) is
+/// checked locally rather than trusted blindly.
+///
+/// Defaults mirror `allow_debug`'s security posture: fail closed.
+#[cfg(feature = "nvidia-gpu")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NvidiaGpuDevicePolicy {
+    /// If true, accept devices reporting `dbgstat != "disabled"`. Default false
+    /// (debug-enabled GPUs are rejected), mirroring [`VerifyParams::allow_debug`].
+    pub allow_debug: bool,
+    /// If true, require every device's `secboot` claim to be `true`. Default true.
+    pub require_secboot: bool,
+    /// If true, require every device's
+    /// `x-nvidia-gpu-attestation-report-nonce-match` claim to be `true`. Default
+    /// true — gates per-device SPDM report-nonce binding in addition to the
+    /// overall `eat_nonce`.
+    pub require_nonce_match: bool,
+    /// If true, require every device's `measres` claim to equal `"success"`.
+    /// Default true.
+    pub require_measres_success: bool,
+}
+
+#[cfg(feature = "nvidia-gpu")]
+impl Default for NvidiaGpuDevicePolicy {
+    fn default() -> Self {
+        Self {
+            allow_debug: false,
+            require_secboot: true,
+            require_nonce_match: true,
+            require_measres_success: true,
+        }
+    }
 }
 
 /// Result of verification — the caller decides pass/fail based on this.

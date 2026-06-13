@@ -84,6 +84,9 @@ pub async fn handler(
         expected_init_data_hash,
         allow_debug,
         min_tcb,
+        // Remaining fields are cfg-gated (e.g. the `nvidia-gpu` feature adds
+        // several); default them so this builds regardless of feature set.
+        ..Default::default()
     };
 
     let result = state.verifier.verify(&evidence_json, &params).await?;

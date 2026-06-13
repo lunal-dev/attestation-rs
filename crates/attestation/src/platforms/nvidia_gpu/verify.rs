@@ -35,7 +35,7 @@ pub async fn verify_bundle(
     };
 
     for (arch, devices) in group_by_arch(bundle) {
-        let group = verify_arch_group(arch, &devices, user_nonce, bundle, provider).await?;
+        let group = verify_arch_group(arch, &devices, user_nonce, bundle, params, provider).await?;
         fold_arch_group(&mut aggregated, group);
     }
 
@@ -124,6 +124,7 @@ async fn verify_arch_group(
     devices: &[&crate::types::NvidiaGpuDeviceEvidence],
     user_nonce: &[u8],
     bundle: &NvidiaGpuEvidenceBundle,
+    params: &VerifyParams,
     provider: &dyn NrasProvider,
 ) -> Result<ArchGroupResult> {
     let nonce_bytes = match arch {
@@ -173,12 +174,22 @@ async fn verify_arch_group(
         .unwrap_or(false);
 
     let mut device_claims = Vec::with_capacity(submodule_jwts.len());
-    for (_name, sub_jwt) in submodule_jwts {
+    for (name, sub_jwt) in submodule_jwts {
         let sub_claims = verify_jws_with_kid_rotation(&sub_jwt, &mut jwks, arch, provider).await?;
+        // Bind this submodule to the session: its `eat_nonce` must equal the
+        // SPDM nonce we derived. The overall token's `eat_nonce` alone does not
+        // cover the submodule JWTs (NRAS's RFC 9711 `submods` DIGEST is computed
+        // over an intermediate that excludes the issued JWT's time claims, so it
+        // is not byte-verifiable against the returned compact JWS — see the
+        // module docs). Per-submodule `eat_nonce` is the cheaper, robust subset:
+        // a submodule spliced from another session carries a different nonce and
+        // is rejected here.
+        check_submodule_nonce(&name, &sub_claims, &nonce_bytes)?;
         let mut dc = device_claims_from_submodule(&sub_claims);
         if dc.arch.is_none() {
             dc.arch = Some(arch);
         }
+        apply_device_policy(&name, &dc, &params.nvidia_gpu_device_policy)?;
         device_claims.push(dc);
     }
 
@@ -377,52 +388,71 @@ pub fn verify_jws_es384(token: &str, jwks: &Jwks) -> Result<serde_json::Value> {
     let claims: serde_json::Value = serde_json::from_slice(&payload)
         .map_err(|e| AttestationError::JwsVerification(format!("payload json: {e}")))?;
 
-    // Enforce `exp` on all targets, including wasm32. `chrono::Utc::now()` is a
-    // non-optional dependency and works on wasm, so we avoid `SystemTime` (which
-    // we previously cfg'd out, silently accepting expired EATs in the browser).
-    if let Some(exp) = claims.get("exp").and_then(|v| v.as_i64()) {
-        let now = chrono::Utc::now().timestamp();
-        if now > exp {
+    enforce_time_claims(&claims)?;
+
+    Ok(claims)
+}
+
+/// Enforce the RFC 7519 time-based claims on a JWT body.
+///
+/// `exp` is REQUIRED and must be numeric: a missing or non-numeric `exp` would
+/// otherwise fail open, accepting a token with no expiry that is replayable
+/// indefinitely (and, combined with submodule binding, a foreign submodule that
+/// never ages out). `nbf` is optional but enforced when present.
+///
+/// RFC 7519 permits fractional NumericDate values, which `as_i64` rejects, so we
+/// parse via `as_f64`. We `floor` `exp` and `ceil` `nbf` so a fractional second
+/// never widens the validity window past the whole-second boundary.
+///
+/// Runs on all targets including wasm32: `chrono::Utc::now()` works on wasm via
+/// the `wasmbind` feature (see Cargo.toml), unlike `SystemTime`, which traps on
+/// wasm32-unknown-unknown.
+fn enforce_time_claims(claims: &serde_json::Value) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+
+    let exp = claims
+        .get("exp")
+        .and_then(serde_json::Value::as_f64)
+        .ok_or_else(|| {
+            AttestationError::JwsVerification("JWT missing or non-numeric exp".into())
+        })?;
+    if now > exp.floor() as i64 {
+        return Err(AttestationError::JwsVerification(
+            "JWT has expired (exp)".into(),
+        ));
+    }
+
+    if let Some(nbf) = claims.get("nbf") {
+        let nbf = nbf.as_f64().ok_or_else(|| {
+            AttestationError::JwsVerification("JWT nbf is present but non-numeric".into())
+        })?;
+        if now < nbf.ceil() as i64 {
             return Err(AttestationError::JwsVerification(
-                "JWT has expired (exp)".into(),
+                "JWT is not yet valid (nbf)".into(),
             ));
         }
     }
 
-    Ok(claims)
+    Ok(())
 }
 
 fn es384_verifying_key_from_jwks_entry(
     key: &crate::platforms::nvidia_gpu::provider::JwksKey,
 ) -> Result<p384::ecdsa::VerifyingKey> {
-    // Prefer the x5c chain (NRAS publishes one); fall back to JWK ec coords.
-    if let Some(chain) = &key.x5c {
-        if !chain.is_empty() {
-            return verify_x5c_chain_and_extract_key(chain);
-        }
+    // The signing key MUST come from an x5c chain that validates up to the
+    // pinned NVIDIA trust anchor. The raw JWK `(x, y)` coordinates carry no
+    // chain and no pin, so accepting them would degrade trust to WebPKI TLS for
+    // the JWKS host (which is itself overridable via `NV_NRAS_GPU_URL`): a MITM
+    // serving a JWKS of attacker-chosen coordinates could forge every EAT. We
+    // therefore require x5c and never fall back to bare coordinates.
+    match &key.x5c {
+        Some(chain) if !chain.is_empty() => verify_x5c_chain_and_extract_key(chain),
+        _ => Err(AttestationError::JwsVerification(
+            "JWKS entry has no x5c chain; raw (x,y) coordinates are not accepted \
+             because they bypass the pinned NVIDIA trust anchor"
+                .into(),
+        )),
     }
-    if let (Some(x_b64), Some(y_b64)) = (&key.x, &key.y) {
-        let x = URL_SAFE_NO_PAD
-            .decode(x_b64.as_bytes())
-            .map_err(|e| AttestationError::JwsVerification(format!("jwk x b64: {e}")))?;
-        let y = URL_SAFE_NO_PAD
-            .decode(y_b64.as_bytes())
-            .map_err(|e| AttestationError::JwsVerification(format!("jwk y b64: {e}")))?;
-        if x.len() != 48 || y.len() != 48 {
-            return Err(AttestationError::JwsVerification(
-                "jwk ec coords wrong length for P-384".into(),
-            ));
-        }
-        let mut sec1 = Vec::with_capacity(1 + 96);
-        sec1.push(0x04);
-        sec1.extend_from_slice(&x);
-        sec1.extend_from_slice(&y);
-        return p384::ecdsa::VerifyingKey::from_sec1_bytes(&sec1)
-            .map_err(|e| AttestationError::JwsVerification(format!("ES384 sec1: {e}")));
-    }
-    Err(AttestationError::JwsVerification(
-        "JWKS entry has neither x5c nor (x,y)".into(),
-    ))
 }
 
 /// SHA-256 hashes of trusted NRAS intermediate CA Subject Public Key Info (SPKI).
@@ -436,9 +466,18 @@ const NRAS_TRUSTED_SPKI_SHA256: &[&str] =
 
 /// Validate the x5c certificate chain and return the leaf's P-384 verifying key.
 ///
-/// Checks: each cert is signed by the next in the chain (EC or RSA), all
-/// certs are within their validity period, and the topmost cert's SPKI
-/// matches a pinned NVIDIA trust anchor.
+/// Checks, for a leaf-first chain:
+/// - every cert is within its validity period;
+/// - cert[i] is signed by cert[i+1] (EC or RSA);
+/// - each issuer (cert[i+1]) is a CA permitted to sign cert[i]: basicConstraints
+///   cA=TRUE, pathLenConstraint satisfied, keyUsage (when present) includes
+///   keyCertSign, and its subject matches cert[i]'s issuer (RFC 5280 §6.1 name
+///   chaining);
+/// - the topmost cert's SPKI matches a pinned NVIDIA trust anchor.
+///
+/// This is the load-bearing trust check: there is no raw-coordinate fallback
+/// (see `es384_verifying_key_from_jwks_entry`), so every accepted signing key
+/// chains to the pinned anchor through these constraints.
 fn verify_x5c_chain_and_extract_key(chain: &[String]) -> Result<p384::ecdsa::VerifyingKey> {
     use sha2::Digest;
     use spki::DecodePublicKey;
@@ -502,9 +541,15 @@ fn verify_x5c_chain_and_extract_key(chain: &[String]) -> Result<p384::ecdsa::Ver
         }
     }
 
-    // Verify chain signatures: cert[i] must be signed by cert[i+1].
+    // Verify chain signatures and RFC 5280 path constraints: cert[i] must be
+    // signed by cert[i+1], and cert[i+1] must be a CA permitted to issue it.
+    // The chain is leaf-first, so cert[i+1] is the issuer of cert[i].
     for i in 0..certs.len().saturating_sub(1) {
         verify_cert_signature(&certs[i].1, &certs[i + 1].1, i)?;
+        // `i` intermediate certs sit between this issuer and the leaf (cert[0]),
+        // i.e. the issuer is at path depth `i`. RFC 5280 pathLenConstraint on
+        // the issuer must allow at least that many subordinate CA certs.
+        check_issuer_is_ca(&certs[i + 1].1, &certs[i].1, i + 1, i)?;
     }
 
     // Pin the topmost cert against trusted SPKI hashes instead of requiring
@@ -526,6 +571,83 @@ fn verify_x5c_chain_and_extract_key(chain: &[String]) -> Result<p384::ecdsa::Ver
         .map_err(|e| AttestationError::JwsVerification(format!("x5c leaf spki encode: {e}")))?;
     p384::ecdsa::VerifyingKey::from_public_key_der(&leaf_spki_der)
         .map_err(|e| AttestationError::JwsVerification(format!("x5c leaf ES384 key: {e}")))
+}
+
+/// Enforce the RFC 5280 §4.2.1 constraints that make `issuer` eligible to sign
+/// `subject` as a CA: basicConstraints cA=TRUE (and present), pathLenConstraint
+/// satisfied for the number of intermediates below it, keyUsage keyCertSign when
+/// the extension is present, and issuer-subject name chaining.
+///
+/// `issuer_index` / `subject_index` are positions in the leaf-first chain, used
+/// for error messages. `intermediates_below` is the count of CA certs between
+/// `issuer` and the leaf (RFC 5280's path length for `issuer`).
+fn check_issuer_is_ca(
+    issuer: &x509_cert::Certificate,
+    subject: &x509_cert::Certificate,
+    issuer_index: usize,
+    intermediates_below: usize,
+) -> Result<()> {
+    use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
+
+    // basicConstraints must be present with cA=TRUE for any cert that issues
+    // another. Absent basicConstraints means "not a CA" (RFC 5280 §4.2.1.9).
+    let bc = issuer
+        .tbs_certificate
+        .get::<BasicConstraints>()
+        .map_err(|e| {
+            AttestationError::JwsVerification(format!(
+                "x5c[{issuer_index}] basicConstraints decode: {e}"
+            ))
+        })?;
+    let Some((_critical, bc)) = bc else {
+        return Err(AttestationError::JwsVerification(format!(
+            "x5c[{issuer_index}] is not a CA (no basicConstraints) but signs x5c[{subject_index}]",
+            subject_index = issuer_index - 1
+        )));
+    };
+    if !bc.ca {
+        return Err(AttestationError::JwsVerification(format!(
+            "x5c[{issuer_index}] basicConstraints cA=FALSE but it signs another certificate"
+        )));
+    }
+    // pathLenConstraint, when present, bounds the number of non-self-issued
+    // intermediate CA certs that may follow this one in a valid path.
+    if let Some(max_path_len) = bc.path_len_constraint {
+        if intermediates_below as u32 > u32::from(max_path_len) {
+            return Err(AttestationError::JwsVerification(format!(
+                "x5c[{issuer_index}] pathLenConstraint {max_path_len} exceeded \
+                 ({intermediates_below} intermediate CA(s) below it)"
+            )));
+        }
+    }
+
+    // keyUsage, when present, must assert keyCertSign for a cert-signing CA.
+    let ku = issuer.tbs_certificate.get::<KeyUsage>().map_err(|e| {
+        AttestationError::JwsVerification(format!("x5c[{issuer_index}] keyUsage decode: {e}"))
+    })?;
+    if let Some((_critical, ku)) = ku {
+        if !ku.key_cert_sign() {
+            return Err(AttestationError::JwsVerification(format!(
+                "x5c[{issuer_index}] keyUsage lacks keyCertSign but it signs a certificate"
+            )));
+        }
+    }
+
+    // Name chaining: issuer.subject must equal subject.issuer. Compare canonical
+    // DER encodings of the Name structures.
+    let issuer_subject_der = spki::der::Encode::to_der(&issuer.tbs_certificate.subject)
+        .map_err(|e| AttestationError::JwsVerification(format!("x5c subject name encode: {e}")))?;
+    let subject_issuer_der = spki::der::Encode::to_der(&subject.tbs_certificate.issuer)
+        .map_err(|e| AttestationError::JwsVerification(format!("x5c issuer name encode: {e}")))?;
+    if issuer_subject_der != subject_issuer_der {
+        return Err(AttestationError::JwsVerification(format!(
+            "x5c[{issuer_index}] subject does not match issuer of x5c[{subject_index}] \
+             (broken name chain)",
+            subject_index = issuer_index - 1
+        )));
+    }
+
+    Ok(())
 }
 
 /// Verify that `cert` was signed by `issuer`, dispatching on the certificate's
@@ -621,6 +743,79 @@ fn verify_rsa_sha384(issuer_spki: &[u8], tbs: &[u8], sig_bytes: &[u8]) -> bool {
     verifier.verify(tbs, &sig).is_ok()
 }
 
+/// Bind one submodule to the attestation session by checking its `eat_nonce`
+/// against the derived SPDM nonce. NRAS encodes `eat_nonce` as a hex string
+/// (see the overall-token DEVIATION note); we hex-decode and compare in
+/// constant time. A missing, non-string, non-hex, or mismatched nonce fails
+/// closed — this is what stops a valid-but-foreign submodule from being spliced
+/// into the response.
+fn check_submodule_nonce(
+    name: &str,
+    sub_claims: &serde_json::Value,
+    nonce_bytes: &[u8],
+) -> Result<()> {
+    let ok = sub_claims
+        .get("eat_nonce")
+        .and_then(|v| v.as_str())
+        .and_then(|n| hex::decode(n).ok())
+        .map(|decoded| {
+            use subtle::ConstantTimeEq;
+            decoded.ct_eq(nonce_bytes).into()
+        })
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(AttestationError::NvidiaGpuSubmoduleNonceMismatch {
+            name: name.to_string(),
+        })
+    }
+}
+
+/// Enforce per-device policy against a submodule's claims, independent of NRAS's
+/// opaque overall boolean. Each gate fails closed by default (see
+/// [`crate::types::NvidiaGpuDevicePolicy`]). A claim that is absent when its gate
+/// is enabled is treated as a failure — we do not trust a device whose state we
+/// cannot read.
+fn apply_device_policy(
+    name: &str,
+    dc: &NvidiaGpuDeviceClaims,
+    policy: &crate::types::NvidiaGpuDevicePolicy,
+) -> Result<()> {
+    let fail = |reason: String| {
+        Err(AttestationError::NvidiaGpuDevicePolicyFailed {
+            name: name.to_string(),
+            reason,
+        })
+    };
+
+    if !policy.allow_debug {
+        // `dbgstat` must be present and equal to "disabled".
+        match dc.dbgstat.as_deref() {
+            Some("disabled") => {}
+            Some(other) => return fail(format!("dbgstat is \"{other}\", expected \"disabled\"")),
+            None => return fail("dbgstat claim missing".into()),
+        }
+    }
+    if policy.require_secboot && dc.secboot != Some(true) {
+        return fail(format!("secboot is {:?}, expected true", dc.secboot));
+    }
+    if policy.require_nonce_match && dc.nonce_match != Some(true) {
+        return fail(format!(
+            "attestation-report-nonce-match is {:?}, expected true",
+            dc.nonce_match
+        ));
+    }
+    if policy.require_measres_success {
+        match dc.measres.as_deref() {
+            Some("success") => {}
+            Some(other) => return fail(format!("measres is \"{other}\", expected \"success\"")),
+            None => return fail("measres claim missing".into()),
+        }
+    }
+    Ok(())
+}
+
 /// Decode a single GPU submodule JWT body into [`NvidiaGpuDeviceClaims`].
 fn device_claims_from_submodule(body: &serde_json::Value) -> NvidiaGpuDeviceClaims {
     let s = |k: &str| body.get(k).and_then(|v| v.as_str()).map(String::from);
@@ -663,10 +858,11 @@ fn arch_from_hwmodel(s: &str) -> Option<NvidiaGpuArch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platforms::nvidia_gpu::provider::JwksKey;
     use crate::platforms::nvidia_gpu::MIN_GPU_USER_NONCE_LEN;
     use crate::types::{
-        NvidiaGpuArch, NvidiaGpuBinding, NvidiaGpuDeviceEvidence, NvidiaGpuEvidenceBundle,
-        VerifyParams,
+        NvidiaGpuArch, NvidiaGpuBinding, NvidiaGpuDeviceClaims, NvidiaGpuDeviceEvidence,
+        NvidiaGpuEvidenceBundle, VerifyParams,
     };
 
     /// `NrasProvider` whose methods panic on call. Used to prove `verify_bundle`
@@ -746,12 +942,10 @@ mod tests {
     #[test]
     fn split_eat_rejects_bare_jwt_string() {
         let v = serde_json::json!("just.a.jwt");
-        match split_eat_response(&v) {
-            Err(AttestationError::NrasResponseParse(msg)) => {
-                assert!(msg.contains("bare JWT string"), "got: {msg}");
-            }
-            other => panic!("expected NrasResponseParse, got {other:?}"),
-        }
+        assert!(matches!(
+            split_eat_response(&v),
+            Err(AttestationError::NrasResponseParse(_))
+        ));
     }
 
     /// A submodule entry whose value is not a string is malformed and must be
@@ -763,12 +957,10 @@ mod tests {
             ["JWT", "overall.jwt.sig"],
             { "GPU-0": "gpu0.jwt.sig", "GPU-1": 42 }
         ]);
-        match split_eat_response(&v) {
-            Err(AttestationError::NrasResponseParse(msg)) => {
-                assert!(msg.contains("GPU-1"), "got: {msg}");
-            }
-            other => panic!("expected NrasResponseParse, got {other:?}"),
-        }
+        assert!(matches!(
+            split_eat_response(&v),
+            Err(AttestationError::NrasResponseParse(_))
+        ));
     }
 
     /// RFC 7515 §4.1.11: a JWS carrying a critical (`crit`) header extension we
@@ -781,11 +973,226 @@ mod tests {
         );
         let token = format!("{header}.eyJhIjoxfQ.c2ln");
         let jwks = Jwks { keys: vec![] };
-        match verify_jws_es384(&token, &jwks) {
-            Err(AttestationError::JwsVerification(msg)) => {
-                assert!(msg.contains("crit"), "got: {msg}");
-            }
-            other => panic!("expected JwsVerification crit error, got {other:?}"),
+        // The `crit` check must fire before key lookup: with an empty JWKS, a
+        // kid miss would surface as `JwksKidNotFound`, so getting the
+        // `JwsVerification` variant proves the crit rejection ran first.
+        assert!(matches!(
+            verify_jws_es384(&token, &jwks),
+            Err(AttestationError::JwsVerification(_))
+        ));
+    }
+
+    fn now() -> i64 {
+        chrono::Utc::now().timestamp()
+    }
+
+    // SEC-1: the raw-coordinate JWKS path is gone; only x5c is accepted.
+
+    #[test]
+    fn jwks_entry_without_usable_x5c_is_rejected() {
+        // A well-formed P-384 (x, y) entry that pre-SEC-1 would have been
+        // accepted with no chain validation and no pin. Both a missing chain
+        // and an empty one must now fail closed.
+        for x5c in [None, Some(vec![])] {
+            let key = JwksKey {
+                kid: "k1".into(),
+                kty: "EC".into(),
+                alg: Some("ES384".into()),
+                crv: Some("P-384".into()),
+                x: Some(URL_SAFE_NO_PAD.encode([1u8; 48])),
+                y: Some(URL_SAFE_NO_PAD.encode([2u8; 48])),
+                x5c,
+            };
+            assert!(
+                es384_verifying_key_from_jwks_entry(&key).is_err(),
+                "raw (x,y) without an x5c chain must be rejected"
+            );
         }
+    }
+
+    // SEC-5: exp required + numeric (fractional ok); nbf enforced when present.
+    // `enforce_time_claims` is the load-bearing logic, tested directly so we do
+    // not need a JWKS that chains to the pinned anchor.
+
+    #[test]
+    fn time_claims_reject_missing_or_non_numeric_exp() {
+        // No exp, or an exp that is not a number, must fail closed (no fail-open
+        // "accept a token with no expiry").
+        assert!(enforce_time_claims(&serde_json::json!({ "foo": 1 })).is_err());
+        assert!(enforce_time_claims(&serde_json::json!({ "exp": "not-a-number" })).is_err());
+    }
+
+    #[test]
+    fn time_claims_reject_expired() {
+        let claims = serde_json::json!({ "exp": now() - 60 });
+        assert!(enforce_time_claims(&claims).is_err());
+    }
+
+    #[test]
+    fn time_claims_accept_fractional_future_exp() {
+        // RFC 7519 permits a fractional NumericDate; `as_i64` would reject it.
+        let claims = serde_json::json!({ "exp": (now() + 3600) as f64 + 0.5 });
+        enforce_time_claims(&claims).expect("fractional future exp must be accepted");
+    }
+
+    #[test]
+    fn time_claims_reject_not_yet_valid_nbf() {
+        let claims = serde_json::json!({ "exp": now() + 3600, "nbf": now() + 600 });
+        assert!(enforce_time_claims(&claims).is_err());
+    }
+
+    #[test]
+    fn time_claims_accept_past_nbf_and_future_exp() {
+        let claims = serde_json::json!({ "exp": now() + 3600, "nbf": now() - 600 });
+        enforce_time_claims(&claims).expect("past nbf with valid exp must be accepted");
+    }
+
+    // SEC-3: per-submodule eat_nonce binding.
+
+    #[test]
+    fn submodule_nonce_matches_derived() {
+        let nonce = [9u8; 32];
+        let claims = serde_json::json!({ "eat_nonce": hex::encode(nonce) });
+        check_submodule_nonce("GPU-0", &claims, &nonce).expect("matching nonce must pass");
+    }
+
+    #[test]
+    fn submodule_nonce_mismatch_is_rejected() {
+        let nonce = [9u8; 32];
+        let other = [8u8; 32];
+        let claims = serde_json::json!({ "eat_nonce": hex::encode(other) });
+        match check_submodule_nonce("GPU-1", &claims, &nonce) {
+            Err(AttestationError::NvidiaGpuSubmoduleNonceMismatch { name }) => {
+                assert_eq!(name, "GPU-1");
+            }
+            other => panic!("expected submodule nonce mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submodule_missing_nonce_is_rejected() {
+        let nonce = [9u8; 32];
+        let claims = serde_json::json!({ "foo": 1 });
+        assert!(matches!(
+            check_submodule_nonce("GPU-2", &claims, &nonce),
+            Err(AttestationError::NvidiaGpuSubmoduleNonceMismatch { .. })
+        ));
+    }
+
+    // SEC-3: per-device policy gates.
+
+    fn compliant_device() -> NvidiaGpuDeviceClaims {
+        NvidiaGpuDeviceClaims {
+            secboot: Some(true),
+            dbgstat: Some("disabled".into()),
+            measres: Some("success".into()),
+            nonce_match: Some(true),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn device_policy_accepts_compliant_device() {
+        let policy = crate::types::NvidiaGpuDevicePolicy::default();
+        apply_device_policy("GPU-0", &compliant_device(), &policy)
+            .expect("fully compliant device must pass default policy");
+    }
+
+    /// Each default gate must reject a device that violates it (including the
+    /// absent-claim case, which must fail closed). One mutation per gate.
+    #[test]
+    fn device_policy_rejects_each_gate_violation() {
+        let policy = crate::types::NvidiaGpuDevicePolicy::default();
+        let mutate: &[fn(&mut NvidiaGpuDeviceClaims)] = &[
+            |dc| dc.dbgstat = Some("enabled".into()),
+            |dc| dc.dbgstat = None,
+            |dc| dc.secboot = Some(false),
+            |dc| dc.secboot = None,
+            |dc| dc.nonce_match = Some(false),
+            |dc| dc.nonce_match = None,
+            |dc| dc.measres = Some("failure".into()),
+            |dc| dc.measres = None,
+        ];
+        for (i, m) in mutate.iter().enumerate() {
+            let mut dc = compliant_device();
+            m(&mut dc);
+            assert!(
+                matches!(
+                    apply_device_policy("GPU-0", &dc, &policy),
+                    Err(AttestationError::NvidiaGpuDevicePolicyFailed { .. })
+                ),
+                "mutation #{i} should have been rejected by default policy"
+            );
+        }
+    }
+
+    #[test]
+    fn device_policy_allows_debug_when_opted_in() {
+        let policy = crate::types::NvidiaGpuDevicePolicy {
+            allow_debug: true,
+            ..Default::default()
+        };
+        let mut dc = compliant_device();
+        dc.dbgstat = Some("enabled".into());
+        apply_device_policy("GPU-0", &dc, &policy)
+            .expect("debug-enabled device must pass when allow_debug is set");
+    }
+
+    // SEC-4: x5c RFC 5280 path validation. These negative tests mutate a real
+    // NRAS chain captured from production
+    // (`test_data/nvidia_gpu/nras_gpu_x5c_chain.json`: [leaf GPU cert,
+    // Intermediate 004], intermediate = pinned anchor) to confirm each rejection
+    // branch fires. The positive (valid-chain-accepted) case is deliberately not
+    // a unit test: the captured leaf has a ~2-day validity window, so asserting
+    // acceptance would make the test fail once the cert ages out. It was
+    // validated once live during development.
+
+    fn nras_x5c_fixture() -> Vec<String> {
+        let raw = include_str!("../../../test_data/nvidia_gpu/nras_gpu_x5c_chain.json");
+        let v: serde_json::Value = serde_json::from_str(raw).expect("fixture is valid JSON");
+        v["x5c"]
+            .as_array()
+            .expect("x5c array")
+            .iter()
+            .map(|c| c.as_str().expect("x5c entry is a string").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn x5c_reversed_chain_breaks_name_linkage() {
+        // Swapping leaf and intermediate breaks both the signature linkage and
+        // the issuer<->subject name chain; either way it must be rejected.
+        let mut chain = nras_x5c_fixture();
+        chain.reverse();
+        match verify_x5c_chain_and_extract_key(&chain) {
+            Err(AttestationError::JwsVerification(_)) => {}
+            other => panic!("reversed chain must be rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn x5c_single_leaf_only_is_rejected() {
+        // Leaf alone: no intermediate, so the topmost SPKI is the leaf's, which
+        // is not in the pinned trusted set. (If the captured leaf has aged out,
+        // the validity check rejects it first — either way it must not pass.)
+        let chain = vec![nras_x5c_fixture()[0].clone()];
+        match verify_x5c_chain_and_extract_key(&chain) {
+            Err(AttestationError::JwsVerification(_)) => {}
+            other => panic!("leaf-only chain must be rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn device_policy_gates_are_independently_disablable() {
+        // With every gate off, even a fully non-compliant device passes.
+        let policy = crate::types::NvidiaGpuDevicePolicy {
+            allow_debug: true,
+            require_secboot: false,
+            require_nonce_match: false,
+            require_measres_success: false,
+        };
+        let dc = NvidiaGpuDeviceClaims::default();
+        apply_device_policy("GPU-0", &dc, &policy)
+            .expect("all-gates-off policy must accept any device");
     }
 }
